@@ -1,0 +1,24 @@
+services:
+    supervisor:
+        build: .
+        image: pocket-factory:local
+        container_name: pocket-factory
+        restart: unless-stopped
+        env_file: .env
+        environment:
+            # The container is the sandbox; inside it Claude Code runs unattended.
+            CLAUDE_PERMISSION_MODE: bypassPermissions
+        volumes:
+            # Claude Code's own home: login, CLAUDE.md, agents/, skills/, transcripts.
+            - ./data/claude:/data/claude
+            # Factory config: projects/*.md, .mcp.json (becomes a git repo later).
+            - ./data/config:/data/config
+            # Your repositories. Point WORKSPACES_DIR at an existing folder on
+            # your machine to work on the projects you already have checked out.
+            - ${WORKSPACES_DIR:-./data/workspaces}:/data/workspaces
+            - ./data/db:/data/db
+            - ./data/logs:/data/logs
+        # Needed for the one-time interactive `claude` login:
+        #   docker compose run --rm supervisor claude
+        stdin_open: true
+        tty: true

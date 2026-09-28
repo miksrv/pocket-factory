@@ -1,0 +1,21 @@
+{
+    "name": "pocket-factory",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Personal software factory: Claude Code on a VPS, driven from Telegram by text or voice",
+    "license": "MIT",
+    "packageManager": "yarn@4.9.2",
+    "workspaces": [
+        "supervisor"
+    ],
+    "scripts": {
+        "dev": "yarn workspace @pocket-factory/supervisor dev",
+        "build": "yarn workspaces foreach -A run build",
+        "typecheck": "yarn workspaces foreach -A run typecheck",
+        "up": "docker compose up -d --build",
+        "logs": "docker compose logs -f supervisor"
+    },
+    "engines": {
+        "node": ">=22"
+    }
+}

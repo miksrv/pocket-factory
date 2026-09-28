@@ -1,0 +1,22 @@
+# dependencies / build
+node_modules/
+dist/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# secrets
+.env
+
+# runtime state (everything under data/ except the placeholders)
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
