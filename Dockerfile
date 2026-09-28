@@ -8,7 +8,7 @@ FROM node:${NODE_VERSION}-bookworm-slim AS base
 ARG CLAUDE_CODE_VERSION
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git gnupg ripgrep \
+    && apt-get install -y --no-install-recommends ca-certificates curl git gnupg openssh-client ripgrep \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -27,12 +27,14 @@ FROM base AS deps
 WORKDIR /app
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY supervisor/package.json supervisor/
+COPY web/package.json web/
 RUN yarn install --immutable
 
-# ---- build: compile TypeScript -------------------------------------------
+# ---- build: compile the supervisor and bundle the web UI -----------------
 FROM deps AS build
 COPY tsconfig.base.json ./
 COPY supervisor/ supervisor/
+COPY web/ web/
 RUN yarn build
 
 # ---- runtime --------------------------------------------------------------
@@ -43,13 +45,17 @@ ENV NODE_ENV=production \
     HOME=/home/node \
     CLAUDE_CONFIG_DIR=/data/claude \
     WORKSPACES_ROOT=/data/workspaces \
-    DATA_ROOT=/data
+    DATA_ROOT=/data \
+    WEB_DIST=/app/web/dist \
+    PRESETS_DIR=/app/presets
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/supervisor/dist ./supervisor/dist
+COPY --from=build /app/web/dist ./web/dist
 COPY supervisor/package.json ./supervisor/
 COPY package.json ./
 COPY templates/ ./templates/
+COPY presets/ ./presets/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
@@ -59,6 +65,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
 # Never root: bind-mounted repos keep sane ownership, and Claude Code refuses
 # bypassPermissions as root anyway.
 USER node
+
+EXPOSE 8080
 
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["node", "supervisor/dist/index.js"]
