@@ -15,7 +15,9 @@ export interface Config {
     paths: {
         dataRoot: string
         workspacesRoot: string
+        dbFile: string
     }
+    maxConcurrentSessions: number
     logLevel: 'debug' | 'info' | 'warn' | 'error'
 }
 
@@ -69,8 +71,10 @@ export function loadConfig(): Config {
         },
         paths: {
             dataRoot,
-            workspacesRoot: optional('WORKSPACES_ROOT') ?? path.join(dataRoot, 'workspaces')
+            workspacesRoot: optional('WORKSPACES_ROOT') ?? path.join(dataRoot, 'workspaces'),
+            dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
         },
+        maxConcurrentSessions: number('MAX_CONCURRENT_SESSIONS', 2),
         logLevel: (optional('LOG_LEVEL') as Config['logLevel']) ?? 'info'
     }
 }
