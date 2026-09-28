@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { Empty, ErrorBox, PageHead, useToast } from '../components/ui'
 import { api, type Preset } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
+import { Tile } from '../components/Tile'
 import { useAsync } from '../lib/useAsync'
 
 export function PresetsPage() {
@@ -27,15 +28,18 @@ export function PresetsPage() {
                 {presets.data?.map((preset) => (
                     <div key={preset.name} className="card stack">
                         <div className="row between top">
-                            <div>
-                                <div style={{ fontWeight: 600 }}>{preset.title}</div>
-                                <div className="dim small">{preset.description}</div>
+                            <div className="row top">
+                                <Tile name={preset.name} kind="presets" />
+                                <div>
+                                    <div style={{ fontWeight: 600 }}>{preset.title}</div>
+                                    <div className="dim small">{preset.description}</div>
+                                </div>
                             </div>
                             {preset.installed && <span className="badge done">installed</span>}
                         </div>
                         <div className="row wrap">
                             {preset.tags.map((t) => (
-                                <span key={t} className="badge tag">
+                                <span key={t} className="badge plain">
                                     {t}
                                 </span>
                             ))}

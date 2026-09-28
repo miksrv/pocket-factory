@@ -24,10 +24,11 @@ export function Layout() {
         <div className="app">
             <aside className="sidebar">
                 <div className="brand">
-                    <svg viewBox="0 0 100 100" aria-hidden>
-                        <rect width="100" height="100" rx="20" fill="#0f172a" />
-                        <path d="M22 72V40l14-10v14l14-10v14l14-10v34H22z" fill="#f59e0b" />
-                    </svg>
+                    <span className="tile">
+                        <svg viewBox="0 0 100 100" aria-hidden>
+                            <path d="M18 78V38l18-12v16l18-12v16l18-12v44H18z" fill="#fff" />
+                        </svg>
+                    </span>
                     Pocket Factory
                 </div>
                 <nav className="nav">
@@ -45,11 +46,12 @@ export function Layout() {
                 <div className="foot">
                     {status.data ? (
                         <>
-                            <div>{status.data.claude.version ?? 'claude: not found'}</div>
+                            <div className={`live${status.data.claude.logged_in ? '' : ' warn'}`}>{status.data.claude.logged_in ? 'Live' : 'Not logged in'}</div>
+                            <div style={{ marginTop: 4 }}>{status.data.claude.version ?? 'claude: not found'}</div>
                             <div>model: {status.data.claude.model ?? 'default'}</div>
                         </>
                     ) : (
-                        <div className={status.error ? 'error' : ''}>{status.error ?? 'connecting…'}</div>
+                        <div className={`live ${status.error ? 'off' : 'warn'}`}>{status.error ? 'API unreachable' : 'connecting…'}</div>
                     )}
                 </div>
             </aside>

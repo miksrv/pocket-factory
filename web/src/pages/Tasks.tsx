@@ -49,7 +49,9 @@ export function TasksPage() {
                                         <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
                                         {task.error && task.status === 'failed' && <div className="error small">{task.error.slice(0, 160)}</div>}
                                     </td>
-                                    <td className="dim">{task.source}</td>
+                                    <td>
+                                        <span className="badge plain">{task.source}</span>
+                                    </td>
                                     <td>{task.num_turns}</td>
                                     <td>{fmt.cost(task.cost_usd)}</td>
                                     <td>{fmt.duration(task.duration_ms)}</td>

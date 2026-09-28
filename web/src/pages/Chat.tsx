@@ -19,8 +19,8 @@ export function ChatPage() {
     return (
         <div className="chat">
             <div className="side">
-                <div className="row between" style={{ padding: '14px 12px', borderBottom: '1px solid var(--border)' }}>
-                    <strong>Conversations</strong>
+                <div className="card-head" style={{ padding: '12px 14px' }}>
+                    <span>Conversations</span>
                     <button className="sm primary" onClick={startNew}>
                         New
                     </button>
@@ -28,9 +28,11 @@ export function ChatPage() {
                 <div className="list">
                     {conversations.data?.map((c) => (
                         <NavLink key={c.id} to={`/chat/${c.id}`}>
-                            <div className="title">{c.title ?? 'Untitled'}</div>
-                            <div className="desc">
-                                {c.channel === 'telegram' ? '✈ telegram' : '✎ web'} · {fmt.ago(c.updated_at)}
+                            <div className="grow">
+                                <div className="title">{c.title ?? 'Untitled'}</div>
+                                <div className="desc">
+                                    {c.channel === 'telegram' ? '✈ telegram' : '✎ web'} · {fmt.ago(c.updated_at)}
+                                </div>
                             </div>
                         </NavLink>
                     ))}
@@ -120,7 +122,7 @@ function Thread({ id, onSent }: { id: string; onSent: () => void }) {
 
     return (
         <div className="thread">
-            <div className="row between" style={{ padding: '12px 24px', borderBottom: '1px solid var(--border)' }}>
+            <div className="thread-head">
                 <div>
                     <strong>{conversation?.title ?? '…'}</strong>
                     <div className="dim small">

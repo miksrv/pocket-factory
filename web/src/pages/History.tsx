@@ -46,7 +46,7 @@ export function HistoryPage() {
                             </thead>
                             <tbody>
                                 {log.data.map((entry) => (
-                                    <tr key={entry.repo + entry.hash} className="click" onClick={() => show(entry)} style={open?.hash === entry.hash ? { background: 'var(--bg-elev-2)' } : undefined}>
+                                    <tr key={entry.repo + entry.hash} className={`click${open?.hash === entry.hash ? ' selected' : ''}`} onClick={() => show(entry)}>
                                         <td>
                                             <div>{entry.message}</div>
                                             <div className="dim small mono">

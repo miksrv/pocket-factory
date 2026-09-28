@@ -3,6 +3,7 @@ import { NavLink, useNavigate, useParams } from 'react-router-dom'
 
 import { api, type CatalogEntry, type Kind } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { Tile } from './Tile'
 import { Empty, ErrorBox, PageHead, useToast } from './ui'
 
 export interface EditorProps {
@@ -45,8 +46,11 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                 <div className="card pad0 list">
                     {list.data?.map((entry) => (
                         <NavLink key={entry.name} to={`/${kind}/${entry.name}`}>
-                            <div className="title">{entry.name}</div>
-                            <div className="desc">{describe ? describe(entry) : String(entry.frontmatter.description ?? '')}</div>
+                            <Tile name={entry.name} kind={kind} />
+                            <div className="grow">
+                                <div className="title">{entry.name}</div>
+                                <div className="desc">{describe ? describe(entry) : String(entry.frontmatter.description ?? '')}</div>
+                            </div>
                         </NavLink>
                     ))}
                     {list.data?.length === 0 && <Empty>Nothing here yet.</Empty>}
@@ -140,6 +144,7 @@ function Form({
     return (
         <div className="card stack">
             <div className="row between">
+                {entry && <Tile name={entry.name} kind={kind} />}
                 <label className="field grow" style={{ maxWidth: 360 }}>
                     <span>Name (file name, a-z 0-9 - _ .)</span>
                     <input className="mono" value={name} disabled={Boolean(entry)} onChange={(e) => setName(e.target.value)} placeholder={`my-${kind.slice(0, -1)}`} />
