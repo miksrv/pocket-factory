@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 
 import { EventFeed } from '../components/EventFeed'
 import { Empty, ErrorBox, PageHead, StatusBadge } from '../components/ui'
-import { api, fmt, type TaskStatus } from '../lib/api'
+import { api, fmt, taskTokens, type TaskStatus } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 const FILTERS: Array<TaskStatus | 'all'> = ['all', 'running', 'queued', 'done', 'failed', 'cancelled']
@@ -33,7 +33,8 @@ export function TasksPage() {
                                 <th>Task</th>
                                 <th>Source</th>
                                 <th>Turns</th>
-                                <th>Cost</th>
+                                <th>Tokens</th>
+                                <th>Window</th>
                                 <th>Time</th>
                                 <th>Created</th>
                                 <th />
@@ -53,7 +54,8 @@ export function TasksPage() {
                                         <span className="badge plain">{task.source}</span>
                                     </td>
                                     <td>{task.num_turns}</td>
-                                    <td>{fmt.cost(task.cost_usd)}</td>
+                                    <td>{fmt.tokens(taskTokens(task))}</td>
+                                    <td className="dim nowrap">{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
                                     <td>{fmt.duration(task.duration_ms)}</td>
                                     <td className="dim nowrap">{fmt.ago(task.created_at)}</td>
                                     <td>
@@ -106,9 +108,9 @@ export function TaskPage() {
 
             <div className="cards" style={{ marginBottom: 16 }}>
                 <Kv label="Turns" value={t.num_turns} />
-                <Kv label="Cost" value={fmt.cost(t.cost_usd)} />
                 <Kv label="Duration" value={fmt.duration(t.duration_ms)} />
-                <Kv label="Tokens" value={`${t.input_tokens} in · ${t.output_tokens} out`} />
+                <Kv label="Tokens" value={fmt.tokens(taskTokens(t))} sub={`${fmt.tokens(t.input_tokens)} in · ${fmt.tokens(t.output_tokens)} out · ${fmt.tokens(t.cache_read_tokens)} cache read · ${fmt.tokens(t.cache_creation_tokens)} cache write`} />
+                <Kv label="5-hour window" value={fmt.windowDelta(t.window_5h_delta) ?? '—'} sub={t.window_5h_delta === null ? 'not reported by the CLI' : 'share of the window this task consumed'} />
             </div>
 
             <h2>Prompt</h2>
@@ -124,13 +126,14 @@ export function TaskPage() {
     )
 }
 
-function Kv({ label, value }: { label: string; value: string | number }) {
+function Kv({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
     return (
         <div className="card stat">
             <div className="value" style={{ fontSize: 18 }}>
                 {value}
             </div>
             <div className="label">{label}</div>
+            {sub && <div className="dim small" style={{ marginTop: 4 }}>{sub}</div>}
         </div>
     )
 }

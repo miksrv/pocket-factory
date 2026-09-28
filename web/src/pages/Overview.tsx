@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom'
 
+import { LimitsCard } from '../components/Limits'
 import { PageHead, StatusBadge } from '../components/ui'
-import { api, fmt } from '../lib/api'
+import { api, fmt, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 export function OverviewPage() {
@@ -34,8 +35,8 @@ export function OverviewPage() {
                     <Stat label="Running" value={s?.running ?? '…'} />
                     <Stat label="Done today" value={s?.done_today ?? '…'} />
                     <Stat label="Failed today" value={s?.failed_today ?? '…'} />
-                    <Stat label="Spend today" value={s ? fmt.cost(s.cost_today) : '…'} />
-                    <Stat label="Spend total" value={s ? fmt.cost(s.cost_total) : '…'} />
+                    <Stat label="Tokens today" value={s ? fmt.tokens(s.tokens_today) : '…'} />
+                    <Stat label="Tokens total" value={s ? fmt.tokens(s.tokens_total) : '…'} />
                 </div>
                 <div className="stat-row">
                     <Stat label="Agents" value={agents.data?.length ?? '…'} to="/agents" />
@@ -46,10 +47,13 @@ export function OverviewPage() {
                     <Stat label="Max sessions" value={d?.max_concurrent_sessions ?? '…'} />
                 </div>
                 <div className="card-foot">
-                    <span>Cost is the CLI's list-price estimate — quota on a subscription, not money.</span>
+                    <span>Tokens include cache reads and writes — the subscription meters windows, not money.</span>
                     <span>{d?.claude.version ?? ''}</span>
                 </div>
             </div>
+
+            <h2>Subscription</h2>
+            <LimitsCard limits={d?.limits} onChange={(limits) => d && status.setData({ ...d, limits })} />
 
             <h2>Recent tasks</h2>
             <div className="card pad0">
@@ -70,7 +74,7 @@ export function OverviewPage() {
                                         <span className="badge plain">{task.source}</span>
                                     </td>
                                     <td className="dim nowrap" style={{ width: 150, textAlign: 'right' }}>
-                                        {task.num_turns} turns · {fmt.cost(task.cost_usd)}
+                                        {task.num_turns} turns · {fmt.tokens(taskTokens(task))}
                                     </td>
                                     <td className="dim nowrap" style={{ width: 100, textAlign: 'right' }}>
                                         {fmt.ago(task.created_at)}

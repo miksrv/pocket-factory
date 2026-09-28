@@ -10,10 +10,15 @@ export interface Task {
     result: string | null
     error: string | null
     num_turns: number
+    /** CLI list-price estimate, kept for the record; never shown. */
     cost_usd: number
     duration_ms: number
     input_tokens: number
     output_tokens: number
+    cache_read_tokens: number
+    cache_creation_tokens: number
+    /** Share of the 5-hour window this task consumed (0..1), null when unknown. */
+    window_5h_delta: number | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -48,13 +53,36 @@ export interface Stats {
     running: number
     done_today: number
     failed_today: number
-    cost_today: number
-    cost_total: number
+    tokens_today: number
+    tokens_total: number
+}
+
+export interface RateLimitWindow {
+    /** Share used, 0..1. */
+    used: number
+    resets_at: string
+}
+
+/** Subscription rate-limit status as the CLI last reported it. */
+export interface RateLimits {
+    id: number
+    ts: string
+    task_id: string | null
+    status: 'allowed' | 'allowed_warning' | 'rejected' | string
+    five_hour: RateLimitWindow | null
+    seven_day: RateLimitWindow | null
+}
+
+export interface Usage {
+    latest: RateLimits | null
+    history: RateLimits[]
+    probing: boolean
 }
 
 export interface Status {
     stats: Stats
     running: string[]
+    limits: RateLimits | null
     claude: {
         version: string | null
         model: string | null
@@ -152,6 +180,9 @@ export const api = {
     task: (id: string) => request<Task & { events: TaskEvent[]; conversation: Conversation }>(`/tasks/${id}`),
     stopTask: (id: string) => request<{ stopped: boolean }>(`/tasks/${id}/stop`, { method: 'POST' }),
 
+    usage: () => request<Usage>('/usage'),
+    probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
+
     conversations: () => request<Conversation[]>('/conversations'),
     conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
     createConversation: (title?: string) =>
@@ -186,8 +217,24 @@ export function streamConversation(
     return () => source.close()
 }
 
+/** Every token the task sent or received, cache included — what the subscription meters. */
+export const taskTokens = (t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'>) =>
+    t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
+
 export const fmt = {
-    cost: (usd: number) => `$${usd.toFixed(usd >= 1 ? 2 : 3)}`,
+    tokens: (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)),
+    pct: (share: number) => `${Math.round(share * 100)}%`,
+    /** A task's share of the 5-hour window: "+3% of 5h", "<1% of 5h" or null. */
+    windowDelta: (share: number | null) => (share === null ? null : share < 0.01 ? '<1% of 5h' : `+${Math.round(share * 100)}% of 5h`),
+    /** Time left until an ISO timestamp: "2h 15m", "3d", "now". */
+    until: (iso: string) => {
+        const ms = new Date(iso).getTime() - Date.now()
+        if (ms <= 0) return 'now'
+        const h = Math.floor(ms / 3_600_000)
+        const m = Math.round((ms % 3_600_000) / 60_000)
+        if (h >= 48) return `${Math.round(h / 24)}d`
+        return h > 0 ? `${h}h ${m}m` : `${m}m`
+    },
     duration: (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`),
     when: (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—'),
     ago: (iso: string | null) => {

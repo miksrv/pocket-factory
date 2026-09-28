@@ -1,4 +1,4 @@
-import { type TaskEvent } from '../lib/api'
+import { fmt, type TaskEvent } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
 
 function summarizeInput(input: unknown): string {
@@ -58,7 +58,8 @@ export function Event({ event }: { event: TaskEvent }) {
             if (p.status === 'running') return null
             return (
                 <div className="dim small">
-                    {String(p.status)} · {Number(p.num_turns ?? 0)} turns · ${Number(p.cost_usd ?? 0).toFixed(3)} · {Math.round(Number(p.duration_ms ?? 0) / 1000)}s
+                    {String(p.status)} · {Number(p.num_turns ?? 0)} turns · {fmt.tokens(Number(p.tokens ?? 0))} tokens
+                    {typeof p.window_5h_delta === 'number' && ` · ${fmt.windowDelta(p.window_5h_delta)}`} · {fmt.duration(Number(p.duration_ms ?? 0))}
                 </div>
             )
         case 'error':

@@ -16,7 +16,7 @@ export function SettingsPage() {
                         <Row k="Login" v={s.claude.logged_in ? 'token present (CLAUDE_CODE_OAUTH_TOKEN)' : 'not logged in'} />
                         <Row k="Model" v={s.claude.model ?? 'CLI default'} />
                         <Row k="Permission mode" v={s.claude.permission_mode} />
-                        <Row k="Limits per task" v={`${s.claude.max_turns} turns · $${s.claude.max_budget_usd} budget`} />
+                        <Row k="Caps per task" v={`${s.claude.max_turns} turns · $${s.claude.max_budget_usd} by the CLI's list-price estimate (a safety stop, not a bill)`} />
                         <Row k="Concurrent sessions" v={String(s.max_concurrent_sessions)} />
                         <Row k="Config dir" v={s.claude.config_dir} mono />
                     </Section>

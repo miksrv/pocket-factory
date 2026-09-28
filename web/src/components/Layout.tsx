@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { LimitsInline } from './Limits'
 
 const NAV: Array<{ to: string; label: string; icon: string; section?: string }> = [
     { to: '/', label: 'Overview', icon: '◎' },
@@ -105,6 +106,9 @@ export function Layout() {
                         {status.data?.claude.version ?? ''}
                     </div>
                     <div className="label">{status.data ? `model: ${status.data.claude.model ?? 'default'}` : ''}</div>
+                    <NavLink to="/" className="label limits-foot" title="Subscription limits — see Overview">
+                        <LimitsInline limits={status.data?.limits} />
+                    </NavLink>
                 </div>
                 <button className="collapse desktop-only" onClick={() => setCollapsed((v) => !v)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label="Toggle sidebar">
                     {collapsed ? '»' : '«'}

@@ -3,7 +3,7 @@ import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
 
 import { Event } from '../components/EventFeed'
 import { StatusBadge } from '../components/ui'
-import { api, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
+import { api, type Conversation, fmt, streamConversation, type Task, type TaskEvent, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 export function ChatPage() {
@@ -155,7 +155,7 @@ function Thread({ id, onSent }: { id: string; onSent: () => void }) {
                                 <StatusBadge status={item.task!.status} />
                                 {item.task!.status !== 'queued' && item.task!.status !== 'running' && (
                                     <span>
-                                        {item.task!.num_turns} turns · {fmt.cost(item.task!.cost_usd)} · {fmt.duration(item.task!.duration_ms)}
+                                        {item.task!.num_turns} turns · {fmt.tokens(taskTokens(item.task!))} · {fmt.windowDelta(item.task!.window_5h_delta) ?? 'window n/a'} · {fmt.duration(item.task!.duration_ms)}
                                     </span>
                                 )}
                             </div>
