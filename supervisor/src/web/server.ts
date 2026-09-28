@@ -1,0 +1,71 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
+import { serve } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
+import { Hono } from 'hono'
+import { basicAuth } from 'hono/basic-auth'
+
+import { createLogger } from '../logger.js'
+import { BadName, NotFound } from '../files/catalog.js'
+import type { AppContext, Env } from './context.js'
+import { conversationRoutes } from './routes/conversations.js'
+import { fileRoutes } from './routes/files.js'
+import { presetRoutes } from './routes/presets.js'
+import { sessionRoutes } from './routes/sessions.js'
+import { statusRoutes } from './routes/status.js'
+import { taskRoutes } from './routes/tasks.js'
+
+const log = createLogger('web')
+
+export function createApp(app: AppContext): Hono<Env> {
+    const hono = new Hono<Env>()
+    const { web } = app.config
+
+    hono.use('*', async (c, next) => {
+        c.set('app', app)
+        await next()
+    })
+
+    // The UI controls an agent with repository and host credentials. Basic
+    // auth is the floor; put Tailscale / Caddy / Cloudflare Access in front.
+    if (web.authPassword) {
+        hono.use('*', basicAuth({ username: web.authUser, password: web.authPassword }))
+    }
+
+    hono.onError((error, c) => {
+        if (error instanceof BadName) return c.json({ error: error.message }, 400)
+        if (error instanceof NotFound) return c.json({ error: error.message }, 404)
+        log.error(`${c.req.method} ${c.req.path} failed`, error)
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 500)
+    })
+
+    const api = new Hono<Env>()
+    api.route('/status', statusRoutes())
+    api.route('/tasks', taskRoutes())
+    api.route('/conversations', conversationRoutes())
+    api.route('/sessions', sessionRoutes())
+    api.route('/presets', presetRoutes())
+    api.route('/', fileRoutes())
+    api.notFound((c) => c.json({ error: 'not found' }, 404))
+    hono.route('/api', api)
+
+    // Built SPA (web/dist). Unknown paths fall back to index.html for the router.
+    if (fs.existsSync(path.join(web.distDir, 'index.html'))) {
+        const root = path.relative(process.cwd(), web.distDir) || '.'
+        hono.use('/*', serveStatic({ root }))
+        hono.get('/*', (c) => c.html(fs.readFileSync(path.join(web.distDir, 'index.html'), 'utf8')))
+    } else {
+        hono.get('/', (c) => c.text('Pocket Factory API is up; the web UI is not built (yarn build in web/).'))
+    }
+
+    return hono
+}
+
+export function startServer(app: AppContext): void {
+    const { host, port, authPassword } = app.config.web
+    const hono = createApp(app)
+    serve({ fetch: hono.fetch, hostname: host, port }, (info) => {
+        log.info(`listening on http://${info.address}:${info.port}${authPassword ? ' (basic auth)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`)
+    })
+}

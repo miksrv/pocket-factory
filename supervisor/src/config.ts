@@ -23,6 +23,14 @@ export interface Config {
         model: string
         language: string | undefined
     }
+    web: {
+        host: string
+        port: number
+        authUser: string
+        authPassword: string | undefined
+        distDir: string
+    }
+    presetsDir: string
     maxConcurrentSessions: number
     logLevel: 'debug' | 'info' | 'warn' | 'error'
 }
@@ -88,6 +96,14 @@ export function loadConfig(): Config {
             model: optional('STT_MODEL') ?? 'whisper-large-v3-turbo',
             language: optional('STT_LANGUAGE')
         },
+        web: {
+            host: optional('WEB_HOST') ?? '0.0.0.0',
+            port: number('WEB_PORT', 8080),
+            authUser: optional('WEB_AUTH_USER') ?? 'factory',
+            authPassword: optional('WEB_AUTH_PASSWORD'),
+            distDir: optional('WEB_DIST') ?? path.resolve(process.cwd(), 'web', 'dist')
+        },
+        presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),
         maxConcurrentSessions: number('MAX_CONCURRENT_SESSIONS', 2),
         logLevel: (optional('LOG_LEVEL') as Config['logLevel']) ?? 'info'
     }

@@ -1,9 +1,13 @@
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
+import { Catalog } from './files/catalog.js'
 import { createLogger, setLogLevel } from './logger.js'
+import { Presets } from './presets/index.js'
+import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
 import { TaskService } from './tasks/service.js'
+import { startServer } from './web/server.js'
 
 const log = createLogger('supervisor')
 
@@ -17,6 +21,15 @@ async function main(): Promise<void> {
     const store = new Store(openDatabase(config.paths.dbFile))
     const tasks = new TaskService(store, config)
     const bot = createBot(config, tasks)
+
+    startServer({
+        config,
+        store,
+        tasks,
+        catalog: new Catalog(config.claude.configDir, config.paths.configRoot),
+        transcripts: new Transcripts(config.claude.configDir),
+        presets: new Presets(config.presetsDir)
+    })
 
     // Registers the command menu in Telegram, so the client autocompletes them.
     await bot.api.setMyCommands([

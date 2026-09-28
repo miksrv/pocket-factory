@@ -68,6 +68,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.store.listTasks({ conversationId, status: 'running', limit: 1 })[0]
     }
 
+    runningTaskIds(): string[] {
+        return [...this.running.keys()]
+    }
+
     stop(taskId: string): boolean {
         const handle = this.running.get(taskId)
         if (handle) {
