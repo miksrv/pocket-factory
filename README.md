@@ -1,10 +1,24 @@
 # Pocket Factory
 
-> Your agent becomes autonomous when you close your laptop.
+> An agent becomes truly autonomous the moment you close your laptop lid.
 
-A personal software factory: the unmodified [Claude Code](https://code.claude.com) CLI running on
-your own server, driven from Telegram by text or voice and from a small web control plane. You send
-a task from the road; the factory works in your repositories, opens pull requests and reports back.
+Pocket Factory is a **self-hosted layer over [Claude Code](https://code.claude.com) for
+developers**. Claude Code on its own is a session in your terminal: it works while the laptop is
+open and you are watching. Pocket Factory runs the unmodified Claude Code CLI on a server of your
+own, takes tasks from Telegram or the browser, and turns those sessions into something you can
+leave alone and still trust:
+
+- **Autonomy** — send a task from the road, by text or voice; the agent works in your repositories,
+  opens the pull request and reports back. Sessions continue across messages; tasks queue and
+  survive restarts.
+- **Control over what agents do** — an audit log of every model call, tool call, file edit and
+  sub-agent, attributed to the agent and the project; rendered transcripts; token and
+  subscription-window accounting instead of made-up dollar figures.
+- **Management** — agents, skills and projects are Markdown files with frontmatter, edited in the
+  UI or by the agent itself; presets bundle them for sharing; models and tools are picked from what
+  your subscription and CLI actually offer.
+- **Pipelines** — skills such as `feature-to-pr` and `onboard-project` chain sub-agents (developer,
+  reviewer, …) into repeatable task flows; schedules and tracker pollers are next.
 
 Single-owner by design. You log in to Claude Code with **your own subscription**, create **your own**
 Telegram bot, use **your own** GitHub token, point it at **your own** repositories. Nothing is shared,
@@ -19,10 +33,12 @@ proxied or stored by anyone else. See [docs/SPEC.md](docs/SPEC.md) for the conce
   a configurable number overall; tasks survive supervisor restarts.
 - **Web UI** — Overview (queue, subscription limits, tokens, health), Tasks, Chat with Claude Code from the browser with
   live output, Sessions (rendered Claude Code transcripts), editors for **Agents**, **Skills** and
-  **Projects**, **Presets**, **History**, Settings.
+  **Projects**, **Presets**, an **Audit log** (every model call, tool call and sub-agent, per agent
+  and project), Settings.
 - **Factory files** — sub-agents `developer` / `reviewer`, skills `feature-to-pr` /
   `onboard-project`, one Markdown file per project (repo, branches, checks, tracker, hosts).
-  The UI, the owner and the agent edit the same files; every change is a git commit on the volume.
+  The UI, the owner and the agent edit the same files; what the agent changes shows up in the
+  Audit log as file events.
 - **Presets** — shareable bundles under `presets/` (`bug-tracker-fixer`, `pr-review`) that a
   colleague installs with one click into their own factory.
 

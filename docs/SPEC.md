@@ -1,8 +1,10 @@
 # Pocket Factory — Requirements & Specification
 
-> **Tagline:** *"Your agent becomes autonomous when you close your laptop."*
+> **Tagline:** *"An agent becomes truly autonomous the moment you close your laptop lid."*
 >
-> Status: Draft v1.2 · Date: 2026-09-28 · Author: Misha Topchilo (with Claude)
+> Status: Draft v1.3 · Date: 2026-09-28 · Author: Misha Topchilo (with Claude)
+>
+> **v1.3 changes:** the concept is stated as a self-hosted layer over Claude Code for developers with four pillars — autonomy, control over what agents do, management of agents / skills / projects, pipelines. Money is gone from the product (tokens and subscription windows instead); the config git history is replaced by the Audit log built live from stream-json; every list pages dynamically; agents are a card roster with live activity; models and tools come from the subscription and the CLI.
 >
 > **v1.2 changes:** decisions recorded from the implementation: the agent works in the owner's real checkouts on a branch (no per-task worktrees); the web UI is a Vite/React SPA served by the supervisor (no Next.js service); sessions are one-shot `claude -p` runs resumed by id, so idle timeout is a no-op; config history is two git repositories on the volume; project files carry `hosts:` for SSH access; presets are shareable bundles. Phases 0–4 implemented.
 >
@@ -12,7 +14,7 @@
 
 ## 1. Vision & Concept
 
-A self-hosted, containerized **personal AI agent platform** that lives on a VPS and works autonomously while the owner is away. Think of it as `/rc` (remote control) for Claude Code, but through Telegram and without a laptop: the owner is driving to a conference, gets a message that a hotfix is needed, records a voice note to the bot — and the agent does the work and reports back.
+A **self-hosted layer over Claude Code for developers**: a containerized personal agent platform that lives on a VPS and works autonomously while the owner is away. It adds four things the CLI alone does not have — autonomy (tasks queue and run without a terminal), control over what agents do (an audit log per agent and project), management (agents, skills, projects as files with a UI) and pipelines (skills chaining sub-agents into repeatable flows). Think of it as `/rc` (remote control) for Claude Code, but through Telegram and without a laptop: the owner is driving to a conference, gets a message that a hotfix is needed, records a voice note to the bot — and the agent does the work and reports back.
 
 The system is a thin **supervisor** around the owner's own **Claude Code** installation. The supervisor receives tasks from multiple triggers — Telegram messages (text and voice), cron schedules, and (optionally) external webhooks — and hands them to a Claude Code session, which decomposes them, spawns specialized **sub-agents** (developer, reviewer, QA, email assistant, …) via Claude Code's native sub-agent mechanism, iterates until the work is done, and reports back through the channel the task came from.
 
@@ -269,7 +271,7 @@ Screens (v1):
 6. **Schedules** — CRUD for cron entries, active windows, prefilter binding, enable/disable, run-now, last result.
 7. **Quota dashboard** — the 5-hour and weekly windows as the CLI reports them (`rate_limit_event`), with reset times and a history of readings; tokens per day/project/agent/task-type; forecast to limit. No money anywhere: the owner pays a subscription, so the unit is tokens and window share.
 8. **Settings** — MCP servers, connected repos/credentials references, Telegram whitelist, idle timeout, concurrency, budget policies. Shows Claude Code login status (`claude auth status`) but never performs the login.
-9. **Config history** — `git log` of the config repository with diffs; revert button.
+9. **Audit log** — every model call (model, tokens), tool call, file edit, sub-agent start / end, task lifecycle and rate-limit reading, each attributed to the agent that produced it (orchestrator or sub-agent type) and the project the task worked in. Period selector, filter by kind / agent / project, expandable details. Built live from the stream-json events; there is no separate config git history (dropped in v1.3: the owner's repositories are on GitHub, and self-edits of agents / skills show up here as file events).
 
 Non-functional: UI is behind auth (basic auth minimum; Tailscale/Cloudflare Access recommended) — it controls an agent holding GitHub and mail credentials.
 
@@ -345,7 +347,7 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 | **1. Voice hotfix** ✅ (code) | Telegram bot + STT → `claude -p` in the owner's checkout → reply in Telegram; `developer`/`reviewer` agents, `feature-to-pr` skill, project file format + `onboard-project` | UC-1 end-to-end from a voice note: PR link comes back; zero tokens when idle — **still to be exercised on a real project** |
 | **2. Lifecycle & persistence** ✅ | Task queue in SQLite, session manager (`/new`, `/stop`, `--resume`, one-shot runs), HITL questions via Telegram (agent's final message ↔ owner's reply), crash recovery (orphans failed, queued tasks resumed) | UC-2 and UC-8: a question survives a supervisor restart |
 | **3. Web UI (read)** ✅ | Task feed + session view (transcript rendering, SSE live feed), overview with spend from the tasks table, **chat with Claude Code from the browser** | Owner can watch a live run and see spend without SSH |
-| **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), config git history with diffs, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a commit |
+| **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), audit log, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a commit |
 | **5. Schedules** | `schedules` table + UI, prefilter pattern, TRAC poller, GitHub review-request poller | UC-3 and UC-4: zero tokens on empty polls |
 | **6. Hardening** | Budgets/soft-stop, quota estimate, backups of `/data`, template-ization (README for forkers with the conditions from §1.7), optional webhook ingress | Quota forecast visible; fork-and-run documented and tested on a fresh account |
 
