@@ -16,6 +16,7 @@ import { presetRoutes } from './routes/presets.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { statusRoutes } from './routes/status.js'
 import { taskRoutes } from './routes/tasks.js'
+import { usageRoutes } from './routes/usage.js'
 
 const log = createLogger('web')
 
@@ -44,6 +45,7 @@ export function createApp(app: AppContext): Hono<Env> {
     const api = new Hono<Env>()
     api.route('/status', statusRoutes())
     api.route('/tasks', taskRoutes())
+    api.route('/usage', usageRoutes())
     api.route('/conversations', conversationRoutes())
     api.route('/sessions', sessionRoutes())
     api.route('/presets', presetRoutes())

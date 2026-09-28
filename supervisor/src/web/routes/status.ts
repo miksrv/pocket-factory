@@ -40,6 +40,7 @@ export function statusRoutes(): Hono<Env> {
         return c.json({
             stats: store.stats(),
             running: tasks.runningTaskIds(),
+            limits: tasks.limits() ?? null,
             claude: {
                 version: claude,
                 model: config.claude.model ?? null,
