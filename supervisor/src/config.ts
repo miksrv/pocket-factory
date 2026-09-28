@@ -87,7 +87,9 @@ export function loadConfig(): Config {
         },
         paths: {
             dataRoot,
-            workspacesRoot: optional('WORKSPACES_ROOT') ?? path.join(dataRoot, 'workspaces'),
+            // WORKSPACES_ROOT is set by the image; WORKSPACES_DIR is the host-side
+            // .env value, reused here so `yarn dev` sees the same repositories.
+            workspacesRoot: optional('WORKSPACES_ROOT') ?? optional('WORKSPACES_DIR') ?? path.join(dataRoot, 'workspaces'),
             configRoot: path.join(dataRoot, 'config'),
             dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
         },

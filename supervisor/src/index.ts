@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
 import { Catalog } from './files/catalog.js'
@@ -13,6 +15,14 @@ import { startServer } from './web/server.js'
 const log = createLogger('supervisor')
 
 async function main(): Promise<void> {
+    // Outside Docker, read .env from the repository root (Node's own parser;
+    // variables already present in the environment win). The container gets
+    // the same file through compose `env_file`.
+    try {
+        process.loadEnvFile(path.resolve(process.cwd(), '.env'))
+    } catch {
+        // no .env — everything must come from the environment
+    }
     const config = loadConfig()
     setLogLevel(config.logLevel)
 
