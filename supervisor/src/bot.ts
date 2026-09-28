@@ -2,7 +2,7 @@ import { Bot, type Context } from 'grammy'
 
 import type { Config } from './config.js'
 import { createLogger } from './logger.js'
-import type { Task } from './store/index.js'
+import type { RateLimitSnapshot, Task } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import type { TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
@@ -37,8 +37,48 @@ async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<voi
     }
 }
 
-function footer(task: Task): string {
-    return `— ${task.num_turns} turns · ≈$${task.cost_usd.toFixed(2)} · ${Math.round(task.duration_ms / 1000)}s`
+const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+const pct = (used: number) => `${Math.round(used * 100)}%`
+
+function resetsIn(iso: string): string {
+    const ms = new Date(iso).getTime() - Date.now()
+    if (ms <= 0) return 'now'
+    const h = Math.floor(ms / 3_600_000)
+    const m = Math.round((ms % 3_600_000) / 60_000)
+    if (h >= 48) return `${Math.round(h / 24)}d`
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+/** One line: how full the subscription windows are, e.g. "5h 12% · week 31%". */
+function limitsLine(limits: RateLimitSnapshot | undefined): string | null {
+    if (!limits) return null
+    const parts: string[] = []
+    if (limits.five_hour) parts.push(`5h ${pct(limits.five_hour.used)}`)
+    if (limits.seven_day) parts.push(`week ${pct(limits.seven_day.used)}`)
+    return parts.length ? parts.join(' · ') : null
+}
+
+function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
+    if (!limits) return ['Subscription limits: unknown yet — the CLI reports them with the first task, or send /usage refresh.']
+    const lines: string[] = []
+    if (limits.five_hour) lines.push(`5-hour window: ${pct(limits.five_hour.used)} used · resets in ${resetsIn(limits.five_hour.resets_at)}`)
+    if (limits.seven_day) lines.push(`Weekly window: ${pct(limits.seven_day.used)} used · resets in ${resetsIn(limits.seven_day.resets_at)}`)
+    if (limits.status !== 'allowed') lines.push(`Status: ${limits.status}`)
+    lines.push(`As of ${new Date(limits.ts).toLocaleString('en-GB', { hour12: false })}`)
+    return lines
+}
+
+/**
+ * Footer under every reply: what this task consumed and how full the windows
+ * are now. Tokens, not money — the subscription is metered in windows.
+ */
+function footer(task: Task, limits: RateLimitSnapshot | undefined): string {
+    const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
+    const parts = [`${task.num_turns} turns`, `${fmtTokens(tokens)} tokens`]
+    if (task.window_5h_delta !== null) parts.push(task.window_5h_delta < 0.01 ? '<1% of 5h' : `+${Math.round(task.window_5h_delta * 100)}% of 5h`)
+    parts.push(`${Math.round(task.duration_ms / 1000)}s`)
+    const windows = limitsLine(limits)
+    return `— ${parts.join(' · ')}${windows ? `\n— windows: ${windows}` : ''}`
 }
 
 export function createBot(config: Config, tasks: TaskService): Bot {
@@ -66,7 +106,8 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
                 '/new — start a fresh session',
                 '/stop — cancel the running task',
-                '/status — what is going on'
+                '/status — what is going on',
+                '/usage — subscription limits (5-hour and weekly windows)'
             ].join('\n')
         )
     })
@@ -89,14 +130,28 @@ export function createBot(config: Config, tasks: TaskService): Bot {
     bot.command('status', async (ctx) => {
         const conversation = conversationFor(ctx)
         const active = tasks.activeTask(conversation.id)
+        const windows = limitsLine(tasks.limits())
         await ctx.reply(
             [
                 `Running task: ${active ? 'yes' : 'no'}`,
                 `Session: ${conversation.session_id ?? 'none'}`,
                 `Workspaces: ${config.paths.workspacesRoot}`,
-                `Model: ${config.claude.model ?? 'CLI default'}`
+                `Model: ${config.claude.model ?? 'CLI default'}`,
+                `Limits: ${windows ?? 'unknown (see /usage)'}`
             ].join('\n')
         )
+    })
+
+    // `/usage` shows the last reading; `/usage refresh` spends one Haiku turn
+    // to get a fresh one.
+    bot.command('usage', async (ctx) => {
+        if (/^refresh\b/i.test(ctx.match)) {
+            await ctx.reply('Asking the CLI…')
+            const snapshot = await tasks.probeLimits()
+            await ctx.reply(snapshot ? limitsReport(snapshot).join('\n') : '❌ The CLI reported no rate-limit status; see the supervisor log.')
+            return
+        }
+        await ctx.reply([...limitsReport(tasks.limits()), '', '/usage refresh — ask the CLI now (one Haiku turn)'].join('\n'))
     })
 
     // Anything else that looks like a command is a typo, not a task for the agent.
@@ -159,7 +214,7 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 : task.status === 'cancelled'
                   ? '⏹ Stopped.'
                   : `❌ ${task.error ?? 'failed'}`
-        void sendMarkdown(bot, chatId, `${body}\n\n${footer(task)}`).catch((error) =>
+        void sendMarkdown(bot, chatId, `${body}\n\n${footer(task, tasks.limits())}`).catch((error) =>
             log.error(`delivery to chat ${chatId} failed`, error)
         )
     })

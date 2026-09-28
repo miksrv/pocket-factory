@@ -74,7 +74,8 @@ async function main(): Promise<void> {
     await bot.api.setMyCommands([
         { command: 'new', description: 'Start a fresh session' },
         { command: 'stop', description: 'Cancel the running task' },
-        { command: 'status', description: 'What is going on' }
+        { command: 'status', description: 'What is going on' },
+        { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' }
     ])
 
     await bot.start({
