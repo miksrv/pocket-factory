@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-
 import { fmt, type Task, type TaskEvent, taskTokens } from '../lib/api'
-import { renderMarkdown } from '../lib/markdown'
 import { Event, summarizeInput } from './EventFeed'
-import { StatusBadge } from './ui'
+import { Button, Markdown, StatusBadge } from './ui'
 import { Tile } from './Tile'
 
 type Segment = { kind: 'text'; text: string; agent: string | null } | { kind: 'steps'; events: TaskEvent[] }
@@ -58,11 +55,9 @@ function Steps({ events, live }: { events: TaskEvent[]; live: boolean }) {
     return (
         <details ref={details} className={`steps${live ? ' live' : ''}${errors ? ' has-error' : ''}`}>
             <summary>
-                <span className="steps-count">
-                    {calls.length} step{calls.length === 1 ? '' : 's'}
-                </span>
+                <span className="steps-count">{fmt.plural(calls.length, 'step')}</span>
                 <span className="dim steps-names">{live ? lastStep(events) : names.slice(0, 6).join(' · ') + (names.length > 6 ? ' · …' : '')}</span>
-                {errors > 0 && <span className="badge red">{errors} error{errors === 1 ? '' : 's'}</span>}
+                {errors > 0 && <span className="badge red">{fmt.plural(errors, 'error')}</span>}
             </summary>
             <div className="steps-body">
                 {events.map((e) => (
@@ -107,12 +102,12 @@ export function AssistantTurn({ task, events }: { task: Task; events: TaskEvent[
             <div className="reply">
                 {parts.map((p, i) =>
                     p.kind === 'text' ? (
-                        <div key={i} className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(p.text) }} />
+                        <Markdown key={i} source={p.text} />
                     ) : (
                         <Steps key={i} events={p.events} live={live && i === parts.length - 1} />
                     )
                 )}
-                {finalText && <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(finalText) }} />}
+                {finalText && <Markdown source={finalText} />}
                 {task.status === 'running' && (
                     <div className="working">
                         <span className="dots">
@@ -129,7 +124,7 @@ export function AssistantTurn({ task, events }: { task: Task; events: TaskEvent[
                     <div className="reply-foot">
                         <StatusBadge status={task.status} />
                         <span className="dim">
-                            {task.num_turns} turns · {fmt.tokens(taskTokens(task))} tokens
+                            {fmt.plural(task.num_turns, 'turn')} · {fmt.tokens(taskTokens(task))} tokens
                             {fmt.windowDelta(task.window_5h_delta) ? ` · ${fmt.windowDelta(task.window_5h_delta)}` : ''} · {fmt.duration(task.duration_ms)}
                         </span>
                         <span className="dim" title={fmt.when(task.finished_at)}>
@@ -137,13 +132,13 @@ export function AssistantTurn({ task, events }: { task: Task; events: TaskEvent[
                         </span>
                         <span className="grow" />
                         {prose && (
-                            <button className="sm ghost" onClick={copy} title="Copy the reply as Markdown">
+                            <Button size="sm" variant="ghost" onClick={copy} title="Copy the reply as Markdown">
                                 {copied ? 'Copied' : 'Copy'}
-                            </button>
+                            </Button>
                         )}
-                        <Link className="btn sm ghost" to={`/tasks/${task.id}`}>
+                        <Button size="sm" variant="ghost" to={`/tasks/${task.id}`}>
                             Task
-                        </Link>
+                        </Button>
                     </div>
                 )}
             </div>

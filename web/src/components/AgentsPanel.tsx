@@ -65,18 +65,18 @@ export function AgentsPanel() {
                 </span>
                 <span className={`live${running > 0 ? '' : ' warn'}`}>{running > 0 ? `${running} working` : 'Idle'}</span>
             </div>
-            <div>
+            <div className="list">
                 {rows.map((r) => (
-                    <Link key={r.name} to={auditLink(r.name)} className="agent-row" title="Open the audit log for this agent">
+                    <Link key={r.name} to={auditLink(r.name)} title="Open the audit log for this agent">
                         {r.name === 'orchestrator' ? <Tile icon="control" color="gray" /> : <Tile name={r.name} kind="agents" />}
                         <div className="grow">
                             <div className="title">
                                 {r.name}
-                                {r.builtin && r.name !== 'orchestrator' && <span className="badge plain" style={{ marginLeft: 8 }}>built-in</span>}
+                                {r.builtin && r.name !== 'orchestrator' && <span className="badge plain">built-in</span>}
                             </div>
                             <div className="desc">
                                 {r.activity
-                                    ? `${r.activity.runs} run${r.activity.runs === 1 ? '' : 's'} · ${fmt.tokens(r.activity.tokens)} tokens · last ${fmt.ago(r.activity.last_active)}`
+                                    ? `${fmt.plural(r.activity.runs, 'run')} · ${fmt.tokens(r.activity.tokens)} tokens · last ${fmt.ago(r.activity.last_active)}`
                                     : r.description || 'no activity in 7 days'}
                             </div>
                         </div>

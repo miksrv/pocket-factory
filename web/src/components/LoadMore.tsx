@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 
+import { Button } from './ui'
+
 /**
  * End-of-list sentinel: asks for the next page as soon as it scrolls into
  * view, with a button as the fallback. Renders the count line either way.
@@ -36,10 +38,21 @@ export function LoadMore({
                 {!hasMore && shown > 0 && total === undefined ? ' · that is all' : ''}
             </span>
             {hasMore && (
-                <button className="sm" onClick={onMore} disabled={loading}>
+                <Button size="sm" onClick={onMore} disabled={loading}>
                     {loading ? 'Loading…' : 'Load more'}
-                </button>
+                </Button>
             )}
+        </div>
+    )
+}
+
+/** Start-of-list button for views that grow upwards (chat threads, transcripts). */
+export function LoadEarlier({ loading, onMore, label = 'Load earlier' }: { loading: boolean; onMore: () => void; label?: string }) {
+    return (
+        <div className="load-earlier">
+            <Button size="sm" onClick={onMore} disabled={loading}>
+                {loading ? 'Loading…' : label}
+            </Button>
         </div>
     )
 }

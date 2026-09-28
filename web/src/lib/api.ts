@@ -65,8 +65,23 @@ export interface ModelInfo {
 
 export interface Audit {
     events: AuditEvent[]
+    has_more: boolean
     stats: { events: number; agents: number; tasks: number; tokens: number }
     facets: { agents: string[]; projects: string[] }
+}
+
+/** Keyset cursor of a list: the timestamp the list is sorted by plus the row's id, to break ties. */
+export interface Cursor {
+    ts: string
+    id: string
+}
+
+const cursorParams = (params: URLSearchParams, before?: Cursor) => {
+    if (before) {
+        params.set('before', before.ts)
+        params.set('before_id', before.id)
+    }
+    return params
 }
 
 export interface Conversation {
@@ -218,19 +233,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
     })
     if (response.status === 204) return undefined as T
-    const body = await response.json().catch(() => ({}))
-    if (!response.ok) throw new ApiError(response.status, (body as { error?: string }).error ?? response.statusText)
+    const text = await response.text()
+    let body: unknown = null
+    try {
+        body = text ? JSON.parse(text) : null
+    } catch {
+        // not JSON: an HTML login page from a proxy in front, or a crashed server
+    }
+    if (!response.ok) throw new ApiError(response.status, (body as { error?: string } | null)?.error ?? `${response.status} ${response.statusText}`)
+    // A 200 that is not JSON must not become `{}`: every screen would then throw on a missing field.
+    if (body === null) throw new ApiError(response.status, 'The API returned something other than JSON — a proxy login page? Reload and sign in.')
     return body as T
 }
 
 export const api = {
     status: () => request<Status>('/status'),
-    /** Newest first, one page; pass `before` = created_at of the last task for the next. */
-    tasks: (q: { status?: TaskStatus; project?: string; before?: string; limit?: number } = {}) => {
-        const params = new URLSearchParams()
+    /** Newest first, one page; pass `before` = the last task shown for the next. */
+    tasks: (q: { status?: TaskStatus; project?: string; before?: Cursor; limit?: number } = {}) => {
+        const params = cursorParams(new URLSearchParams(), q.before)
         if (q.status) params.set('status', q.status)
         if (q.project) params.set('project', q.project)
-        if (q.before) params.set('before', q.before)
         if (q.limit) params.set('limit', String(q.limit))
         const qs = params.toString()
         return request<Task[]>(`/tasks${qs ? `?${qs}` : ''}`)
@@ -257,22 +279,24 @@ export const api = {
     usage: () => request<Usage>('/usage'),
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 
-    conversations: (before?: string, limit = 50) => request<Conversation[]>(`/conversations?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
+    conversations: (before?: Cursor, limit = 50) => request<Conversation[]>(`/conversations?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
     conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
     deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
-    conversationHistory: (id: string, before: string) => request<ConversationHistory>(`/conversations/${id}/history?before=${encodeURIComponent(before)}`),
+    /** Tasks before the given one (the oldest shown), with their events. */
+    conversationHistory: (id: string, before: Cursor) => request<ConversationHistory>(`/conversations/${id}/history?${cursorParams(new URLSearchParams(), before)}`),
     createConversation: (title?: string) =>
         request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
     sendMessage: (id: string, prompt: string) =>
         request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt }) }),
 
     list: (kind: Kind) => request<CatalogEntry[]>(`/${kind}`),
-    get: (kind: Kind, name: string) => request<CatalogEntry>(`/${kind}/${name}`),
-    save: (kind: Kind, name: string, doc: { frontmatter: Record<string, unknown>; body: string }) =>
-        request<CatalogEntry>(`/${kind}/${name}`, { method: 'PUT', body: JSON.stringify(doc) }),
-    remove: (kind: Kind, name: string) => request<void>(`/${kind}/${name}`, { method: 'DELETE' }),
+    get: (kind: Kind, name: string) => request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}`),
+    /** `create` refuses to replace a file that already exists (409). */
+    save: (kind: Kind, name: string, doc: { frontmatter: Record<string, unknown>; body: string }, create = false) =>
+        request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(doc) }),
+    remove: (kind: Kind, name: string) => request<void>(`/${kind}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
-    sessions: (before?: string, limit = 50) => request<SessionSummary[]>(`/sessions?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
+    sessions: (before?: Cursor, limit = 50) => request<SessionSummary[]>(`/sessions?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
     /** A window of `limit` entries ending before index `before` (default: the end of the transcript). */
     session: (id: string, before?: number, limit = 200) => request<SessionDetail>(`/sessions/${id}?limit=${limit}${before ? `&before=${before}` : ''}`),
 
@@ -281,17 +305,42 @@ export const api = {
         request<{ installed: Preset['files'] }>(`/presets/${name}/install`, { method: 'POST', body: JSON.stringify({ overwrite }) })
 }
 
-/** Subscribe to a conversation's live feed. Returns an unsubscribe function. */
+/**
+ * Subscribe to a conversation's live feed. Returns an unsubscribe function.
+ * Reconnects by hand rather than through EventSource's own retry, so each
+ * connection asks for events after the last one seen instead of replaying
+ * from the original `after` every time; `onReconnect` lets the caller
+ * refetch what a stream cannot replay (task rows that changed meanwhile).
+ */
 export function streamConversation(
     id: string,
-    after: number,
-    handlers: { onTask?: (task: Task) => void; onEvent?: (event: TaskEvent) => void; onError?: () => void }
+    after: () => number,
+    handlers: { onTask?: (task: Task) => void; onEvent?: (event: TaskEvent) => void; onReconnect?: () => void }
 ): () => void {
-    const source = new EventSource(`/api/conversations/${id}/stream?after=${after}`)
-    source.addEventListener('task', (e) => handlers.onTask?.(JSON.parse((e as MessageEvent).data)))
-    source.addEventListener('event', (e) => handlers.onEvent?.(JSON.parse((e as MessageEvent).data)))
-    source.onerror = () => handlers.onError?.()
-    return () => source.close()
+    let source: EventSource | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let closed = false
+    let connections = 0
+    const open = () => {
+        if (closed) return
+        source = new EventSource(`/api/conversations/${id}/stream?after=${after()}`)
+        source.addEventListener('task', (e) => handlers.onTask?.(JSON.parse((e as MessageEvent).data)))
+        source.addEventListener('event', (e) => handlers.onEvent?.(JSON.parse((e as MessageEvent).data)))
+        source.onopen = () => {
+            if (connections++ > 0) handlers.onReconnect?.()
+        }
+        source.onerror = () => {
+            source?.close()
+            source = null
+            timer = setTimeout(open, 3000)
+        }
+    }
+    open()
+    return () => {
+        closed = true
+        clearTimeout(timer)
+        source?.close()
+    }
 }
 
 /** Every token the task sent or received, cache included — what the subscription meters. */
@@ -299,6 +348,8 @@ export const taskTokens = (t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cac
     t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
 
 export const fmt = {
+    /** "1 run", "3 runs". */
+    plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`,
     tokens: (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)),
     pct: (share: number) => `${Math.round(share * 100)}%`,
     /** A task's share of the 5-hour window: "+3% of 5h", "<1% of 5h" or null. */
@@ -308,7 +359,7 @@ export const fmt = {
         const ms = new Date(iso).getTime() - Date.now()
         if (ms <= 0) return 'now'
         const h = Math.floor(ms / 3_600_000)
-        const m = Math.round((ms % 3_600_000) / 60_000)
+        const m = Math.floor((ms % 3_600_000) / 60_000)
         if (h >= 48) return `${Math.round(h / 24)}d`
         return h > 0 ? `${h}h ${m}m` : `${m}m`
     },

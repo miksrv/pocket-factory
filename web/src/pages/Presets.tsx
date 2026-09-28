@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { Empty, ErrorBox, PageHead, useToast } from '../components/ui'
-import { api, type Preset } from '../lib/api'
-import { renderMarkdown } from '../lib/markdown'
+import { Button, Empty, ErrorBox, Markdown, PageHead, useToast } from '../components/ui'
+import { api, fmt, type Preset } from '../lib/api'
 import { Tile } from '../components/Tile'
 import { useAsync } from '../lib/useAsync'
 
@@ -11,18 +10,28 @@ export function PresetsPage() {
     const presets = useAsync(() => api.presets(), [])
     const [open, setOpen] = useState<Preset | null>(null)
     const [toast, showToast] = useToast()
+    const [busy, setBusy] = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
 
     const install = async (preset: Preset, overwrite = false) => {
-        if (overwrite && !confirm(`Overwrite existing ${preset.files.map((f) => `${f.kind}/${f.name}`).join(', ')} with the preset versions?`)) return
-        const { installed } = await api.installPreset(preset.name, overwrite)
-        showToast(installed.length ? `Installed ${installed.length} file(s)` : 'Nothing to install — already present')
-        presets.reload()
+        if (overwrite && !window.confirm(`Overwrite existing ${preset.files.map((f) => `${f.kind}/${f.name}`).join(', ')} with the preset versions?`)) return
+        setBusy(preset.name)
+        setError(null)
+        try {
+            const { installed } = await api.installPreset(preset.name, overwrite)
+            showToast(installed.length ? `Installed ${fmt.plural(installed.length, 'file')}` : 'Nothing to install — already present')
+            presets.reload()
+        } catch (e) {
+            setError((e as Error).message)
+        } finally {
+            setBusy(null)
+        }
     }
 
     return (
         <div className="page">
             <PageHead title="Presets" sub="Ready-made bundles of agents, skills and project templates shipped with the repository. Install copies them onto the volume; from then on they are yours to edit." />
-            <ErrorBox error={presets.error} />
+            <ErrorBox error={presets.error ?? error} />
             {presets.data?.length === 0 && <Empty>No presets found in presets/.</Empty>}
             <div className="cards" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
                 {presets.data?.map((preset) => (
@@ -54,18 +63,18 @@ export function PresetsPage() {
                         </div>
                         <div className="toolbar">
                             {preset.readme && (
-                                <button className="sm" onClick={() => setOpen(preset)}>
+                                <Button size="sm" onClick={() => setOpen(preset)}>
                                     Details
-                                </button>
+                                </Button>
                             )}
                             {preset.installed ? (
-                                <button className="sm" onClick={() => install(preset, true)}>
-                                    Reinstall
-                                </button>
+                                <Button size="sm" onClick={() => install(preset, true)} disabled={busy === preset.name}>
+                                    {busy === preset.name ? 'Installing…' : 'Reinstall'}
+                                </Button>
                             ) : (
-                                <button className="sm primary" onClick={() => install(preset)}>
-                                    Install
-                                </button>
+                                <Button size="sm" variant="primary" onClick={() => install(preset)} disabled={busy === preset.name}>
+                                    {busy === preset.name ? 'Installing…' : 'Install'}
+                                </Button>
                             )}
                         </div>
                     </div>
@@ -75,11 +84,11 @@ export function PresetsPage() {
                 <div className="card" style={{ marginTop: 16 }}>
                     <div className="row between">
                         <h3 style={{ margin: 0 }}>{open.title}</h3>
-                        <button className="sm" onClick={() => setOpen(null)}>
+                        <Button size="sm" onClick={() => setOpen(null)}>
                             Close
-                        </button>
+                        </Button>
                     </div>
-                    <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(open.readme ?? '') }} />
+                    <Markdown source={open.readme ?? ''} />
                 </div>
             )}
             {toast}

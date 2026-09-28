@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { Cursor } from './api'
+
 export interface Paged<T> {
     items: T[]
     loading: boolean
@@ -16,11 +18,12 @@ export interface Paged<T> {
  * Keyset-paged list: the first page loads on mount (and when `deps` change),
  * `loadMore` appends the page before the last item's cursor, and polling
  * refreshes the first page only, merging it over what is already shown so a
- * long scrolled list is never rebuilt.
+ * long scrolled list is never rebuilt. Items the fresh page no longer holds
+ * (a task that left the `running` filter, a deleted conversation) are dropped.
  */
 export function usePaged<T>(
-    fetchPage: (before: string | undefined) => Promise<T[]>,
-    options: { key: (item: T) => string; cursor: (item: T) => string; pageSize: number; deps?: unknown[]; pollMs?: number }
+    fetchPage: (before: Cursor | undefined) => Promise<T[]>,
+    options: { key: (item: T) => string; cursor: (item: T) => string; pageSize: number; deps?: unknown[]; pollMs?: number; hasMore?: (page: T[]) => boolean }
 ): Paged<T> {
     const { key, cursor, pageSize, pollMs } = options
     const [items, setItems] = useState<T[]>([])
@@ -30,15 +33,18 @@ export function usePaged<T>(
     const generation = useRef(0)
     const itemsRef = useRef<T[]>([])
     itemsRef.current = items
-    const busy = useRef(false)
+    /** Generation of the request in flight, so a reset is never blocked by (or unblocked by) an older one. */
+    const busy = useRef<number | null>(null)
+    const cursorOf = (item: T): Cursor => ({ ts: cursor(item), id: key(item) })
+    const more = options.hasMore ?? ((page: T[]) => page.length >= pageSize)
 
     const load = useCallback(
         (mode: 'reset' | 'more' | 'poll') => {
-            if (busy.current && mode !== 'reset') return
-            const gen = mode === 'reset' ? ++generation.current : generation.current
-            const before = mode === 'more' ? cursor(itemsRef.current[itemsRef.current.length - 1]) : undefined
+            if (mode !== 'reset' && busy.current !== null) return
             if (mode === 'more' && itemsRef.current.length === 0) return
-            busy.current = true
+            const gen = mode === 'reset' ? ++generation.current : generation.current
+            const before = mode === 'more' ? cursorOf(itemsRef.current[itemsRef.current.length - 1]) : undefined
+            busy.current = gen
             if (mode !== 'poll') setLoading(true)
             fetchPage(before)
                 .then((page) => {
@@ -46,20 +52,25 @@ export function usePaged<T>(
                     setError(undefined)
                     if (mode === 'reset') {
                         setItems(page)
-                        setHasMore(page.length >= pageSize)
+                        setHasMore(more(page))
                     } else if (mode === 'more') {
                         const known = new Set(itemsRef.current.map(key))
-                        setItems((prev) => [...prev, ...page.filter((item) => !known.has(key(item)))])
-                        setHasMore(page.length >= pageSize)
+                        const fresh = page.filter((item) => !known.has(key(item)))
+                        setItems((prev) => [...prev, ...fresh])
+                        // A page of nothing new means the end, whatever its size.
+                        setHasMore(fresh.length > 0 && more(page))
                     } else {
-                        // Newest page over the head of the list; the scrolled tail stays.
+                        // Newest page over the head of the list. Anything older than the
+                        // fresh page's tail is kept as is; anything in its range that it
+                        // does not contain has gone (finished, filtered out, deleted).
                         const fresh = new Set(page.map(key))
-                        setItems((prev) => [...page, ...prev.filter((item) => !fresh.has(key(item)))])
+                        const floor = page.length ? cursor(page[page.length - 1]) : undefined
+                        setItems((prev) => [...page, ...prev.filter((item) => !fresh.has(key(item)) && (floor === undefined || cursor(item) < floor))])
                     }
                 })
                 .catch((e: Error) => gen === generation.current && setError(e.message))
                 .finally(() => {
-                    busy.current = false
+                    if (busy.current === gen) busy.current = null
                     if (gen === generation.current) setLoading(false)
                 })
         },

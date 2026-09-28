@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
 import { Tile } from '../components/Tile'
-import { PageHead, StatusBadge } from '../components/ui'
+import { Button, Empty, PageHead, Stat, StatusBadge } from '../components/ui'
 import { api, fmt, type Task, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
@@ -19,9 +19,7 @@ export function OverviewPage() {
     return (
         <div className="page">
             <PageHead title="Overview" sub="What the factory is doing right now.">
-                <Link className="btn" to="/chat">
-                    New task
-                </Link>
+                <Button to="/chat">New task</Button>
             </PageHead>
 
             <div className="card pad0">
@@ -93,7 +91,7 @@ function RecentTasks({ tasks, doneToday }: { tasks: Task[] | undefined; doneToda
                                     <StatusBadge status={task.status} />
                                 </td>
                                 <td className="col-main">
-                                    <Link to={`/tasks/${task.id}`} style={{ color: 'var(--text)' }}>
+                                    <Link to={`/tasks/${task.id}`} className="quiet">
                                         {task.prompt.slice(0, 110)}
                                     </Link>
                                 </td>
@@ -101,7 +99,7 @@ function RecentTasks({ tasks, doneToday }: { tasks: Task[] | undefined; doneToda
                                     <span className="badge plain">{task.source}</span>
                                 </td>
                                 <td className="dim nowrap" style={{ width: 150, textAlign: 'right' }}>
-                                    {task.num_turns} turns · {fmt.tokens(taskTokens(task))}
+                                    {fmt.plural(task.num_turns, 'turn')} · {fmt.tokens(taskTokens(task))}
                                 </td>
                                 <td className="dim nowrap" style={{ width: 100, textAlign: 'right' }}>
                                     {fmt.ago(task.created_at)}
@@ -111,31 +109,13 @@ function RecentTasks({ tasks, doneToday }: { tasks: Task[] | undefined; doneToda
                     </tbody>
                 </table>
             ) : (
-                <div className="empty">No tasks yet. Send one from Telegram or start a chat.</div>
+                <Empty>No tasks yet. Send one from Telegram or start a chat.</Empty>
             )}
             <div className="card-foot">
                 <Link to="/tasks">All tasks →</Link>
                 <span>{doneToday !== undefined ? `${doneToday} done today` : ''}</span>
             </div>
         </div>
-    )
-}
-
-function Stat({ label, value, to }: { label: string; value: string | number; to?: string }) {
-    const body = (
-        <>
-            <div className="label">{label}</div>
-            <div className="value" style={{ fontSize: 18 }}>
-                {value}
-            </div>
-        </>
-    )
-    return to ? (
-        <Link to={to} className="stat" style={{ color: 'inherit' }}>
-            {body}
-        </Link>
-    ) : (
-        <div className="stat">{body}</div>
     )
 }
 

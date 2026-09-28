@@ -1,6 +1,6 @@
 import { fmt, type TaskEvent } from '../lib/api'
 import { diffOf, highlight, languageOf } from '../lib/highlight'
-import { renderMarkdown } from '../lib/markdown'
+import { Markdown } from './ui'
 
 export function summarizeInput(input: unknown): string {
     if (!input || typeof input !== 'object') return ''
@@ -14,7 +14,16 @@ export function summarizeInput(input: unknown): string {
 /** Highlighted `<pre>` for text in a known or detectable language. */
 export function Code({ text, language }: { text: string; language?: string }) {
     const { html, language: detected } = highlight(text, language)
-    return <pre className="code" data-lang={detected} dangerouslySetInnerHTML={{ __html: `<code class="hljs">${html}</code>` }} />
+    return <Pre html={html} language={detected} />
+}
+
+/** An Edit's before/after as a unified diff. */
+function Diff({ before, after }: { before: string; after: string }) {
+    return <Pre html={diffOf(before, after)} language="diff" />
+}
+
+function Pre({ html, language }: { html: string; language: string }) {
+    return <pre className="code" data-lang={language} dangerouslySetInnerHTML={{ __html: `<code class="hljs">${html}</code>` }} />
 }
 
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -31,7 +40,7 @@ function ToolInput({ name, input }: { name: string; input: unknown }) {
         return (
             <>
                 <div className="dim small mono">{file}</div>
-                <pre className="code" data-lang="diff" dangerouslySetInnerHTML={{ __html: `<code class="hljs">${diffOf(record.old_string, record.new_string)}</code>` }} />
+                <Diff before={record.old_string} after={record.new_string} />
             </>
         )
     }
@@ -40,7 +49,7 @@ function ToolInput({ name, input }: { name: string; input: unknown }) {
             <>
                 <div className="dim small mono">{file}</div>
                 {(record.edits as Array<Record<string, unknown>>).map((edit, i) => (
-                    <pre key={i} className="code" data-lang="diff" dangerouslySetInnerHTML={{ __html: `<code class="hljs">${diffOf(String(edit.old_string ?? ''), String(edit.new_string ?? ''))}</code>` }} />
+                    <Diff key={i} before={String(edit.old_string ?? '')} after={String(edit.new_string ?? '')} />
                 ))}
             </>
         )
@@ -75,7 +84,7 @@ export function EventFeed({ events, finalText, error }: { events: TaskEvent[]; f
             {events.map((event) => (
                 <Event key={event.id} event={event} />
             ))}
-            {!hasText && finalText && <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(finalText) }} />}
+            {!hasText && finalText && <Markdown source={finalText} />}
             {error && <div className="tool error">{error}</div>}
             {events.length === 0 && !finalText && !error && <div className="dim">Waiting for output…</div>}
         </div>
@@ -89,7 +98,7 @@ export function Event({ event }: { event: TaskEvent }) {
     switch (event.type) {
         case 'text':
             if (event.agent) return null // sub-agent prose comes back through the Agent tool result
-            return <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(String(p.text ?? '')) }} />
+            return <Markdown source={String(p.text ?? '')} />
         case 'tool_use':
             return (
                 <details className="tool">
@@ -121,7 +130,7 @@ export function Event({ event }: { event: TaskEvent }) {
             if (p.status === 'running') return null
             return (
                 <div className="dim small">
-                    {String(p.status)} · {Number(p.num_turns ?? 0)} turns · {fmt.tokens(Number(p.tokens ?? 0))} tokens
+                    {String(p.status)} · {fmt.plural(Number(p.num_turns ?? 0), 'turn')} · {fmt.tokens(Number(p.tokens ?? 0))} tokens
                     {typeof p.window_5h_delta === 'number' && ` · ${fmt.windowDelta(p.window_5h_delta)}`} · {fmt.duration(Number(p.duration_ms ?? 0))}
                 </div>
             )
