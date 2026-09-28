@@ -7,9 +7,10 @@ import type { Env } from '../context.js'
 export function conversationRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
+    /** Newest activity first; `before` = updated_at of the last row for the next page. */
     app.get('/', (c) => {
         const { store } = c.get('app')
-        return c.json(store.listConversations(Number(c.req.query('limit') ?? 50)))
+        return c.json(store.listConversations(Math.min(Number(c.req.query('limit')) || 50, 200), c.req.query('before') || undefined))
     })
 
     app.post('/', async (c) => {
@@ -18,15 +19,46 @@ export function conversationRoutes(): Hono<Env> {
         return c.json(tasks.newConversation('web', null, body.title ?? null), 201)
     })
 
+    const PAGE = 20
+
+    /**
+     * The conversation with its most recent tasks and their events, oldest
+     * first. `has_more` says whether /history has earlier tasks.
+     */
     app.get('/:id', (c) => {
         const { store } = c.get('app')
         const conversation = store.getConversation(c.req.param('id'))
         if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        const page = store.listTasks({ conversationId: conversation.id, limit: PAGE + 1 })
+        const tasks = page.slice(0, PAGE).reverse()
         return c.json({
             ...conversation,
-            tasks: store.listTasks({ conversationId: conversation.id, limit: 200 }).reverse(),
-            events: store.listConversationEvents(conversation.id)
+            tasks,
+            events: store.listEventsOfTasks(tasks.map((t) => t.id)),
+            has_more: page.length > PAGE
         })
+    })
+
+    /** Earlier tasks of a conversation (with events), oldest first; `before` = created_at of the oldest task shown. */
+    app.get('/:id/history', (c) => {
+        const { store } = c.get('app')
+        const conversation = store.getConversation(c.req.param('id'))
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        const page = store.listTasks({ conversationId: conversation.id, before: c.req.query('before') || undefined, limit: PAGE + 1 })
+        const tasks = page.slice(0, PAGE).reverse()
+        return c.json({ tasks, events: store.listEventsOfTasks(tasks.map((t) => t.id)), has_more: page.length > PAGE })
+    })
+
+    /** Remove from the Chat list. Refused while a task of it is queued or running. */
+    app.delete('/:id', (c) => {
+        const { tasks, store } = c.get('app')
+        const conversation = store.getConversation(c.req.param('id'))
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        if (tasks.activeTask(conversation.id) || store.listTasks({ conversationId: conversation.id, status: 'queued', limit: 1 }).length) {
+            return c.json({ error: 'a task of this conversation is still queued or running; stop it first' }, 409)
+        }
+        store.deleteConversation(conversation.id)
+        return c.body(null, 204)
     })
 
     app.post('/:id/messages', async (c) => {
