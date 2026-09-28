@@ -64,8 +64,13 @@ the Chat page keeps an SSE connection open, so give it a timeout.
   inside the container is broken upstream (anthropics/claude-code#34917).
 - Agent works inside the owner's real checkouts on a branch (no worktrees, no re-cloning).
 - GitHub auth = fine-grained PAT (`GH_TOKEN`), never mounted SSH keys.
-- Default model `sonnet`; cheaper models only for mechanical sub-agents later. The cost shown in
-  Telegram is the CLI's list-price estimate (quota on a subscription, not money).
+- Default model `sonnet`; cheaper models only for mechanical sub-agents later.
+- No money in the UI or Telegram: the owner pays a subscription, so tasks report **tokens** (cache
+  included) and their share of the **5-hour window**; screens show the 5-hour / weekly windows from
+  the CLI's `rate_limit_event` (stream-json, `unifiedWindows`). `/api/oauth/usage` needs the
+  `user:profile` scope that a setup-token lacks, so there is no polling — readings come with every
+  task, plus an explicit probe (one Haiku turn: Overview → Refresh, Telegram `/usage refresh`).
+  `cost_usd` stays in the DB for the record; `CLAUDE_MAX_BUDGET_USD` stays as a safety stop.
 - Unknown `/commands` never reach the agent; replies are converted to Telegram HTML with plain-text
   fallback.
 - Single language: TypeScript for supervisor, API and UI. No Python service (asked and answered:
@@ -79,17 +84,19 @@ the Chat page keeps an SSE connection open, so give it a timeout.
 - The owner decides when to commit — never commit unprompted. When asked to commit: no
   `Co-Authored-By` lines.
 
-## Status (2026-09-28)
+## Status (2026-09-28, evening)
 
-Phases 0–4 of the spec are implemented in one pass (see git log): Telegram text + voice, SQLite
-task queue / session manager, web UI with chat, transcripts, editors for agents / skills / projects,
-presets, config git history. Verified on the host (`yarn dev` + curl + headless Chrome); the Docker
-image with the web build has **not** been built yet (daemon was down) — run
-`docker compose up -d --build` and check `/api/status` first thing.
+Phases 0–4 of the spec are implemented (see git log): Telegram text + voice, SQLite task queue /
+session manager, web UI with chat, transcripts, editors for agents / skills / projects, presets,
+config git history. The Docker image is built and the container runs with the web UI. Cost is gone
+from every screen: tasks report tokens and their share of the 5-hour window, Overview and the
+sidebar show the subscription windows (schema v2: `rate_limits` table, cache token columns).
+`yarn dev` now runs from the repository root (same cwd as the container), so `.env`, `data/`,
+`web/dist` and `presets/` resolve identically.
 
 Not done / next:
 
-1. Build the image, verify `git push` + `gh pr create` from the container with `GH_TOKEN`.
+1. Verify `git push` + `gh pr create` from the container with `GH_TOKEN`.
 2. First real project file (let `onboard-project` draft it) and a real feature-to-pr run.
 3. Phase 5: schedules + prefilters (TRAC poller, GitHub review requests) — `source: cron` is
    already in the tasks table.

@@ -13,10 +13,11 @@ proxied or stored by anyone else. See [docs/SPEC.md](docs/SPEC.md) for the conce
 ## What it does today
 
 - **Telegram** — text and voice (Whisper on Groq) → `claude -p` in your workspaces → reply with
-  turns / cost / time. Replies continue the same Claude Code session; `/new`, `/stop`, `/status`.
+  turns / tokens / share of the 5-hour window / time, plus how full the subscription windows are.
+  Replies continue the same Claude Code session; `/new`, `/stop`, `/status`, `/usage`.
 - **Task queue** — every channel goes through one SQLite queue; one running task per conversation,
   a configurable number overall; tasks survive supervisor restarts.
-- **Web UI** — Overview (queue, spend, health), Tasks, Chat with Claude Code from the browser with
+- **Web UI** — Overview (queue, subscription limits, tokens, health), Tasks, Chat with Claude Code from the browser with
   live output, Sessions (rendered Claude Code transcripts), editors for **Agents**, **Skills** and
   **Projects**, **Presets**, **History**, Settings.
 - **Factory files** — sub-agents `developer` / `reviewer`, skills `feature-to-pr` /

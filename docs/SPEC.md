@@ -38,7 +38,7 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 
 - Autonomous execution of multi-step software tasks (feature → PR → review → fixes → report) without supervision.
 - Telegram as the primary human channel: task input (text + voice), progress milestones, clarifying questions, final reports. Only essential information — details live in the UI.
-- Web UI for observability and administration: agents, skills, projects, schedules, task log, session transcripts, token/cost analytics with quota forecasting.
+- Web UI for observability and administration: agents, skills, projects, schedules, task log, session transcripts, token analytics and subscription-window (5-hour / weekly) visibility.
 - Event-driven task creation: Telegram, cron schedules with UI management, and optionally external webhooks (GitHub).
 - Support for multiple independent repositories (personal and organization-owned) with per-project workflows, credentials, and conventions.
 - Human-in-the-loop: the agent pauses and asks the owner via Telegram when it hits ambiguity or a decision gate; runs resume after the answer.
@@ -261,13 +261,13 @@ The UI is deliberately small: it is a viewer for files and transcripts Claude Co
 
 Screens (v1):
 
-1. **Tasks** — unified feed across all sources; status, project, source, duration, cost; filters; cancel / retry / "run now" / resume.
+1. **Tasks** — unified feed across all sources; status, project, source, duration, tokens and share of the 5-hour window; filters; cancel / retry / "run now" / resume.
 2. **Session view** — rendered Claude Code transcript (`*.jsonl`): dispatcher turns → sub-agent spans → expandable tool calls with results; live tail via SSE while a session is running; token/cost per turn from the usage fields in the transcript.
 3. **Agents** — list + Markdown editor with frontmatter form (name, description/trigger, tools/MCP allowlist, model).
 4. **Skills** — same editor pattern; show which skills reference which.
 5. **Projects** — knowledge-base editor; onboarding wizard (drives the `onboard-project` skill).
 6. **Schedules** — CRUD for cron entries, active windows, prefilter binding, enable/disable, run-now, last result.
-7. **Cost & quota dashboard** — spend per day/project/agent/task-type; estimated usage in the current 5-hour window and weekly window as % of the subscription's advertised limit; average cost per task type; forecast to limit.
+7. **Quota dashboard** — the 5-hour and weekly windows as the CLI reports them (`rate_limit_event`), with reset times and a history of readings; tokens per day/project/agent/task-type; forecast to limit. No money anywhere: the owner pays a subscription, so the unit is tokens and window share.
 8. **Settings** — MCP servers, connected repos/credentials references, Telegram whitelist, idle timeout, concurrency, budget policies. Shows Claude Code login status (`claude auth status`) but never performs the login.
 9. **Config history** — `git log` of the config repository with diffs; revert button.
 
@@ -285,7 +285,7 @@ sessions (session_id, task_id, workspace, started_at, ended_at,
 usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 ```
 
-- Cost per task comes from the `result` message in stream-json output (`total_cost_usd`, usage); per-turn detail is parsed from the transcript for the session view and aggregates.
+- Tokens per task come from the `result` message in stream-json output (`usage`, cache read/creation included); `total_cost_usd` is stored for the record but never shown. Window utilisation comes from the `rate_limit_event` messages (`unifiedWindows.five_hour` / `seven_day`, utilisation 0..1 and reset time) that the CLI emits after API calls; every task refreshes it, and an explicit probe (one Haiku turn) refreshes it on demand. The `/api/oauth/usage` endpoint requires the `user:profile` scope, which a setup-token does not carry, so it is not used. Per-turn detail is parsed from the transcript for the session view and aggregates.
 - Supervisor's own logs (bot, scheduler, prefilters, lifecycle events) go to stdout/JSON files under `/data/logs`.
 - Optional: enable Claude Code's built-in OpenTelemetry export (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, OTLP env vars) if the owner already runs a collector. Not required for v1.
 
@@ -293,7 +293,7 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 
 - Per-task token/cost ceiling (configurable per task type), enforced via `--max-turns` / `--max-budget-usd` and the supervisor; the task is paused and the owner is asked when exceeded.
 - Model policy: dispatcher on the strongest model; worker sub-agents default to cheaper models (Sonnet/Haiku class) via their frontmatter unless overridden.
-- Soft-stop: when the *estimated* rolling 5-hour or weekly usage approaches the subscription's advertised limit, background/cron tasks are deferred; direct owner tasks keep working. Telegram warning at configurable thresholds. (Quota is estimated from indexed usage — the CLI does not expose remaining quota programmatically; see §13.)
+- Soft-stop: when the rolling 5-hour or weekly window approaches the limit, background/cron tasks are deferred; direct owner tasks keep working. Telegram warning at configurable thresholds. (The reading is the CLI's own `rate_limit_event`; it is exact as of the last API call, not an estimate.)
 
 ---
 
@@ -375,7 +375,7 @@ Phase 1 is deliberately the whole "driving to a conference" story: if it works, 
 
 1. ~~Claude auth mode for production~~ — **Decided (v1.1):** the owner's own Claude Code login via `claude setup-token` → `.env`; the tool never holds credentials.
 2. ~~Does the pinned Claude Code version support `--max-budget-usd`?~~ — **Yes** (verified on 2.1.283); the CLI enforces it.
-3. Quota visibility: is there any programmatic way to read remaining 5-hour/weekly quota, or must it stay an estimate from indexed usage?
+3. ~~Quota visibility~~ — answered 2026-09-28: `claude -p --output-format stream-json` emits `rate_limit_event` with `unifiedWindows.five_hour` / `seven_day` utilisation and reset times (CLI 2.1.283); works with a setup-token. Implemented (§7).
 4. STT: confirm Groq Whisper latency/cost from a moving car (LTE); keep faster-whisper as a fallback for offline-ish VPS setups.
 5. Closing-phrase detection: pure keyword list + `/done`, or let the agent emit an explicit "session can be closed" marker in its final report?
 6. Voice replies (TTS) from the agent — nice-to-have, out of v1 scope?
