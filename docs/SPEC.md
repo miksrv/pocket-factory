@@ -2,7 +2,9 @@
 
 > **Tagline:** *"Your agent becomes autonomous when you close your laptop."*
 >
-> Status: Draft v1.1 · Date: 2026-09-26 · Author: Misha Topchilo (with Claude)
+> Status: Draft v1.2 · Date: 2026-09-28 · Author: Misha Topchilo (with Claude)
+>
+> **v1.2 changes:** decisions recorded from the implementation: the agent works in the owner's real checkouts on a branch (no per-task worktrees); the web UI is a Vite/React SPA served by the supervisor (no Next.js service); sessions are one-shot `claude -p` runs resumed by id, so idle timeout is a no-op; config history is two git repositories on the volume; project files carry `hosts:` for SSH access; presets are shareable bundles. Phases 0–4 implemented.
 >
 > **v1.1 changes:** the agent runtime is the owner's own, unmodified **Claude Code CLI** (subscription login), supervised by a thin always-on process — not a custom Agent SDK application holding a token. Added the session lifecycle model (spawn on demand, tear down on idle / explicit finish, resume from disk). Dropped Langfuse and the custom events table in favour of Claude Code's own JSONL transcripts. Closed the auth question. Added prompt-injection requirements and the conditions under which others may reuse the template.
 
@@ -144,7 +146,7 @@ The owner writes "thanks, we're done", sends `/done`, or simply stops replying. 
 |---|---|---|
 | **supervisor** | Telegram bot (long polling — no public IP required), voice → text (STT), task queue + worker, scheduler + prefilters, optional webhook endpoint, **session manager** (spawn Claude Code, stream messages in/out, resume, idle timeout, kill), delivery of reports/questions back to Telegram, transcript indexing and cost accounting | Node.js/TypeScript, grammY, node-cron, `child_process` around `claude -p` |
 | **claude** | The agent itself: dispatcher prompt, sub-agents, skills, MCP, sessions, memory. Unmodified Claude Code CLI, logged in by the owner. Not a long-running service — spawned per task, 0..N processes at a time | `@anthropic-ai/claude-code` (pinned version), `git`, `gh`, project runtimes |
-| **web** | Admin & observability UI (see §6) | Next.js; SSE for live output |
+| **web** | Admin & observability UI (see §6) | Vite + React SPA, built into the image and served by the supervisor; SSE for live output |
 | **db** | Tasks, schedules, seen-items, session index, usage aggregates | SQLite on the volume (WAL mode) |
 
 The container image also ships: `git`, `gh` CLI, project runtimes as needed (node, yarn, …).
@@ -171,7 +173,7 @@ Rules:
 
 - **Idle = free.** The worker spawns Claude Code only for queued tasks.
 - **Dedup** via `idempotency_key` (e.g. webhook delivery ID, `schedule_id + fire_time`).
-- **Per-task workspace:** each task gets its own `git worktree` of the project, so tasks in the same repository can run in parallel without stepping on each other. Pushes to the same branch are still serialized.
+- **Workspace:** the agent works inside the owner's real checkout on a branch — no worktrees, no re-cloning (decided during Phase 0; the owner's repositories are bind-mounted and expected to stay in the state the owner left them). One running task per conversation; tasks touching the same repository are the owner's responsibility to sequence for now.
 - **Pause/resume:** clarifying questions flip the task to `waiting_for_user`; the Telegram reply resumes the stored session.
 - **Cancellation & steering:** the owner can stop a running task or inject a mid-run instruction from Telegram/UI (`/stop`, `/done`, free text while a task runs).
 
@@ -191,6 +193,8 @@ schedules (id, name, cron_expr, active_window,   -- e.g. Mon–Fri 09:00–18:00
 ### 4.4 Session lifecycle
 
 The session manager is the piece Claude Code does not provide and the core of the "zero idle cost" promise.
+
+> **As implemented (v1.2):** every task is a one-shot `claude -p` run; the conversation remembers the session id and the next task in the same conversation resumes it with `--resume`. There is no process to keep warm, so the idle timer below is a no-op and "explicit finish" is simply the owner opening a new conversation (`/new`). Questions from the agent are its final message; the owner's reply is the next task on the same session. The diagram is kept as the design for long-lived interactive sessions (`--input-format stream-json`) should they ever be needed.
 
 ```
                  task queued / owner message
@@ -325,7 +329,7 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 | STT | Whisper via Groq API (default) or faster-whisper (local) | A small VPS CPU is slow for local Whisper; voice is occasional, API is cheap and fast. Local stays an option. |
 | Queue/scheduler | SQLite table + worker; node-cron | Simplest thing that works. |
 | DB | SQLite on volume (WAL) | Zero-ops, portable. |
-| Web UI | Next.js | Owner's stack. |
+| Web UI | Vite + React SPA served by the supervisor | One container, no SSR needed for an admin panel; same TypeScript types as the API. |
 | Observability | Claude Code transcripts + SQLite index; optional OTEL export | Don't rebuild what the CLI already writes. |
 | GitHub | `gh` CLI + fine-grained PAT / GitHub App | PRs, reviews, comments, polling. |
 | Trackers | ClickUp MCP, TRAC API (custom prefilter script + MCP) | Per-project binding. |
@@ -337,11 +341,11 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 
 | Phase | Deliverable | Acceptance |
 |---|---|---|
-| **0. Skeleton** | Repo, Dockerfile (node + claude-code + git + gh), compose, `/data` layout, `claude login` inside the container documented | `docker compose up` runs on a clean VPS; `claude -p "hi"` answers from inside the container |
-| **1. Voice hotfix** | Telegram bot + STT → `claude -p` in a project worktree → reply in Telegram; `developer`/`reviewer` agents, `feature-to-pr` skill, one project file | UC-1 end-to-end from a voice note: PR link comes back; zero tokens when idle |
-| **2. Lifecycle & persistence** | Task queue in SQLite, session manager (idle timeout, `/done`, `/stop`, `--resume`), HITL questions via Telegram, dedup, crash recovery | UC-2 and UC-8: a pause/resume question survives a session kill and a supervisor restart |
-| **3. Web UI (read)** | Task feed + session view (transcript rendering, SSE tail), cost dashboard v0 from the transcript index | Owner can watch a live run and see spend without SSH |
-| **4. Factory CRUD** | Agent/skill/project editors, config git history, `onboard-project`, correction-to-file loop | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a commit |
+| **0. Skeleton** ✅ | Repo, Dockerfile (node + claude-code + git + gh), compose, `/data` layout, `claude setup-token` documented | `docker compose up` runs on a clean VPS; `claude -p "hi"` answers from inside the container |
+| **1. Voice hotfix** ✅ (code) | Telegram bot + STT → `claude -p` in the owner's checkout → reply in Telegram; `developer`/`reviewer` agents, `feature-to-pr` skill, project file format + `onboard-project` | UC-1 end-to-end from a voice note: PR link comes back; zero tokens when idle — **still to be exercised on a real project** |
+| **2. Lifecycle & persistence** ✅ | Task queue in SQLite, session manager (`/new`, `/stop`, `--resume`, one-shot runs), HITL questions via Telegram (agent's final message ↔ owner's reply), crash recovery (orphans failed, queued tasks resumed) | UC-2 and UC-8: a question survives a supervisor restart |
+| **3. Web UI (read)** ✅ | Task feed + session view (transcript rendering, SSE live feed), overview with spend from the tasks table, **chat with Claude Code from the browser** | Owner can watch a live run and see spend without SSH |
+| **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), config git history with diffs, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a commit |
 | **5. Schedules** | `schedules` table + UI, prefilter pattern, TRAC poller, GitHub review-request poller | UC-3 and UC-4: zero tokens on empty polls |
 | **6. Hardening** | Budgets/soft-stop, quota estimate, backups of `/data`, template-ization (README for forkers with the conditions from §1.7), optional webhook ingress | Quota forecast visible; fork-and-run documented and tested on a fresh account |
 
@@ -367,6 +371,8 @@ Phase 1 is deliberately the whole "driving to a conference" story: if it works, 
 
 ## 13. Open Questions
 
+0. ~~Idle timeout / closing-phrase detection~~ — **moot in v1.2:** runs are one-shot; nothing stays warm. Revisit only if interactive `--input-format stream-json` sessions are introduced.
+
 1. ~~Claude auth mode for production~~ — **Decided (v1.1):** the owner's own Claude Code login via `claude setup-token` → `.env`; the tool never holds credentials.
 2. ~~Does the pinned Claude Code version support `--max-budget-usd`?~~ — **Yes** (verified on 2.1.283); the CLI enforces it.
 3. Quota visibility: is there any programmatic way to read remaining 5-hour/weekly quota, or must it stay an estimate from indexed usage?
@@ -386,21 +392,23 @@ pocket-factory/
 ├── docker-compose.yml
 ├── Dockerfile                # node 22 + @anthropic-ai/claude-code (pinned) + git + gh
 ├── .env.example
-├── supervisor/               # telegram bot, STT, queue, scheduler, session manager
-├── prefilters/               # deterministic pollers (trac.ts, github-reviews.ts, …)
-├── web/                      # Next.js admin UI
+├── supervisor/               # telegram bot, STT, queue / session manager, HTTP API (TypeScript)
+├── web/                      # Vite + React admin UI, served by the supervisor
+├── templates/claude/         # seeded into data/claude (CLAUDE.md, agents/, skills/)
+├── presets/                  # shareable agent + skill bundles, installable from the UI
+├── prefilters/               # (Phase 5) deterministic pollers (trac.ts, github-reviews.ts, …)
 └── data/                     # → mounted volume in production
-    ├── claude/               # CLAUDE_CONFIG_DIR — owned by Claude Code
+    ├── claude/               # CLAUDE_CONFIG_DIR — owned by Claude Code; git repo for the first three
     │   ├── CLAUDE.md         #   dispatcher rules
-    │   ├── agents/           #   developer.md, reviewer.md, qa.md, …
-    │   ├── skills/           #   feature-to-pr/, clickup-task/, pr-review/, …
+    │   ├── agents/           #   developer.md, reviewer.md, …
+    │   ├── skills/           #   feature-to-pr/, onboard-project/, …
     │   ├── projects/         #   session transcripts (*.jsonl), written by the CLI
-    │   └── (credentials)     #   created by `claude login`, never touched by the tool
+    │   └── (credentials)     #   never touched by the tool
     ├── config/               # git repository
-    │   ├── projects/         #   photos.md, global-navigation.md, …
+    │   ├── projects/         #   photos.md, global-navigation.md, … (frontmatter: repo, branches, tracker, hosts, checks)
     │   └── .mcp.json
-    ├── workspaces/           # git clones + per-task worktrees
-    ├── secrets/              # PATs, MCP secrets, telegram token
-    ├── db/                   # sqlite
+    ├── workspaces/           # the owner's checkouts (or WORKSPACES_DIR bind-mounted)
+    ├── secrets/ssh/          # keys for project hosts → ~/.ssh in the container
+    ├── db/                   # sqlite: conversations, tasks, task_events
     └── logs/                 # supervisor logs
 ```
