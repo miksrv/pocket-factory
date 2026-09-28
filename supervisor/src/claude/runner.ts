@@ -75,6 +75,8 @@ export interface RunOptions {
     permissionMode: string
     /** Extra environment for the CLI (CLAUDE_CONFIG_DIR etc.). */
     env?: NodeJS.ProcessEnv
+    /** Wall-clock limit for the whole run; 0 = none. A hung tool otherwise holds a session slot forever. */
+    timeoutMs?: number
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -83,6 +85,8 @@ export interface RunResult {
     sessionId: string
     text: string
     isError: boolean
+    /** The CLI's result subtype: `success`, `error_max_turns`, `error_during_execution`, … */
+    subtype: string
     numTurns: number
     /** The CLI's list-price estimate. Kept for the record; the UI shows tokens and windows. */
     costUsd: number
@@ -99,7 +103,17 @@ export interface RunResult {
 export interface RunHandle {
     sessionId: Promise<string>
     result: Promise<RunResult>
+    /** Ask the CLI to stop; SIGKILL follows if it has not exited after `KILL_GRACE_MS`. */
     kill: () => void
+}
+
+/** How long a stopped CLI gets to exit on its own before SIGKILL. */
+const KILL_GRACE_MS = 10_000
+
+export class RunTimeout extends Error {
+    constructor(ms: number) {
+        super(`claude ran past the ${Math.round(ms / 60_000)} minute limit and was stopped`)
+    }
 }
 
 interface ContentBlock {
@@ -202,13 +216,47 @@ export function runClaude(options: RunOptions): RunHandle {
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 
+    // Its own process group, so that a stop also reaches the tools the CLI
+    // spawned (a dev server started through Bash would otherwise outlive it).
     const child: ChildProcess = spawn('claude', args, {
         cwd: options.cwd,
         env: { ...process.env, ...options.env },
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32'
     })
 
+    // A prompt larger than the pipe buffer raises EPIPE when the CLI exits
+    // before reading it (bad --resume id, auth error). Unhandled, that would
+    // crash the supervisor; `close` reports the real failure anyway.
+    child.stdin!.on('error', (error) => log.debug(`stdin: ${error.message}`))
     child.stdin!.end(options.prompt)
+
+    const signal = (sig: NodeJS.Signals) => {
+        if (child.exitCode !== null || child.signalCode !== null) return
+        try {
+            if (child.pid && process.platform !== 'win32') process.kill(-child.pid, sig)
+            else child.kill(sig)
+        } catch {
+            // already gone
+        }
+    }
+    let timedOut = false
+    let stopping = false
+    const timers: NodeJS.Timeout[] = []
+    const kill = () => {
+        stopping = true
+        signal('SIGTERM')
+        timers.push(setTimeout(() => signal('SIGKILL'), KILL_GRACE_MS))
+    }
+    if (options.timeoutMs && options.timeoutMs > 0) {
+        timers.push(
+            setTimeout(() => {
+                timedOut = true
+                log.warn(`claude exceeded ${options.timeoutMs} ms, stopping`)
+                kill()
+            }, options.timeoutMs)
+        )
+    }
 
     let resolveSession: (id: string) => void
     const sessionId = new Promise<string>((resolve) => {
@@ -350,11 +398,18 @@ export function runClaude(options: RunOptions): RunHandle {
 
         child.on('error', reject)
         child.on('close', (code, signal) => {
+            for (const timer of timers) clearTimeout(timer)
             const errText = stderr.join('').trim()
             if (errText) log.debug(`stderr: ${errText}`)
 
-            if (signal) {
-                reject(new Error(`claude was terminated by ${signal}`))
+            if (timedOut) {
+                reject(new RunTimeout(options.timeoutMs ?? 0))
+                return
+            }
+            // The CLI handles SIGTERM itself and exits with 143, so `signal` is
+            // usually null after a stop: report the stop, not a bare exit code.
+            if (signal || (stopping && !finalEvent)) {
+                reject(new Error(`claude was stopped${signal ? ` by ${signal}` : ''}`))
                 return
             }
             if (!finalEvent) {
@@ -368,6 +423,7 @@ export function runClaude(options: RunOptions): RunHandle {
                 sessionId: id,
                 text: finalEvent.result ?? '',
                 isError: finalEvent.is_error ?? code !== 0,
+                subtype: finalEvent.subtype ?? (finalEvent.is_error ? 'error' : 'success'),
                 numTurns: finalEvent.num_turns ?? 0,
                 costUsd: finalEvent.total_cost_usd ?? 0,
                 durationMs: finalEvent.duration_ms ?? 0,
@@ -380,11 +436,5 @@ export function runClaude(options: RunOptions): RunHandle {
         })
     })
 
-    return {
-        sessionId,
-        result,
-        kill: () => {
-            if (child.exitCode === null && !child.killed) child.kill('SIGTERM')
-        }
-    }
+    return { sessionId, result, kill }
 }

@@ -12,6 +12,8 @@ export interface Config {
         maxTurns: number
         maxBudgetUsd: number
         permissionMode: string
+        /** Wall-clock limit per task in ms; 0 = none. */
+        taskTimeoutMs: number
     }
     paths: {
         dataRoot: string
@@ -29,6 +31,8 @@ export interface Config {
         port: number
         authUser: string
         authPassword: string | undefined
+        /** Host names the API answers to when no password is set (DNS-rebinding guard). */
+        allowedHosts: Set<string>
         distDir: string
     }
     presetsDir: string
@@ -85,7 +89,8 @@ export function loadConfig(): Config {
             model: optional('CLAUDE_MODEL'),
             maxTurns: number('CLAUDE_MAX_TURNS', 50),
             maxBudgetUsd: number('CLAUDE_MAX_BUDGET_USD', 5),
-            permissionMode: optional('CLAUDE_PERMISSION_MODE') ?? 'acceptEdits'
+            permissionMode: optional('CLAUDE_PERMISSION_MODE') ?? 'acceptEdits',
+            taskTimeoutMs: number('CLAUDE_TASK_TIMEOUT_MIN', 0) * 60_000
         },
         paths: {
             dataRoot,
@@ -105,6 +110,12 @@ export function loadConfig(): Config {
             port: number('WEB_PORT', 8080),
             authUser: optional('WEB_AUTH_USER') ?? 'factory',
             authPassword: optional('WEB_AUTH_PASSWORD'),
+            allowedHosts: new Set(
+                (optional('WEB_ALLOWED_HOSTS') ?? '')
+                    .split(',')
+                    .map((h) => h.trim().toLowerCase())
+                    .filter(Boolean)
+            ),
             distDir: optional('WEB_DIST') ?? path.resolve(process.cwd(), 'web', 'dist')
         },
         presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),

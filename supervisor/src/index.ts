@@ -54,18 +54,29 @@ async function main(): Promise<void> {
     process.once('SIGINT', () => shutdown('SIGINT'))
     process.once('SIGTERM', () => shutdown('SIGTERM'))
 
+    // Now that the channels listen, tell them about tasks lost to the restart.
+    tasks.announceOrphans()
+
     if (!bot) return
 
-    // Registers the command menu in Telegram, so the client autocompletes them.
-    await bot.api.setMyCommands([
-        { command: 'new', description: 'Start a fresh session' },
-        { command: 'stop', description: 'Cancel the running task' },
-        { command: 'status', description: 'What is going on' },
-        { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' }
-    ])
-
-    await bot.start({
+    // Telegram being down at boot (DNS not ready, 409 from a second poller)
+    // must not take the web UI and the queue down with it: log and carry on
+    // web-only; the container restart policy is not a retry loop for tasks.
+    try {
+        // Registers the command menu in Telegram, so the client autocompletes them.
+        await bot.api.setMyCommands([
+            { command: 'new', description: 'Start a fresh session' },
+            { command: 'stop', description: 'Cancel the running task' },
+            { command: 'status', description: 'What is going on' },
+            { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' }
+        ])
+    } catch (error) {
+        log.warn(`could not register Telegram commands: ${error instanceof Error ? error.message : error}`)
+    }
+    bot.start({
         onStart: (info) => log.info(`polling as @${info.username}`)
+    }).catch((error) => {
+        log.error('Telegram polling stopped; the web UI keeps running', error)
     })
 }
 

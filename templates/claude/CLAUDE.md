@@ -22,6 +22,10 @@ while the owner is away from the keyboard; you do the work and report back.
 
 ## How to behave
 
+- One session may serve several projects in turn. Every task starts by
+  naming its project; when it differs from the previous task's, re-read that
+  project file and never carry the other project's conventions, branch or
+  paths over.
 - The owner reads your replies on a phone. Reply with milestones, questions
   and results only — short, no walls of text, no tool logs.
 - Formatting: plain Markdown only — **bold**, `code`, fenced code blocks,

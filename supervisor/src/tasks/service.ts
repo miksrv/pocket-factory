@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { type RateLimits, type RunHandle, runClaude } from '../claude/runner.js'
+import { type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { createLogger } from '../logger.js'
 import type { Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
@@ -21,6 +21,9 @@ export interface TaskServiceEvents {
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** One Haiku turn should not take longer than this; a hung probe would block `/usage refresh` for good. */
+const PROBE_TIMEOUT_MS = 5 * 60_000
 
 /**
  * Which workspace a tool call touches: the first workspace directory name
@@ -44,6 +47,10 @@ function detectProject(input: unknown, workspaces: string[]): string | null {
  */
 export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly running = new Map<string, RunHandle>()
+    /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
+    private readonly stopRequested = new Set<string>()
+    /** Tasks found `running` at startup, failed by the store; announced once a listener can deliver. */
+    private readonly orphaned: Task[]
     private ticking = false
     private stopped = false
     private probe: Promise<RateLimitSnapshot | null> | null = null
@@ -54,10 +61,21 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         private readonly config: Config
     ) {
         super()
-        const orphaned = store.failOrphanedTasks()
-        if (orphaned > 0) log.warn(`${orphaned} task(s) were running when the supervisor died; marked failed`)
+        this.orphaned = store.failOrphanedTasks()
+        for (const task of this.orphaned) {
+            store.addEvent(task.id, 'error', { status: 'failed', error: task.error ?? undefined })
+        }
+        if (this.orphaned.length > 0) log.warn(`${this.orphaned.length} task(s) were running when the supervisor died; marked failed`)
         // Tasks queued before a restart are still queued; pick them up.
         queueMicrotask(() => this.tick())
+    }
+
+    /**
+     * Tell the channels about tasks lost to the restart. Called once the bot
+     * and the web server listen, since the store marked them before that.
+     */
+    announceOrphans(): void {
+        for (const task of this.orphaned.splice(0)) this.emit('task', task)
     }
 
     // ---- conversations ----------------------------------------------------
@@ -79,7 +97,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     submit(conversationId: string, source: TaskSource, prompt: string): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
-        const task = this.store.createTask(conversationId, source, prompt, conversation.project)
+        // The project is detected per task from its own tool calls, never inherited
+        // from the conversation: one session may serve several projects in turn.
+        const task = this.store.createTask(conversationId, source, prompt)
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: prompt.slice(0, 80) })
         }
@@ -101,6 +121,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     stop(taskId: string): boolean {
         const handle = this.running.get(taskId)
         if (handle) {
+            this.stopRequested.add(taskId)
             handle.kill()
             return true
         }
@@ -112,9 +133,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return false
     }
 
+    /** Stop every task and wait for the CLIs to exit (SIGKILL follows after the runner's grace period). */
     async shutdown(): Promise<void> {
         this.stopped = true
-        for (const handle of this.running.values()) handle.kill()
+        for (const id of this.running.keys()) this.stop(id)
         await Promise.allSettled([...this.running.values()].map((handle) => handle.result))
     }
 
@@ -163,6 +185,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
             env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
+            timeoutMs: PROBE_TIMEOUT_MS,
             onEvent: (event) => {
                 if (event.type === 'init') this.rememberTools(event.tools)
             }
@@ -216,10 +239,27 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     private async run(task: Task): Promise<void> {
-        const conversation = this.store.getConversation(task.conversation_id)!
         const started = this.store.updateTask(task.id, { status: 'running', started_at: new Date().toISOString() })
         this.emit('task', started)
         this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running' }))
+        try {
+            await this.attempt(task, true)
+        } finally {
+            this.running.delete(task.id)
+            this.stopRequested.delete(task.id)
+            queueMicrotask(() => this.tick())
+        }
+    }
+
+    /**
+     * One `claude -p` run for the task. A session that cannot be resumed
+     * (transcript gone, cwd slug changed between host and container) fails
+     * before the first turn; then the conversation forgets the session id
+     * and the task runs once more from scratch, so the owner's message is
+     * not lost to a stale pointer.
+     */
+    private async attempt(task: Task, mayRetry: boolean): Promise<void> {
+        const conversation = this.store.getConversation(task.conversation_id)!
 
         // The 5-hour reading before this task's first API call: the previous
         // snapshot if it is recent and from the same window (other Claude Code
@@ -229,6 +269,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const previous = latest && Date.now() - new Date(latest.ts).getTime() < 5 * 60_000 ? latest.five_hour : null
         let first: RateLimits['five_hour'] = null
         let project = task.project
+        const resuming = Boolean(conversation.session_id)
+        let sawOutput = false
 
         const handle = runClaude({
             prompt: task.prompt,
@@ -239,7 +281,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
             env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
+            timeoutMs: this.config.claude.taskTimeoutMs,
             onEvent: (event) => {
+                sawOutput = true
                 const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
@@ -256,7 +300,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     project = detectProject(event.input, this.workspaces())
                     if (project) {
                         this.store.updateTask(task.id, { project })
-                        if (!conversation.project) this.store.updateConversation(conversation.id, { project })
+                        this.store.updateConversation(conversation.id, { project })
                     }
                 }
                 this.emit('event', this.store.addEvent(task.id, type, payload, origin))
@@ -277,10 +321,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const before = previous && last && previous.resets_at === last.resets_at ? previous : first
             const delta = before && last && before.resets_at === last.resets_at ? Math.max(0, last.used - before.used) : null
             this.finish(task.id, {
-                status: result.isError ? 'failed' : 'done',
+                status: this.stopRequested.has(task.id) ? 'cancelled' : result.isError ? 'failed' : 'done',
                 session_id: result.sessionId || conversation.session_id,
                 result: result.text,
-                error: result.isError ? result.text : null,
+                // Error results (max turns, budget, execution errors) often carry no text: name the reason.
+                error: result.isError ? result.text || `claude stopped: ${result.subtype}` : null,
                 num_turns: result.numTurns,
                 cost_usd: result.costUsd,
                 duration_ms: result.durationMs,
@@ -292,11 +337,23 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             })
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            const cancelled = /terminated by SIG/.test(message)
-            this.finish(task.id, { status: cancelled ? 'cancelled' : 'failed', error: message })
-        } finally {
-            this.running.delete(task.id)
-            queueMicrotask(() => this.tick())
+            if (this.stopRequested.has(task.id) || this.stopped) {
+                this.finish(task.id, { status: 'cancelled', error: message })
+                return
+            }
+            if (error instanceof RunTimeout) {
+                this.finish(task.id, { status: 'failed', error: message })
+                return
+            }
+            if (resuming && !sawOutput && mayRetry) {
+                log.warn(`session ${conversation.session_id} of ${conversation.id} could not be resumed, starting afresh: ${message}`)
+                this.store.updateConversation(conversation.id, { session_id: null })
+                this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running', note: 'previous session could not be resumed; starting a fresh one' }))
+                this.running.delete(task.id)
+                await this.attempt(task, false)
+                return
+            }
+            this.finish(task.id, { status: 'failed', error: message })
         }
     }
 
