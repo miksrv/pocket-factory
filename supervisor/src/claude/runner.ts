@@ -5,6 +5,12 @@ import { createLogger } from '../logger.js'
 
 const log = createLogger('claude')
 
+/** Events surfaced from the stream while a task runs. */
+export type RunnerEvent =
+    | { type: 'text'; text: string }
+    | { type: 'tool_use'; name: string; input: unknown; id: string }
+    | { type: 'tool_result'; toolUseId: string; text: string; isError: boolean }
+
 export interface RunOptions {
     prompt: string
     cwd: string
@@ -16,8 +22,8 @@ export interface RunOptions {
     permissionMode: string
     /** Extra environment for the CLI (CLAUDE_CONFIG_DIR etc.). */
     env?: NodeJS.ProcessEnv
-    /** Called for each assistant text block as it streams in. */
-    onAssistantText?: (text: string) => void
+    /** Called for each assistant text block / tool call as it streams in. */
+    onEvent?: (event: RunnerEvent) => void
 }
 
 export interface RunResult {
@@ -38,18 +44,36 @@ export interface RunHandle {
     kill: () => void
 }
 
+interface ContentBlock {
+    type: string
+    text?: string
+    id?: string
+    name?: string
+    input?: unknown
+    tool_use_id?: string
+    content?: string | Array<{ type: string; text?: string }>
+    is_error?: boolean
+}
+
 // Shape of the stream-json lines we care about. Everything else is ignored.
 interface StreamEvent {
     type: string
     subtype?: string
     session_id?: string
-    message?: { content?: Array<{ type: string; text?: string }> }
+    message?: { content?: ContentBlock[] | string }
     result?: string
     is_error?: boolean
     num_turns?: number
     total_cost_usd?: number
     duration_ms?: number
     usage?: { input_tokens?: number; output_tokens?: number }
+}
+
+function blockText(content: ContentBlock['content']): string {
+    if (typeof content === 'string') return content
+    return (content ?? [])
+        .map((part) => (part.type === 'text' ? (part.text ?? '') : ''))
+        .join('')
 }
 
 /**
@@ -87,6 +111,14 @@ export function runClaude(options: RunOptions): RunHandle {
         resolveSession = resolve
     })
 
+    const emit = (event: RunnerEvent) => {
+        try {
+            options.onEvent?.(event)
+        } catch (error) {
+            log.warn(`onEvent handler threw: ${error instanceof Error ? error.message : error}`)
+        }
+    }
+
     const result = new Promise<RunResult>((resolve, reject) => {
         let finalEvent: StreamEvent | undefined
         let sessionFromInit: string | undefined
@@ -106,12 +138,33 @@ export function runClaude(options: RunOptions): RunHandle {
             if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
                 sessionFromInit = event.session_id
                 resolveSession(event.session_id)
-            } else if (event.type === 'assistant' && options.onAssistantText) {
-                for (const block of event.message?.content ?? []) {
-                    if (block.type === 'text' && block.text) options.onAssistantText(block.text)
-                }
-            } else if (event.type === 'result') {
+                return
+            }
+            if (event.type === 'result') {
                 finalEvent = event
+                return
+            }
+            const content = event.message?.content
+            if (!Array.isArray(content)) return
+            if (event.type === 'assistant') {
+                for (const block of content) {
+                    if (block.type === 'text' && block.text) {
+                        emit({ type: 'text', text: block.text })
+                    } else if (block.type === 'tool_use' && block.name) {
+                        emit({ type: 'tool_use', name: block.name, input: block.input, id: block.id ?? '' })
+                    }
+                }
+            } else if (event.type === 'user') {
+                for (const block of content) {
+                    if (block.type === 'tool_result') {
+                        emit({
+                            type: 'tool_result',
+                            toolUseId: block.tool_use_id ?? '',
+                            text: blockText(block.content).slice(0, 2000),
+                            isError: block.is_error ?? false
+                        })
+                    }
+                }
             }
         })
 
