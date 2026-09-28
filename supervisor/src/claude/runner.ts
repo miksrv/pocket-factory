@@ -10,6 +10,24 @@ export type RunnerEvent =
     | { type: 'text'; text: string }
     | { type: 'tool_use'; name: string; input: unknown; id: string }
     | { type: 'tool_result'; toolUseId: string; text: string; isError: boolean }
+    | { type: 'rate_limit'; limits: RateLimits }
+
+/** One rolling window of the subscription: share used (0..1) and when it resets. */
+export interface RateLimitWindow {
+    used: number
+    resets_at: string
+}
+
+/**
+ * Subscription rate-limit status as reported by the CLI after an API call
+ * (`rate_limit_event` in stream-json). This is the same data `/usage` shows
+ * in the interactive CLI; there is no separate endpoint a setup-token may call.
+ */
+export interface RateLimits {
+    status: 'allowed' | 'allowed_warning' | 'rejected' | string
+    five_hour: RateLimitWindow | null
+    seven_day: RateLimitWindow | null
+}
 
 export interface RunOptions {
     prompt: string
@@ -31,10 +49,15 @@ export interface RunResult {
     text: string
     isError: boolean
     numTurns: number
+    /** The CLI's list-price estimate. Kept for the record; the UI shows tokens and windows. */
     costUsd: number
     durationMs: number
     inputTokens: number
     outputTokens: number
+    cacheReadTokens: number
+    cacheCreationTokens: number
+    /** Last rate-limit status seen during the run, if the CLI reported one. */
+    rateLimits: RateLimits | null
 }
 
 /** A running `claude -p` process that can be cancelled. */
@@ -66,7 +89,32 @@ interface StreamEvent {
     num_turns?: number
     total_cost_usd?: number
     duration_ms?: number
-    usage?: { input_tokens?: number; output_tokens?: number }
+    usage?: {
+        input_tokens?: number
+        output_tokens?: number
+        cache_read_input_tokens?: number
+        cache_creation_input_tokens?: number
+    }
+    rate_limit_info?: {
+        status?: string
+        rateLimitType?: string
+        resetsAt?: number
+        unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number } | undefined>
+    }
+}
+
+function window(raw: { utilization?: number; resetsAt?: number } | undefined): RateLimitWindow | null {
+    if (!raw || typeof raw.utilization !== 'number' || typeof raw.resetsAt !== 'number') return null
+    return { used: raw.utilization, resets_at: new Date(raw.resetsAt * 1000).toISOString() }
+}
+
+function parseRateLimits(info: NonNullable<StreamEvent['rate_limit_info']>): RateLimits | null {
+    const limits: RateLimits = {
+        status: info.status ?? 'allowed',
+        five_hour: window(info.unifiedWindows?.five_hour),
+        seven_day: window(info.unifiedWindows?.seven_day)
+    }
+    return limits.five_hour || limits.seven_day ? limits : null
 }
 
 function blockText(content: ContentBlock['content']): string {
@@ -122,6 +170,7 @@ export function runClaude(options: RunOptions): RunHandle {
     const result = new Promise<RunResult>((resolve, reject) => {
         let finalEvent: StreamEvent | undefined
         let sessionFromInit: string | undefined
+        let rateLimits: RateLimits | null = null
         const stderr: string[] = []
 
         const rl = readline.createInterface({ input: child.stdout! })
@@ -142,6 +191,14 @@ export function runClaude(options: RunOptions): RunHandle {
             }
             if (event.type === 'result') {
                 finalEvent = event
+                return
+            }
+            if (event.type === 'rate_limit_event' && event.rate_limit_info) {
+                const limits = parseRateLimits(event.rate_limit_info)
+                if (limits) {
+                    rateLimits = limits
+                    emit({ type: 'rate_limit', limits })
+                }
                 return
             }
             const content = event.message?.content
@@ -196,7 +253,10 @@ export function runClaude(options: RunOptions): RunHandle {
                 costUsd: finalEvent.total_cost_usd ?? 0,
                 durationMs: finalEvent.duration_ms ?? 0,
                 inputTokens: finalEvent.usage?.input_tokens ?? 0,
-                outputTokens: finalEvent.usage?.output_tokens ?? 0
+                outputTokens: finalEvent.usage?.output_tokens ?? 0,
+                cacheReadTokens: finalEvent.usage?.cache_read_input_tokens ?? 0,
+                cacheCreationTokens: finalEvent.usage?.cache_creation_input_tokens ?? 0,
+                rateLimits
             })
         })
     })
