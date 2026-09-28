@@ -120,7 +120,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             maxTurns: this.config.claude.maxTurns,
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
-            env: this.config.claude.configDir ? { CLAUDE_CONFIG_DIR: this.config.claude.configDir } : undefined,
+            env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
             onEvent: (event) => {
                 const { type, ...payload } = event
                 this.emit('event', this.store.addEvent(task.id, type, payload))

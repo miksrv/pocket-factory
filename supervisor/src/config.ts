@@ -6,7 +6,7 @@ export interface Config {
         allowedUserIds: Set<number>
     }
     claude: {
-        configDir: string | undefined
+        configDir: string
         model: string | undefined
         maxTurns: number
         maxBudgetUsd: number
@@ -15,6 +15,7 @@ export interface Config {
     paths: {
         dataRoot: string
         workspacesRoot: string
+        configRoot: string
         dbFile: string
     }
     stt: {
@@ -68,7 +69,9 @@ export function loadConfig(): Config {
             allowedUserIds
         },
         claude: {
-            configDir: optional('CLAUDE_CONFIG_DIR'),
+            // Also used outside Docker: with CLAUDE_CODE_OAUTH_TOKEN in .env the
+            // CLI is logged in there too, and the UI edits the same files.
+            configDir: optional('CLAUDE_CONFIG_DIR') ?? path.join(dataRoot, 'claude'),
             model: optional('CLAUDE_MODEL'),
             maxTurns: number('CLAUDE_MAX_TURNS', 50),
             maxBudgetUsd: number('CLAUDE_MAX_BUDGET_USD', 5),
@@ -77,6 +80,7 @@ export function loadConfig(): Config {
         paths: {
             dataRoot,
             workspacesRoot: optional('WORKSPACES_ROOT') ?? path.join(dataRoot, 'workspaces'),
+            configRoot: path.join(dataRoot, 'config'),
             dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
         },
         stt: {
