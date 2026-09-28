@@ -17,6 +17,11 @@ export interface Config {
         workspacesRoot: string
         dbFile: string
     }
+    stt: {
+        groqApiKey: string | undefined
+        model: string
+        language: string | undefined
+    }
     maxConcurrentSessions: number
     logLevel: 'debug' | 'info' | 'warn' | 'error'
 }
@@ -73,6 +78,11 @@ export function loadConfig(): Config {
             dataRoot,
             workspacesRoot: optional('WORKSPACES_ROOT') ?? path.join(dataRoot, 'workspaces'),
             dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
+        },
+        stt: {
+            groqApiKey: optional('GROQ_API_KEY'),
+            model: optional('STT_MODEL') ?? 'whisper-large-v3-turbo',
+            language: optional('STT_LANGUAGE')
         },
         maxConcurrentSessions: number('MAX_CONCURRENT_SESSIONS', 2),
         logLevel: (optional('LOG_LEVEL') as Config['logLevel']) ?? 'info'

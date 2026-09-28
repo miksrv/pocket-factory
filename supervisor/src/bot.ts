@@ -3,6 +3,7 @@ import { Bot, type Context } from 'grammy'
 import type { Config } from './config.js'
 import { createLogger } from './logger.js'
 import type { Task } from './store/index.js'
+import { transcribe } from './stt/groq.js'
 import type { TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 
@@ -111,6 +112,39 @@ export function createBot(config: Config, tasks: TaskService): Bot {
 
     bot.on('message:text', async (ctx) => {
         await submit(ctx, ctx.message.text)
+    })
+
+    // Voice notes and audio files: download from Telegram, transcribe, then
+    // treat the text exactly like a typed message. The transcript is echoed
+    // back so the owner can see what the agent is going to act on.
+    bot.on(['message:voice', 'message:audio'], async (ctx) => {
+        if (!config.stt.groqApiKey) {
+            await ctx.reply('Voice messages are disabled: set GROQ_API_KEY in .env to enable transcription.')
+            return
+        }
+        const media = ctx.message.voice ?? ctx.message.audio!
+        try {
+            const file = await ctx.api.getFile(media.file_id)
+            if (!file.file_path) throw new Error('Telegram returned no file path')
+            const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`)
+            if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
+            const audio = Buffer.from(await response.arrayBuffer())
+            const text = await transcribe(audio, file.file_path.split('/').pop() ?? 'voice.ogg', {
+                apiKey: config.stt.groqApiKey,
+                model: config.stt.model,
+                language: config.stt.language
+            })
+            if (!text) {
+                await ctx.reply('Could not make out any words in that recording.')
+                return
+            }
+            await ctx.reply(`🎤 ${text}`)
+            await submit(ctx, text)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            log.error(`voice handling failed: ${message}`)
+            await ctx.reply(`❌ Voice message failed: ${message}`)
+        }
     })
 
     // Deliver results of Telegram-originated tasks back to their chat.
