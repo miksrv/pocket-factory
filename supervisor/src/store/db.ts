@@ -72,6 +72,28 @@ const MIGRATIONS: string[] = [
         seven_day_resets_at TEXT
     );
     CREATE INDEX rate_limits_ts ON rate_limits(ts);
+    `,
+    // v3: audit log — events know which agent produced them and tasks know
+    // their project.
+    `
+    ALTER TABLE task_events ADD COLUMN agent TEXT;               -- sub-agent type, null = orchestrator
+    ALTER TABLE task_events ADD COLUMN parent_tool_use_id TEXT;  -- Agent tool call that spawned the sub-agent
+    ALTER TABLE tasks ADD COLUMN project TEXT;                   -- workspace the task worked in
+    CREATE INDEX task_events_ts ON task_events(ts);
+    CREATE INDEX task_events_type ON task_events(type, ts);
+    `,
+    // v4: conversations can be removed from the Chat list. Their tasks, events
+    // and transcripts stay: the audit log is the record.
+    `
+    ALTER TABLE conversations ADD COLUMN deleted_at TEXT;
+    `,
+    // v5: small facts the CLI tells us at runtime (its tool list, …).
+    `
+    CREATE TABLE meta (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,               -- JSON
+        updated_at TEXT NOT NULL
+    );
     `
 ]
 

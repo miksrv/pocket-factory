@@ -29,7 +29,6 @@ export class NotFound extends Error {}
 
 export class Catalog {
     /** Called after every save/remove with a commit-style message. */
-    onChange?: (message: string) => void
 
     constructor(
         private readonly claudeDir: string,
@@ -97,7 +96,6 @@ export class Catalog {
         if (kind === 'projects' && !frontmatter.slug) frontmatter.slug = name
         const existed = fs.existsSync(file)
         fs.writeFileSync(file, serializeMarkdown({ frontmatter, body: doc.body }))
-        this.onChange?.(`ui: ${existed ? 'update' : 'add'} ${kind}/${name}`)
         return this.get(kind, name)
     }
 
@@ -106,7 +104,6 @@ export class Catalog {
         if (!fs.existsSync(file)) throw new NotFound(`${kind}/${name} not found`)
         if (kind === 'skills') fs.rmSync(path.dirname(file), { recursive: true, force: true })
         else fs.rmSync(file)
-        this.onChange?.(`ui: remove ${kind}/${name}`)
     }
 
     exists(kind: Kind, name: string): boolean {

@@ -6,7 +6,7 @@ import type { RateLimits } from '../claude/runner.js'
 export type Channel = 'telegram' | 'web'
 export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type TaskEventType = 'text' | 'tool_use' | 'tool_result' | 'status' | 'error'
+export type TaskEventType = 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits'
 
 export interface Conversation {
     id: string
@@ -17,6 +17,8 @@ export interface Conversation {
     project: string | null
     created_at: string
     updated_at: string
+    /** Set when the owner removed it from the Chat list; tasks and events remain. */
+    deleted_at: string | null
 }
 
 export interface Task {
@@ -38,6 +40,8 @@ export interface Task {
     cache_creation_tokens: number
     /** Share of the 5-hour window consumed by this task (0..1), null when the CLI reported nothing. */
     window_5h_delta: number | null
+    /** Workspace the task worked in: set from the conversation or detected from tool calls. */
+    project: string | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -49,7 +53,65 @@ export interface TaskEvent {
     ts: string
     type: TaskEventType
     payload: unknown
+    /** Sub-agent type that produced the event; null for the orchestrator. */
+    agent: string | null
+    parent_tool_use_id: string | null
 }
+
+export interface EventOrigin {
+    agent: string | null
+    parent_tool_use_id: string | null
+}
+
+/** A task event with the task columns the audit log shows next to it. */
+export interface AuditEvent extends TaskEvent {
+    project: string | null
+    conversation_id: string
+    session_id: string | null
+}
+
+export interface AuditQuery {
+    /** ISO timestamp; only events at or after it. */
+    since?: string
+    /** Event types to include; `files` is the tool_use subset that changes files. */
+    kind?: 'all' | 'llm' | 'tools' | 'files' | 'agents' | 'sessions' | 'limits'
+    /** Sub-agent type, or `orchestrator` for events without one. */
+    agent?: string
+    project?: string
+    /** Only events with an id below this one (paging backwards). */
+    before?: number
+    limit?: number
+}
+
+export interface AuditStats {
+    events: number
+    agents: number
+    tasks: number
+    tokens: number
+}
+
+/** Per-agent activity; `agent` null is the orchestrator. */
+export interface AgentActivity {
+    agent: string | null
+    /** Sub-agent starts (tasks started, for the orchestrator) in the period. */
+    runs: number
+    /** Sub-agents started in still-running tasks and not finished (running tasks, for the orchestrator). */
+    running: number
+    /** Tokens of the model calls the agent made in the period. */
+    tokens: number
+    last_active: string | null
+}
+
+const FILE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+const AUDIT_KINDS: Record<Exclude<AuditQuery['kind'], undefined | 'all' | 'files'>, TaskEventType[]> = {
+    llm: ['llm'],
+    tools: ['tool_use'],
+    agents: ['agent'],
+    sessions: ['status', 'error'],
+    limits: ['limits']
+}
+/** Everything the audit log lists; assistant prose and tool output stay in the task view. */
+const AUDIT_TYPES: TaskEventType[] = ['llm', 'tool_use', 'agent', 'status', 'error', 'limits']
 
 export interface TaskStats {
     queued: number
@@ -110,7 +172,7 @@ export class Store {
     findConversation(channel: Channel, externalId: string): Conversation | undefined {
         return this.db
             .prepare(
-                'SELECT * FROM conversations WHERE channel = ? AND external_id = ? ORDER BY created_at DESC LIMIT 1'
+                'SELECT * FROM conversations WHERE channel = ? AND external_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1'
             )
             .get(channel, externalId) as Conversation | undefined
     }
@@ -129,7 +191,8 @@ export class Store {
             session_id: null,
             project: null,
             created_at: ts,
-            updated_at: ts
+            updated_at: ts,
+            deleted_at: null
         }
         this.db
             .prepare(
@@ -151,15 +214,21 @@ export class Store {
         this.db.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`).run(...(values as never[]))
     }
 
-    listConversations(limit = 50): Conversation[] {
+    /** Newest first; `before` is the `updated_at` of the last row already shown. */
+    listConversations(limit = 50, before?: string): Conversation[] {
         return this.db
-            .prepare('SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?')
-            .all(limit) as unknown as Conversation[]
+            .prepare(`SELECT * FROM conversations WHERE deleted_at IS NULL ${before ? 'AND updated_at < ?' : ''} ORDER BY updated_at DESC LIMIT ?`)
+            .all(...((before ? [before, limit] : [limit]) as never[])) as unknown as Conversation[]
+    }
+
+    /** Soft delete: hide from the Chat list; the next Telegram message starts a fresh conversation. */
+    deleteConversation(id: string): void {
+        this.db.prepare('UPDATE conversations SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), id)
     }
 
     // ---- tasks ------------------------------------------------------------
 
-    createTask(conversationId: string, source: TaskSource, prompt: string): Task {
+    createTask(conversationId: string, source: TaskSource, prompt: string, project: string | null = null): Task {
         const task: Task = {
             id: randomUUID(),
             conversation_id: conversationId,
@@ -177,16 +246,17 @@ export class Store {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             window_5h_delta: null,
+            project,
             created_at: now(),
             started_at: null,
             finished_at: null
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?)`
             )
-            .run(task.id, conversationId, source, prompt, task.created_at)
+            .run(task.id, conversationId, source, prompt, project, task.created_at)
         return task
     }
 
@@ -208,7 +278,8 @@ export class Store {
         return this.getTask(id)!
     }
 
-    listTasks(options: { status?: TaskStatus; conversationId?: string; limit?: number } = {}): Task[] {
+    /** Newest first; `before` is the `created_at` of the last row already shown (keyset paging). */
+    listTasks(options: { status?: TaskStatus; conversationId?: string; project?: string; before?: string; limit?: number } = {}): Task[] {
         const where: string[] = []
         const values: unknown[] = []
         if (options.status) {
@@ -219,6 +290,14 @@ export class Store {
             where.push('conversation_id = ?')
             values.push(options.conversationId)
         }
+        if (options.project) {
+            where.push('project = ?')
+            values.push(options.project)
+        }
+        if (options.before) {
+            where.push('created_at < ?')
+            values.push(options.before)
+        }
         values.push(options.limit ?? 100)
         return this.db
             .prepare(
@@ -226,6 +305,12 @@ export class Store {
                  ORDER BY created_at DESC LIMIT ?`
             )
             .all(...(values as never[])) as unknown as Task[]
+    }
+
+    /** Distinct projects tasks have worked in, for filter menus. */
+    taskProjects(): string[] {
+        const rows = this.db.prepare('SELECT DISTINCT project FROM tasks WHERE project IS NOT NULL ORDER BY project').all() as Array<{ project: string }>
+        return rows.map((row) => row.project)
     }
 
     /** Oldest queued tasks first, one per conversation that has nothing running. */
@@ -283,6 +368,19 @@ export class Store {
         }
     }
 
+    // ---- meta -------------------------------------------------------------
+
+    getMeta<T>(key: string): T | undefined {
+        const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
+        return row ? (JSON.parse(row.value) as T) : undefined
+    }
+
+    setMeta(key: string, value: unknown): void {
+        this.db
+            .prepare('INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at')
+            .run(key, JSON.stringify(value), now())
+    }
+
     // ---- rate limits ------------------------------------------------------
 
     latestRateLimits(): RateLimitSnapshot | undefined {
@@ -330,18 +428,159 @@ export class Store {
 
     // ---- task events ------------------------------------------------------
 
-    addEvent(taskId: string, type: TaskEventType, payload: unknown): TaskEvent {
+    addEvent(taskId: string, type: TaskEventType, payload: unknown, origin: EventOrigin = { agent: null, parent_tool_use_id: null }): TaskEvent {
         const ts = now()
         const result = this.db
-            .prepare('INSERT INTO task_events (task_id, ts, type, payload) VALUES (?, ?, ?, ?)')
-            .run(taskId, ts, type, JSON.stringify(payload))
-        return { id: Number(result.lastInsertRowid), task_id: taskId, ts, type, payload }
+            .prepare('INSERT INTO task_events (task_id, ts, type, payload, agent, parent_tool_use_id) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(taskId, ts, type, JSON.stringify(payload), origin.agent, origin.parent_tool_use_id)
+        return { id: Number(result.lastInsertRowid), task_id: taskId, ts, type, payload, ...origin }
+    }
+
+    // ---- audit log --------------------------------------------------------
+
+    private auditWhere(query: AuditQuery): { sql: string; values: unknown[] } {
+        const where: string[] = []
+        const values: unknown[] = []
+        const kind = query.kind ?? 'all'
+        if (kind === 'files') {
+            where.push(
+                `(e.type = 'tool_use' AND (json_extract(e.payload, '$.name') IN (${FILE_TOOLS.map(() => '?').join(', ')})
+                   OR (json_extract(e.payload, '$.name') = 'Bash' AND json_extract(e.payload, '$.input.command') GLOB '*git [cp][ou][ms][mh]*')))`
+            )
+            values.push(...FILE_TOOLS)
+        } else {
+            const types = kind === 'all' ? AUDIT_TYPES : AUDIT_KINDS[kind]
+            where.push(`e.type IN (${types.map(() => '?').join(', ')})`)
+            values.push(...types)
+        }
+        if (query.since) {
+            where.push('e.ts >= ?')
+            values.push(query.since)
+        }
+        if (query.agent === 'orchestrator') where.push('e.agent IS NULL')
+        else if (query.agent) {
+            where.push('e.agent = ?')
+            values.push(query.agent)
+        }
+        if (query.project) {
+            where.push('t.project = ?')
+            values.push(query.project)
+        }
+        if (query.before) {
+            where.push('e.id < ?')
+            values.push(query.before)
+        }
+        return { sql: `WHERE ${where.join(' AND ')}`, values }
+    }
+
+    /** Newest first. */
+    listAudit(query: AuditQuery = {}): AuditEvent[] {
+        const { sql, values } = this.auditWhere(query)
+        const rows = this.db
+            .prepare(
+                `SELECT e.*, t.project, t.conversation_id, t.session_id
+                 FROM task_events e JOIN tasks t ON t.id = e.task_id
+                 ${sql} ORDER BY e.id DESC LIMIT ?`
+            )
+            .all(...(values as never[]), query.limit ?? 200) as unknown as Array<Omit<AuditEvent, 'payload'> & { payload: string }>
+        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+    }
+
+    auditStats(query: Pick<AuditQuery, 'since' | 'project' | 'agent'>): AuditStats {
+        const { sql, values } = this.auditWhere({ ...query, kind: 'all' })
+        const row = this.db
+            .prepare(
+                `SELECT COUNT(*) AS events,
+                        COUNT(DISTINCT COALESCE(e.agent, '')) AS agents,
+                        COUNT(DISTINCT e.task_id) AS tasks,
+                        SUM(CASE WHEN e.type = 'llm' THEN json_extract(e.payload, '$.tokens') ELSE 0 END) AS tokens
+                 FROM task_events e JOIN tasks t ON t.id = e.task_id ${sql}`
+            )
+            .get(...(values as never[])) as Record<keyof AuditStats, number | null>
+        return { events: row.events ?? 0, agents: row.agents ?? 0, tasks: row.tasks ?? 0, tokens: row.tokens ?? 0 }
+    }
+
+    agentActivity(since?: string): AgentActivity[] {
+        const cond = since ? 'AND e.ts >= ?' : ''
+        const args = since ? [since] : []
+        const rows = new Map<string | null, AgentActivity>()
+        const row = (agent: string | null) => {
+            let r = rows.get(agent)
+            if (!r) {
+                r = { agent, runs: 0, running: 0, tokens: 0, last_active: null }
+                rows.set(agent, r)
+            }
+            return r
+        }
+        const starts = this.db
+            .prepare(
+                `SELECT e.agent, COUNT(*) AS runs, MAX(e.ts) AS last FROM task_events e
+                 WHERE e.type = 'agent' AND json_extract(e.payload, '$.phase') = 'started' ${cond} GROUP BY e.agent`
+            )
+            .all(...(args as never[])) as Array<{ agent: string; runs: number; last: string }>
+        for (const s of starts) Object.assign(row(s.agent), { runs: s.runs, last_active: s.last })
+        const tokens = this.db
+            .prepare(
+                `SELECT e.agent, SUM(json_extract(e.payload, '$.tokens')) AS tokens, MAX(e.ts) AS last FROM task_events e
+                 WHERE e.type = 'llm' ${cond} GROUP BY e.agent`
+            )
+            .all(...(args as never[])) as Array<{ agent: string | null; tokens: number; last: string }>
+        for (const t of tokens) {
+            const r = row(t.agent)
+            r.tokens = t.tokens ?? 0
+            if (!r.last_active || t.last > r.last_active) r.last_active = t.last
+        }
+        // A sub-agent is running when its start in a running task has no completion yet.
+        const running = this.db
+            .prepare(
+                `SELECT e.agent, COUNT(*) AS n FROM task_events e JOIN tasks t ON t.id = e.task_id
+                 WHERE t.status = 'running' AND e.type = 'agent' AND json_extract(e.payload, '$.phase') = 'started'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_events f WHERE f.task_id = e.task_id AND f.type = 'agent'
+                         AND json_extract(f.payload, '$.phase') != 'started'
+                         AND json_extract(f.payload, '$.toolUseId') = json_extract(e.payload, '$.toolUseId')
+                   )
+                 GROUP BY e.agent`
+            )
+            .all() as Array<{ agent: string; n: number }>
+        for (const r of running) row(r.agent).running = r.n
+        // The orchestrator: tasks are its runs.
+        const orchestrator = row(null)
+        const tasks = this.db
+            .prepare(`SELECT COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks WHERE started_at IS NOT NULL ${since ? 'AND started_at >= ?' : ''}`)
+            .get(...(args as never[])) as { runs: number; last: string | null; running: number | null }
+        orchestrator.runs = tasks.runs
+        orchestrator.running = tasks.running ?? 0
+        if (tasks.last && (!orchestrator.last_active || tasks.last > orchestrator.last_active)) orchestrator.last_active = tasks.last
+        return [...rows.values()].sort((a, b) => (a.agent === null ? -1 : b.agent === null ? 1 : b.runs - a.runs))
+    }
+
+    /** Distinct agents and projects seen since a timestamp, for filter menus. */
+    auditFacets(since?: string): { agents: string[]; projects: string[] } {
+        const cond = since ? 'WHERE e.ts >= ?' : ''
+        const args = since ? [since] : []
+        const agents = this.db
+            .prepare(`SELECT DISTINCT e.agent FROM task_events e ${cond} ${cond ? 'AND' : 'WHERE'} e.agent IS NOT NULL ORDER BY e.agent`)
+            .all(...(args as never[])) as Array<{ agent: string }>
+        const projects = this.db
+            .prepare(`SELECT DISTINCT t.project FROM task_events e JOIN tasks t ON t.id = e.task_id ${cond} ${cond ? 'AND' : 'WHERE'} t.project IS NOT NULL ORDER BY t.project`)
+            .all(...(args as never[])) as Array<{ project: string }>
+        return { agents: agents.map((r) => r.agent), projects: projects.map((r) => r.project) }
     }
 
     listEvents(taskId: string, afterId = 0): TaskEvent[] {
         const rows = this.db
             .prepare('SELECT * FROM task_events WHERE task_id = ? AND id > ? ORDER BY id ASC')
             .all(taskId, afterId) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
+        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+    }
+
+    /** All events of the given tasks, oldest first. */
+    listEventsOfTasks(taskIds: string[]): TaskEvent[] {
+        if (taskIds.length === 0) return []
+        const rows = this.db
+            .prepare(`SELECT * FROM task_events WHERE task_id IN (${taskIds.map(() => '?').join(', ')}) ORDER BY id ASC`)
+            .all(...(taskIds as never[])) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
         return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
     }
 

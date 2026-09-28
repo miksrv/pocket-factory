@@ -5,12 +5,47 @@ import { createLogger } from '../logger.js'
 
 const log = createLogger('claude')
 
+/**
+ * Who produced an event: `agent` is the sub-agent type (`Explore`,
+ * `developer`, …) or null for the orchestrator itself; `parentToolUseId` is
+ * the Agent tool call that spawned the sub-agent.
+ */
+export interface EventOrigin {
+    agent: string | null
+    parentToolUseId: string | null
+}
+
 /** Events surfaced from the stream while a task runs. */
-export type RunnerEvent =
-    | { type: 'text'; text: string }
-    | { type: 'tool_use'; name: string; input: unknown; id: string }
-    | { type: 'tool_result'; toolUseId: string; text: string; isError: boolean }
-    | { type: 'rate_limit'; limits: RateLimits }
+export type RunnerEvent = EventOrigin &
+    (
+        | { type: 'text'; text: string }
+        | { type: 'tool_use'; name: string; input: unknown; id: string }
+        | { type: 'tool_result'; toolUseId: string; text: string; isError: boolean }
+        /** One model call (one assistant message), with its token usage. */
+        | {
+              type: 'llm'
+              model: string
+              messageId: string
+              tokens: number
+              inputTokens: number
+              outputTokens: number
+              cacheReadTokens: number
+              cacheCreationTokens: number
+          }
+        /** A sub-agent started or finished. `agent` is the sub-agent itself. */
+        | {
+              type: 'agent'
+              phase: 'started' | 'completed' | 'failed'
+              toolUseId: string
+              description: string
+              tokens?: number
+              toolUses?: number
+              durationMs?: number
+          }
+        | { type: 'rate_limit'; limits: RateLimits }
+        /** The CLI's session setup: which tools this run has. */
+        | { type: 'init'; tools: string[]; model: string }
+    )
 
 /** One rolling window of the subscription: share used (0..1) and when it resets. */
 export interface RateLimitWindow {
@@ -83,7 +118,28 @@ interface StreamEvent {
     type: string
     subtype?: string
     session_id?: string
-    message?: { content?: ContentBlock[] | string }
+    message?: {
+        id?: string
+        model?: string
+        content?: ContentBlock[] | string
+        usage?: {
+            input_tokens?: number
+            output_tokens?: number
+            cache_read_input_tokens?: number
+            cache_creation_input_tokens?: number
+        }
+    }
+    /** Set on messages that belong to a sub-agent (the Agent tool call that spawned it). */
+    parent_tool_use_id?: string | null
+    // system/init
+    tools?: Array<string | { name?: string }>
+    model?: string
+    subagent_type?: string
+    // system/task_* events
+    task_id?: string
+    tool_use_id?: string
+    description?: string
+    status?: string
     result?: string
     is_error?: boolean
     num_turns?: number
@@ -171,6 +227,10 @@ export function runClaude(options: RunOptions): RunHandle {
         let finalEvent: StreamEvent | undefined
         let sessionFromInit: string | undefined
         let rateLimits: RateLimits | null = null
+        // Sub-agents by the Agent tool call that spawned them, so that events
+        // the CLI does not label itself (task_notification) still get an agent.
+        const agentsByToolUse = new Map<string, string>()
+        const seenMessages = new Set<string>()
         const stderr: string[] = []
 
         const rl = readline.createInterface({ input: child.stdout! })
@@ -187,6 +247,37 @@ export function runClaude(options: RunOptions): RunHandle {
             if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
                 sessionFromInit = event.session_id
                 resolveSession(event.session_id)
+                const tools = (event.tools ?? []).map((t) => (typeof t === 'string' ? t : (t.name ?? ''))).filter(Boolean)
+                if (tools.length) emit({ type: 'init', agent: null, parentToolUseId: null, tools, model: event.model ?? '' })
+                return
+            }
+            if (event.type === 'system' && event.subtype === 'task_started' && event.tool_use_id && event.subagent_type) {
+                agentsByToolUse.set(event.tool_use_id, event.subagent_type)
+                emit({
+                    type: 'agent',
+                    phase: 'started',
+                    agent: event.subagent_type,
+                    parentToolUseId: event.tool_use_id,
+                    toolUseId: event.tool_use_id,
+                    description: event.description ?? ''
+                })
+                return
+            }
+            if (event.type === 'system' && event.subtype === 'task_notification' && event.tool_use_id) {
+                const agent = agentsByToolUse.get(event.tool_use_id)
+                if (!agent) return
+                const usage = (event as { usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number } }).usage
+                emit({
+                    type: 'agent',
+                    phase: event.status === 'completed' ? 'completed' : 'failed',
+                    agent,
+                    parentToolUseId: event.tool_use_id,
+                    toolUseId: event.tool_use_id,
+                    description: (event as { summary?: string }).summary ?? '',
+                    tokens: usage?.total_tokens,
+                    toolUses: usage?.tool_uses,
+                    durationMs: usage?.duration_ms
+                })
                 return
             }
             if (event.type === 'result') {
@@ -197,18 +288,45 @@ export function runClaude(options: RunOptions): RunHandle {
                 const limits = parseRateLimits(event.rate_limit_info)
                 if (limits) {
                     rateLimits = limits
-                    emit({ type: 'rate_limit', limits })
+                    emit({ type: 'rate_limit', agent: null, parentToolUseId: null, limits })
                 }
                 return
             }
             const content = event.message?.content
             if (!Array.isArray(content)) return
+            const parentToolUseId = event.parent_tool_use_id ?? null
+            const origin: EventOrigin = {
+                parentToolUseId,
+                agent: parentToolUseId ? (event.subagent_type ?? agentsByToolUse.get(parentToolUseId) ?? 'sub-agent') : null
+            }
             if (event.type === 'assistant') {
+                // The CLI emits one line per content block, all carrying the
+                // same message id and usage: count the model call once.
+                const message = event.message!
+                if (message.id && message.model && !seenMessages.has(message.id)) {
+                    seenMessages.add(message.id)
+                    const u = message.usage ?? {}
+                    const inputTokens = u.input_tokens ?? 0
+                    const outputTokens = u.output_tokens ?? 0
+                    const cacheReadTokens = u.cache_read_input_tokens ?? 0
+                    const cacheCreationTokens = u.cache_creation_input_tokens ?? 0
+                    emit({
+                        type: 'llm',
+                        ...origin,
+                        model: message.model,
+                        messageId: message.id,
+                        tokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+                        inputTokens,
+                        outputTokens,
+                        cacheReadTokens,
+                        cacheCreationTokens
+                    })
+                }
                 for (const block of content) {
                     if (block.type === 'text' && block.text) {
-                        emit({ type: 'text', text: block.text })
+                        emit({ type: 'text', ...origin, text: block.text })
                     } else if (block.type === 'tool_use' && block.name) {
-                        emit({ type: 'tool_use', name: block.name, input: block.input, id: block.id ?? '' })
+                        emit({ type: 'tool_use', ...origin, name: block.name, input: block.input, id: block.id ?? '' })
                     }
                 }
             } else if (event.type === 'user') {
@@ -216,6 +334,7 @@ export function runClaude(options: RunOptions): RunHandle {
                     if (block.type === 'tool_result') {
                         emit({
                             type: 'tool_result',
+                            ...origin,
                             toolUseId: block.tool_use_id ?? '',
                             text: blockText(block.content).slice(0, 2000),
                             isError: block.is_error ?? false

@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import path from 'node:path'
 
 import { type RateLimits, type RunHandle, runClaude } from '../claude/runner.js'
 import type { Config } from '../config.js'
@@ -18,6 +20,22 @@ export interface TaskServiceEvents {
 
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Which workspace a tool call touches: the first workspace directory name
+ * that appears as a path segment in the call's input (file paths, `cd x`,
+ * `x/src/...`). Names shorter than three characters are too ambiguous.
+ */
+function detectProject(input: unknown, workspaces: string[]): string | null {
+    const haystack = JSON.stringify(input ?? '')
+    for (const name of workspaces) {
+        if (name.length < 3) continue
+        if (new RegExp(`(?:^|[\\s"'/=:(])${escapeRegExp(name)}(?=[\\s"'/):]|$)`).test(haystack)) return name
+    }
+    return null
+}
+
 /**
  * The session manager: one queue for every channel, spawn-on-demand
  * `claude -p` per task, at most one running task per conversation and
@@ -29,6 +47,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private ticking = false
     private stopped = false
     private probe: Promise<RateLimitSnapshot | null> | null = null
+    private workspaceCache: { names: string[]; at: number } = { names: [], at: 0 }
 
     constructor(
         private readonly store: Store,
@@ -60,7 +79,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     submit(conversationId: string, source: TaskSource, prompt: string): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
-        const task = this.store.createTask(conversationId, source, prompt)
+        const task = this.store.createTask(conversationId, source, prompt, conversation.project)
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: prompt.slice(0, 80) })
         }
@@ -99,6 +118,24 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         await Promise.allSettled([...this.running.values()].map((handle) => handle.result))
     }
 
+    /** Directory names under the workspaces root, refreshed at most once a minute. */
+    private workspaces(): string[] {
+        if (Date.now() - this.workspaceCache.at > 60_000) {
+            let names: string[] = []
+            try {
+                names = fs
+                    .readdirSync(this.config.paths.workspacesRoot, { withFileTypes: true })
+                    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+                    .map((entry) => entry.name)
+                    .sort((a, b) => b.length - a.length) // longest first: "foo-api" before "foo"
+            } catch {
+                // no workspaces dir yet
+            }
+            this.workspaceCache = { names, at: Date.now() }
+        }
+        return this.workspaceCache.names
+    }
+
     // ---- subscription limits ---------------------------------------------
 
     /** Latest rate-limit reading, from whichever task or probe reported it last. */
@@ -125,7 +162,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             maxTurns: 1,
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
-            env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir }
+            env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
+            onEvent: (event) => {
+                if (event.type === 'init') this.rememberTools(event.tools)
+            }
         })
         this.probe = handle.result
             .then((result) => (result.rateLimits ? this.recordLimits(result.rateLimits, null) : null))
@@ -137,6 +177,18 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 this.probe = null
             })
         return this.probe
+    }
+
+    /** Tool names the CLI announced at session start; the agent editor offers them as choices. */
+    tools(): string[] {
+        return this.store.getMeta<string[]>('claude.tools') ?? []
+    }
+
+    private rememberTools(tools: string[]): void {
+        const known = this.tools()
+        if (known.length === tools.length && known.every((t, i) => t === tools[i])) return
+        this.store.setMeta('claude.tools', tools)
+        log.info(`claude tools: ${tools.length} (${tools.slice(0, 6).join(', ')}…)`)
     }
 
     private recordLimits(limits: RateLimits, taskId: string | null): RateLimitSnapshot {
@@ -170,9 +222,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running' }))
 
         // The 5-hour reading before this task's first API call: the previous
-        // snapshot if it is from the same window, else the task's own first one.
-        const previous = this.store.latestRateLimits()?.five_hour ?? null
+        // snapshot if it is recent and from the same window (other Claude Code
+        // clients on the account move the window too), else the task's own
+        // first one, which misses the first call but nothing foreign.
+        const latest = this.store.latestRateLimits()
+        const previous = latest && Date.now() - new Date(latest.ts).getTime() < 5 * 60_000 ? latest.five_hour : null
         let first: RateLimits['five_hour'] = null
+        let project = task.project
 
         const handle = runClaude({
             prompt: task.prompt,
@@ -184,13 +240,26 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             permissionMode: this.config.claude.permissionMode,
             env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
             onEvent: (event) => {
+                const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
+                if (event.type === 'init') {
+                    this.rememberTools(event.tools)
+                    return
+                }
                 if (event.type === 'rate_limit') {
                     first ??= event.limits.five_hour
                     this.recordLimits(event.limits, task.id)
+                    this.emit('event', this.store.addEvent(task.id, 'limits', event.limits, origin))
                     return
                 }
-                const { type, ...payload } = event
-                this.emit('event', this.store.addEvent(task.id, type, payload))
+                const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
+                if (event.type === 'tool_use' && !project) {
+                    project = detectProject(event.input, this.workspaces())
+                    if (project) {
+                        this.store.updateTask(task.id, { project })
+                        if (!conversation.project) this.store.updateConversation(conversation.id, { project })
+                    }
+                }
+                this.emit('event', this.store.addEvent(task.id, type, payload, origin))
             }
         })
         this.running.set(task.id, handle)

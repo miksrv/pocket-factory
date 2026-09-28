@@ -3,7 +3,6 @@ import path from 'node:path'
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
 import { Catalog } from './files/catalog.js'
-import { History } from './files/history.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
 import { Transcripts } from './sessions/transcripts.js'
@@ -30,20 +29,8 @@ async function main(): Promise<void> {
     log.info(`claude: model=${config.claude.model ?? 'default'} permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns} budget=$${config.claude.maxBudgetUsd}`)
 
     const store = new Store(openDatabase(config.paths.dbFile))
-    const history = new History(config.claude.configDir, config.paths.configRoot)
-    await history.init()
-
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)
-    catalog.onChange = (message) => void history.commitAll(message)
-
     const tasks = new TaskService(store, config)
-    // Whatever the agent changed in its own agents/skills/projects during a
-    // task becomes a commit, so self-edits can be audited and reverted.
-    tasks.on('task', (task) => {
-        if (task.status === 'done' || task.status === 'failed') {
-            void history.commitAll(`agent: ${task.prompt.slice(0, 60).replace(/\s+/g, ' ')} (task ${task.id.slice(0, 8)})`)
-        }
-    })
     // Telegram is optional: without a token the factory is web-only (also
     // handy for a second dev instance next to the container, which would
     // otherwise fight over long polling).
@@ -55,7 +42,6 @@ async function main(): Promise<void> {
         store,
         tasks,
         catalog,
-        history,
         transcripts: new Transcripts(config.claude.configDir),
         presets: new Presets(config.presetsDir)
     })
