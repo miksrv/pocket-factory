@@ -56,7 +56,8 @@ export class Transcripts {
                 if (stat.size === 0) continue
                 out.push({
                     session_id: match[1],
-                    workspace: workspace.name.replace(/^-/, '/').replace(/-/g, '/'),
+                    // Claude Code encodes the cwd by replacing '/' with '-'; it is lossy, so keep it as is.
+                    workspace: workspace.name,
                     path: file,
                     started_at: stat.birthtime.toISOString(),
                     updated_at: stat.mtime.toISOString(),

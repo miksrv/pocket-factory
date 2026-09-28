@@ -11,6 +11,7 @@ import { BadName, NotFound } from '../files/catalog.js'
 import type { AppContext, Env } from './context.js'
 import { conversationRoutes } from './routes/conversations.js'
 import { fileRoutes } from './routes/files.js'
+import { historyRoutes } from './routes/history.js'
 import { presetRoutes } from './routes/presets.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { statusRoutes } from './routes/status.js'
@@ -46,6 +47,7 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/conversations', conversationRoutes())
     api.route('/sessions', sessionRoutes())
     api.route('/presets', presetRoutes())
+    api.route('/history', historyRoutes())
     api.route('/', fileRoutes())
     api.notFound((c) => c.json({ error: 'not found' }, 404))
     hono.route('/api', api)

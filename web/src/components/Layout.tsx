@@ -12,6 +12,7 @@ const NAV: Array<{ to: string; label: string; icon: string; section?: string }> 
     { to: '/skills', label: 'Skills', icon: '⚡' },
     { to: '/projects', label: 'Projects', icon: '▤' },
     { to: '/presets', label: 'Presets', icon: '⊞' },
+    { to: '/history', label: 'History', icon: '↺' },
     { to: '/settings', label: 'Settings', icon: '⚒', section: 'System' }
 ]
 

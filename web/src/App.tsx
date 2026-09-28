@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { AgentsPage } from './pages/Agents'
 import { ChatPage } from './pages/Chat'
+import { HistoryPage } from './pages/History'
 import { OverviewPage } from './pages/Overview'
 import { PresetsPage } from './pages/Presets'
 import { ProjectsPage } from './pages/Projects'
@@ -29,6 +30,7 @@ export function App() {
                 <Route path="projects" element={<ProjectsPage />} />
                 <Route path="projects/:name" element={<ProjectsPage />} />
                 <Route path="presets" element={<PresetsPage />} />
+                <Route path="history" element={<HistoryPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

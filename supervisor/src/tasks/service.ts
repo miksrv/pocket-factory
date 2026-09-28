@@ -32,6 +32,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         super()
         const orphaned = store.failOrphanedTasks()
         if (orphaned > 0) log.warn(`${orphaned} task(s) were running when the supervisor died; marked failed`)
+        // Tasks queued before a restart are still queued; pick them up.
+        queueMicrotask(() => this.tick())
     }
 
     // ---- conversations ----------------------------------------------------
