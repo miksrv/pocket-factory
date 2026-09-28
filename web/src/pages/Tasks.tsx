@@ -2,35 +2,56 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { EventFeed } from '../components/EventFeed'
+import { LoadMore } from '../components/LoadMore'
 import { Empty, ErrorBox, PageHead, StatusBadge } from '../components/ui'
 import { api, fmt, taskTokens, type TaskStatus } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { usePaged } from '../lib/usePaged'
 
 const FILTERS: Array<TaskStatus | 'all'> = ['all', 'running', 'queued', 'done', 'failed', 'cancelled']
+const PAGE = 50
 
 export function TasksPage() {
     const [filter, setFilter] = useState<TaskStatus | 'all'>('all')
-    const tasks = useAsync(() => api.tasks(filter === 'all' ? undefined : filter), [filter], 5_000)
+    const [project, setProject] = useState('')
+    const projects = useAsync(() => api.taskProjects(), [], 30_000)
+    const tasks = usePaged((before) => api.tasks({ status: filter === 'all' ? undefined : filter, project: project || undefined, before, limit: PAGE }), {
+        key: (t) => t.id,
+        cursor: (t) => t.created_at,
+        pageSize: PAGE,
+        deps: [filter, project],
+        pollMs: 5_000
+    })
 
     return (
         <div className="page">
-            <PageHead title="Tasks" sub="Every task from every channel — Telegram, web, later cron and webhooks.">
-                <select value={filter} onChange={(e) => setFilter(e.target.value as TaskStatus | 'all')} style={{ width: 160 }}>
-                    {FILTERS.map((f) => (
-                        <option key={f} value={f}>
-                            {f}
-                        </option>
-                    ))}
-                </select>
-            </PageHead>
+            <PageHead title="Tasks" sub="Every task from every channel — Telegram, web, later cron and webhooks." />
             <ErrorBox error={tasks.error} />
             <div className="card pad0">
-                {tasks.data?.length ? (
+                <div className="audit-bar">
+                    <div className="tabs">
+                        {FILTERS.map((f) => (
+                            <button key={f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
+                                {f}
+                            </button>
+                        ))}
+                    </div>
+                    <select value={project} onChange={(e) => setProject(e.target.value)} style={{ width: 180 }}>
+                        <option value="">all projects</option>
+                        {projects.data?.map((p) => (
+                            <option key={p} value={p}>
+                                {p}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                {tasks.items.length ? (
                     <table>
                         <thead>
                             <tr>
                                 <th>Status</th>
                                 <th>Task</th>
+                                <th>Project</th>
                                 <th>Source</th>
                                 <th>Turns</th>
                                 <th>Tokens</th>
@@ -41,7 +62,7 @@ export function TasksPage() {
                             </tr>
                         </thead>
                         <tbody>
-                            {tasks.data.map((task) => (
+                            {tasks.items.map((task) => (
                                 <tr key={task.id}>
                                     <td>
                                         <StatusBadge status={task.status} />
@@ -50,6 +71,7 @@ export function TasksPage() {
                                         <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
                                         {task.error && task.status === 'failed' && <div className="error small">{task.error.slice(0, 160)}</div>}
                                     </td>
+                                    <td>{task.project ? <span className="badge plain">{task.project}</span> : <span className="dim">—</span>}</td>
                                     <td>
                                         <span className="badge plain">{task.source}</span>
                                     </td>
@@ -72,6 +94,7 @@ export function TasksPage() {
                 ) : (
                     <Empty>{tasks.loading ? 'Loading…' : 'No tasks.'}</Empty>
                 )}
+                <LoadMore hasMore={tasks.hasMore} loading={tasks.loading} onMore={tasks.loadMore} shown={tasks.items.length} noun="tasks" />
             </div>
         </div>
     )
@@ -92,6 +115,7 @@ export function TaskPage() {
                 sub={
                     <span className="row wrap">
                         <StatusBadge status={t.status} />
+                        {t.project && <span className="badge plain">{t.project}</span>}
                         <span className="dim">{t.source}</span>
                         <span className="dim">{fmt.when(t.created_at)}</span>
                         {t.conversation && <Link to={`/chat/${t.conversation_id}`}>open conversation</Link>}
