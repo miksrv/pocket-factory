@@ -11,30 +11,76 @@ const log = createLogger('bot')
 
 const TELEGRAM_MAX_LENGTH = 4000
 
-/** Split long replies so every chunk fits Telegram's message limit. */
-function chunk(text: string): string[] {
+/**
+ * Split long replies so every chunk fits Telegram's message limit. Cuts fall
+ * on line breaks, and a fenced code block that straddles a cut is closed at
+ * the end of one chunk and reopened at the start of the next, so the fence
+ * markers stay balanced in every message.
+ */
+export function chunk(text: string): string[] {
     const parts: string[] = []
     let rest = text
+    let openFence: string | null = null
     while (rest.length > TELEGRAM_MAX_LENGTH) {
-        let cut = rest.lastIndexOf('\n', TELEGRAM_MAX_LENGTH)
-        if (cut < TELEGRAM_MAX_LENGTH / 2) cut = TELEGRAM_MAX_LENGTH
-        parts.push(rest.slice(0, cut))
+        const budget = TELEGRAM_MAX_LENGTH - (openFence === null ? 0 : 4)
+        let cut = rest.lastIndexOf('\n', budget)
+        if (cut < budget / 2) cut = budget
+        let head = rest.slice(0, cut)
         rest = rest.slice(cut).trimStart()
+        // Which fence is open at the end of this chunk?
+        for (const line of head.split('\n')) {
+            const fence = line.match(/^\s*```(\w*)\s*$/)
+            if (fence) openFence = openFence === null ? fence[1] : null
+        }
+        if (openFence !== null) {
+            head += '\n```'
+            rest = `\`\`\`${openFence}\n${rest}`
+        }
+        parts.push(head)
     }
     parts.push(rest)
     return parts
 }
 
-async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<void> {
-    for (const part of chunk(text || '(empty reply)')) {
+/** Telegram's "Too Many Requests: retry after N" as the seconds to wait, else null. */
+function retryAfter(error: unknown): number | null {
+    const parameters = (error as { parameters?: { retry_after?: number } } | undefined)?.parameters
+    return typeof parameters?.retry_after === 'number' ? parameters.retry_after : null
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function sendOne(bot: Bot, chatId: number, part: string): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
         try {
             await bot.api.sendMessage(chatId, markdownToTelegramHtml(part), { parse_mode: 'HTML' })
+            return
         } catch (error) {
+            const wait = retryAfter(error)
+            if (wait !== null && attempt < 3) {
+                await sleep((wait + 1) * 1000)
+                continue
+            }
             // Telegram rejected the markup — better a plain message than none.
             log.warn(`html reply rejected, falling back to plain text: ${error instanceof Error ? error.message : error}`)
             await bot.api.sendMessage(chatId, part)
+            return
         }
     }
+}
+
+/** Every chunk is attempted: one failed chunk is logged, the rest still arrive. */
+async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<void> {
+    let failed = 0
+    for (const part of chunk(text || '(empty reply)')) {
+        try {
+            await sendOne(bot, chatId, part)
+        } catch (error) {
+            failed++
+            log.error(`chunk to chat ${chatId} failed: ${error instanceof Error ? error.message : error}`)
+        }
+    }
+    if (failed) throw new Error(`${failed} chunk(s) not delivered`)
 }
 
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
@@ -142,20 +188,31 @@ export function createBot(config: Config, tasks: TaskService): Bot {
         )
     })
 
+    // grammY handles one update at a time, so anything slow runs detached:
+    // a /stop sent during a probe or a transcription must not wait for it.
+    const detached = (label: string, work: () => Promise<void>) => {
+        void work().catch((error) => log.error(`${label} failed`, error))
+    }
+
     // `/usage` shows the last reading; `/usage refresh` spends one Haiku turn
     // to get a fresh one.
     bot.command('usage', async (ctx) => {
         if (/^refresh\b/i.test(ctx.match)) {
             await ctx.reply('Asking the CLI…')
-            const snapshot = await tasks.probeLimits()
-            await ctx.reply(snapshot ? limitsReport(snapshot).join('\n') : '❌ The CLI reported no rate-limit status; see the supervisor log.')
+            detached('usage refresh', async () => {
+                const snapshot = await tasks.probeLimits()
+                await ctx.reply(snapshot ? limitsReport(snapshot).join('\n') : '❌ The CLI reported no rate-limit status; see the supervisor log.')
+            })
             return
         }
         await ctx.reply([...limitsReport(tasks.limits()), '', '/usage refresh — ask the CLI now (one Haiku turn)'].join('\n'))
     })
 
-    // Anything else that looks like a command is a typo, not a task for the agent.
-    bot.on('message:entities:bot_command', async (ctx) => {
+    // A message that *starts* with an unknown command is a typo, not a task
+    // for the agent. A slash word further in ("fix the /login page") is text.
+    bot.on('message:entities:bot_command', async (ctx, next) => {
+        const leading = ctx.message.entities?.some((e) => e.type === 'bot_command' && e.offset === 0)
+        if (!leading) return next()
         await ctx.reply(`Unknown command ${ctx.message.text.split(/\s/)[0]}. See /start.`)
     })
 
@@ -179,28 +236,31 @@ export function createBot(config: Config, tasks: TaskService): Bot {
             return
         }
         const media = ctx.message.voice ?? ctx.message.audio!
-        try {
-            const file = await ctx.api.getFile(media.file_id)
-            if (!file.file_path) throw new Error('Telegram returned no file path')
-            const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`)
-            if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
-            const audio = Buffer.from(await response.arrayBuffer())
-            const text = await transcribe(audio, file.file_path.split('/').pop() ?? 'voice.ogg', {
-                apiKey: config.stt.groqApiKey,
-                model: config.stt.model,
-                language: config.stt.language
-            })
-            if (!text) {
-                await ctx.reply('Could not make out any words in that recording.')
-                return
+        const apiKey = config.stt.groqApiKey
+        detached('voice message', async () => {
+            try {
+                const file = await ctx.api.getFile(media.file_id)
+                if (!file.file_path) throw new Error('Telegram returned no file path')
+                const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`)
+                if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
+                const audio = Buffer.from(await response.arrayBuffer())
+                const text = await transcribe(audio, file.file_path.split('/').pop() ?? 'voice.ogg', {
+                    apiKey,
+                    model: config.stt.model,
+                    language: config.stt.language
+                })
+                if (!text) {
+                    await ctx.reply('Could not make out any words in that recording.')
+                    return
+                }
+                await ctx.reply(`🎤 ${text}`)
+                await submit(ctx, text)
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                log.error(`voice handling failed: ${message}`)
+                await ctx.reply(`❌ Voice message failed: ${message}`)
             }
-            await ctx.reply(`🎤 ${text}`)
-            await submit(ctx, text)
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            log.error(`voice handling failed: ${message}`)
-            await ctx.reply(`❌ Voice message failed: ${message}`)
-        }
+        })
     })
 
     // Deliver results of Telegram-originated tasks back to their chat.
@@ -213,7 +273,7 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 ? task.result ?? ''
                 : task.status === 'cancelled'
                   ? '⏹ Stopped.'
-                  : `❌ ${task.error ?? 'failed'}`
+                  : `❌ ${task.error || 'failed'}`
         void sendMarkdown(bot, chatId, `${body}\n\n${footer(task, tasks.limits())}`).catch((error) =>
             log.error(`delivery to chat ${chatId} failed`, error)
         )
