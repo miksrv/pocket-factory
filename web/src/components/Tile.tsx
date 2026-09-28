@@ -1,5 +1,8 @@
+import { Icon, ICONS, type IconName } from './Icon'
+import { Sprite } from './Sprite'
+
 const COLORS = ['green', 'blue', 'amber', 'purple', 'teal'] as const
-const GLYPHS: Record<string, string> = { agents: '⚙', skills: '⚡', projects: '▤', presets: '⊞', tasks: '☰', sessions: '⧉' }
+type Color = (typeof COLORS)[number] | 'gray' | 'red'
 
 function hash(text: string): number {
     let h = 0
@@ -7,12 +10,34 @@ function hash(text: string): number {
     return h
 }
 
-/** Pastel square with a glyph; colour is stable per name. */
-export function Tile({ name, kind, small, glyph }: { name: string; kind?: string; small?: boolean; glyph?: string }) {
-    const color = COLORS[hash(name) % COLORS.length]
+/**
+ * The pastel square every list, card head and grid uses. The symbol inside
+ * is the concept's icon (`kind` or `icon`), a pixel mascot for agents, or a
+ * text glyph; the square keeps its size whatever is inside. Colour is
+ * stable per name unless given.
+ */
+export function Tile({
+    name = '',
+    kind,
+    icon,
+    glyph,
+    color,
+    small,
+    large
+}: {
+    name?: string
+    kind?: string
+    icon?: IconName
+    glyph?: string
+    color?: Color
+    small?: boolean
+    large?: boolean
+}) {
+    const tone = color ?? COLORS[hash(name || kind || icon || '') % COLORS.length]
+    const iconName = icon ?? (kind && kind in ICONS ? (kind as IconName) : undefined)
     return (
-        <span className={`tile ${color}${small ? ' sm' : ''}`} aria-hidden>
-            {glyph ?? GLYPHS[kind ?? ''] ?? name.slice(0, 1).toUpperCase()}
+        <span className={`tile ${tone}${small ? ' sm' : ''}${large ? ' lg' : ''}`} aria-hidden>
+            {glyph ? glyph : kind === 'agents' && !icon ? <Sprite name={name} /> : iconName ? <Icon name={iconName} /> : name.slice(0, 1).toUpperCase()}
         </span>
     )
 }

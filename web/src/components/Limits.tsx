@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { api, fmt, type RateLimits } from '../lib/api'
+import { Tile } from './Tile'
 
 /** Colour band for a window: calm until half, then amber, then red. */
 function tone(used: number): string {
@@ -61,7 +62,7 @@ export function LimitsCard({ limits, onChange }: { limits: RateLimits | null | u
         <div className="card pad0">
             <div className="card-head">
                 <span className="row">
-                    <span className={`tile sm ${limits ? tone(Math.max(limits.five_hour?.used ?? 0, limits.seven_day?.used ?? 0)) : 'gray'}`}>◔</span>
+                    <Tile icon="limits" color={limits ? (tone(Math.max(limits.five_hour?.used ?? 0, limits.seven_day?.used ?? 0)) as 'green' | 'amber' | 'red') : 'gray'} small />
                     Subscription limits
                 </span>
                 <button className="sm" onClick={probe} disabled={busy} title="Runs one Haiku turn to read the current limits">

@@ -3,19 +3,20 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { Icon, type IconName } from './Icon'
 import { LimitsInline } from './Limits'
 
-const NAV: Array<{ to: string; label: string; icon: string; section?: string }> = [
-    { to: '/', label: 'Overview', icon: '◎' },
-    { to: '/tasks', label: 'Tasks', icon: '☰' },
-    { to: '/chat', label: 'Chat', icon: '✎' },
-    { to: '/sessions', label: 'Sessions', icon: '⧉' },
-    { to: '/agents', label: 'Agents', icon: '⚙', section: 'Factory' },
-    { to: '/skills', label: 'Skills', icon: '⚡' },
-    { to: '/projects', label: 'Projects', icon: '▤' },
-    { to: '/presets', label: 'Presets', icon: '⊞' },
-    { to: '/history', label: 'History', icon: '↺' },
-    { to: '/settings', label: 'Settings', icon: '⚒', section: 'System' }
+const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }> = [
+    { to: '/', label: 'Overview', icon: 'overview' },
+    { to: '/tasks', label: 'Tasks', icon: 'tasks' },
+    { to: '/chat', label: 'Chat', icon: 'chat' },
+    { to: '/sessions', label: 'Sessions', icon: 'sessions' },
+    { to: '/audit', label: 'Audit log', icon: 'audit' },
+    { to: '/agents', label: 'Agents', icon: 'agents', section: 'Factory' },
+    { to: '/skills', label: 'Skills', icon: 'skills' },
+    { to: '/projects', label: 'Projects', icon: 'projects' },
+    { to: '/presets', label: 'Presets', icon: 'presets' },
+    { to: '/settings', label: 'Settings', icon: 'settings', section: 'System' }
 ]
 
 const STORAGE_KEY = 'pf.sidebar.collapsed'
@@ -91,7 +92,9 @@ export function Layout() {
                         <div key={item.to}>
                             {item.section && <div className="section">{collapsed ? '·' : item.section}</div>}
                             <NavLink to={item.to} end={item.to === '/'} title={item.label}>
-                                <span className="icon">{item.icon}</span>
+                                <span className="icon">
+                                    <Icon name={item.icon} />
+                                </span>
                                 <span className="grow label">{item.label}</span>
                                 {item.to === '/tasks' && running > 0 && <span className="badge running count">{running}</span>}
                             </NavLink>
