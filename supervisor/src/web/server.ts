@@ -22,6 +22,15 @@ import { usageRoutes } from './routes/usage.js'
 
 const log = createLogger('web')
 
+/** The host name from a Host header, without the port; IPv6 literals keep their brackets stripped. */
+function hostnameOf(header: string | undefined): string {
+    const raw = (header ?? '').trim().toLowerCase()
+    if (raw.startsWith('[')) return raw.slice(1, raw.indexOf(']'))
+    return raw.split(':')[0]
+}
+
+const isLocal = (host: string) => host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')
+
 export function createApp(app: AppContext): Hono<Env> {
     const hono = new Hono<Env>()
     const { web } = app.config
@@ -35,6 +44,29 @@ export function createApp(app: AppContext): Hono<Env> {
     // auth is the floor; put Tailscale / Caddy / Cloudflare Access in front.
     if (web.authPassword) {
         hono.use('*', basicAuth({ username: web.authUser, password: web.authPassword }))
+    } else {
+        // Without a password the API trusts whoever reaches the port, so it
+        // must at least refuse requests a page on another site could make:
+        // a DNS-rebinding page arrives with a foreign Host, a cross-site form
+        // or fetch with a foreign Origin. Local names are always allowed;
+        // WEB_ALLOWED_HOSTS adds a LAN or tunnel name.
+        hono.use('/api/*', async (c, next) => {
+            const host = hostnameOf(c.req.header('host'))
+            if (!isLocal(host) && !web.allowedHosts.has(host)) {
+                return c.json({ error: `host "${host}" not allowed; set WEB_ALLOWED_HOSTS or WEB_AUTH_PASSWORD` }, 403)
+            }
+            const origin = c.req.header('origin')
+            if (origin && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+                let originHost = ''
+                try {
+                    originHost = new URL(origin).hostname.toLowerCase()
+                } catch {
+                    // malformed: treated as foreign
+                }
+                if (originHost !== host) return c.json({ error: 'cross-site request refused' }, 403)
+            }
+            await next()
+        })
     }
 
     hono.onError((error, c) => {

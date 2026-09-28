@@ -2,16 +2,22 @@ import path from 'node:path'
 
 import { Hono } from 'hono'
 
+import type { Task } from '../../store/index.js'
 import type { Env } from '../context.js'
+import { cursorOf } from './cursor.js'
 
 export function sessionRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
-    /** Most recently updated first; `before` = updated_at of the last row for the next page. */
+    /** Most recently updated first; `before` + `before_id` = the last row shown, for the next page. */
     app.get('/', async (c) => {
         const { transcripts, store, config } = c.get('app')
-        const list = transcripts.list(Math.min(Number(c.req.query('limit')) || 50, 200), c.req.query('before') || undefined)
-        const tasksBySession = new Map(store.listTasks({ limit: 1000 }).map((task) => [task.session_id, task]))
+        const list = transcripts.list(Math.min(Number(c.req.query('limit')) || 50, 200), cursorOf(c))
+        // Resumed tasks share a session: keep the newest one (the list is newest first).
+        const tasksBySession = new Map<string, Task>()
+        for (const task of store.listTasks({ limit: 1000 })) {
+            if (task.session_id && !tasksBySession.has(task.session_id)) tasksBySession.set(task.session_id, task)
+        }
         const root = path.resolve(config.paths.workspacesRoot)
         const withHeads = await Promise.all(
             list.map(async (entry) => {

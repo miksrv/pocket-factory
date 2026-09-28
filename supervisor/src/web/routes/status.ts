@@ -18,6 +18,21 @@ async function version(cmd: string, args: string[]): Promise<string | null> {
     }
 }
 
+/**
+ * The CLI versions change only with the image, yet /status is polled by the
+ * sidebar and the Overview every few seconds: spawn the three processes once
+ * per TTL, not per request.
+ */
+const VERSIONS_TTL_MS = 10 * 60_000
+let versions: { at: number; value: Promise<[string | null, string | null, string | null]> } | null = null
+
+function toolVersions(): Promise<[string | null, string | null, string | null]> {
+    if (!versions || Date.now() - versions.at > VERSIONS_TTL_MS) {
+        versions = { at: Date.now(), value: Promise.all([version('claude', ['--version']), version('gh', ['--version']), version('git', ['--version'])]) }
+    }
+    return versions.value
+}
+
 export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
@@ -32,11 +47,7 @@ export function statusRoutes(): Hono<Env> {
                       git: fs.existsSync(path.join(config.paths.workspacesRoot, entry.name, '.git'))
                   }))
             : []
-        const [claude, gh, git] = await Promise.all([
-            version('claude', ['--version']),
-            version('gh', ['--version']),
-            version('git', ['--version'])
-        ])
+        const [claude, gh, git] = await toolVersions()
         return c.json({
             stats: store.stats(),
             running: tasks.runningTaskIds(),

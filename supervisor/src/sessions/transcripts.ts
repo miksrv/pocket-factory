@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 
+import type { Cursor } from '../store/index.js'
+
 /**
  * Claude Code writes every session to <CLAUDE_CONFIG_DIR>/projects/<cwd-slug>/<session>.jsonl.
  * We never duplicate that; we index and render it.
@@ -52,7 +54,8 @@ export class Transcripts {
         return path.join(this.claudeDir, 'projects')
     }
 
-    list(limit = 100, before?: string): TranscriptSummary[] {
+    /** Newest first; `before` is the last row shown (mtime plus session id, since live sessions share and move mtimes). */
+    list(limit = 100, before?: Cursor): TranscriptSummary[] {
         if (!fs.existsSync(this.root)) return []
         const out: TranscriptSummary[] = []
         for (const workspace of fs.readdirSync(this.root, { withFileTypes: true })) {
@@ -77,8 +80,10 @@ export class Transcripts {
                 })
             }
         }
-        out.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
-        return (before ? out.filter((entry) => entry.updated_at < before) : out).slice(0, limit)
+        out.sort((a, b) => (a.updated_at === b.updated_at ? (a.session_id < b.session_id ? 1 : -1) : a.updated_at < b.updated_at ? 1 : -1))
+        const after = (entry: TranscriptSummary) =>
+            !before || entry.updated_at < before.ts || (entry.updated_at === before.ts && before.id !== undefined && entry.session_id < before.id)
+        return out.filter(after).slice(0, limit)
     }
 
     find(sessionId: string): TranscriptSummary | undefined {

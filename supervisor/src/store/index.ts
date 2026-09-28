@@ -164,6 +164,23 @@ const sameWindow = (a: RateLimits['five_hour'], b: RateLimits['five_hour']) =>
 const now = () => new Date().toISOString()
 
 /** Thin typed wrapper over the SQLite tables. All methods are synchronous. */
+/**
+ * Keyset cursor: the last row a client has, by its sort timestamp and id.
+ * `id` breaks ties between rows created in the same millisecond; without it a
+ * page boundary would skip or repeat them.
+ */
+export interface Cursor {
+    ts: string
+    id?: string
+}
+
+/** WHERE fragment for "strictly before this cursor" on a `<column> DESC, id DESC` order. */
+function keyset(column: string, before: Cursor | undefined, prefix = 'AND '): { sql: string; values: unknown[] } {
+    if (!before) return { sql: '', values: [] }
+    if (!before.id) return { sql: `${prefix}${column} < ?`, values: [before.ts] }
+    return { sql: `${prefix}(${column} < ? OR (${column} = ? AND id < ?))`, values: [before.ts, before.ts, before.id] }
+}
+
 export class Store {
     constructor(private readonly db: DatabaseSync) {}
 
@@ -214,11 +231,15 @@ export class Store {
         this.db.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`).run(...(values as never[]))
     }
 
-    /** Newest first; `before` is the `updated_at` of the last row already shown. */
-    listConversations(limit = 50, before?: string): Conversation[] {
+    /**
+     * Newest activity first. The cursor is the last row shown: its `updated_at`
+     * plus its id, so rows sharing a timestamp are neither skipped nor repeated.
+     */
+    listConversations(limit = 50, before?: Cursor): Conversation[] {
+        const { sql, values } = keyset('updated_at', before)
         return this.db
-            .prepare(`SELECT * FROM conversations WHERE deleted_at IS NULL ${before ? 'AND updated_at < ?' : ''} ORDER BY updated_at DESC LIMIT ?`)
-            .all(...((before ? [before, limit] : [limit]) as never[])) as unknown as Conversation[]
+            .prepare(`SELECT * FROM conversations WHERE deleted_at IS NULL ${sql} ORDER BY updated_at DESC, id DESC LIMIT ?`)
+            .all(...(values as never[]), limit) as unknown as Conversation[]
     }
 
     /** Soft delete: hide from the Chat list; the next Telegram message starts a fresh conversation. */
@@ -278,8 +299,8 @@ export class Store {
         return this.getTask(id)!
     }
 
-    /** Newest first; `before` is the `created_at` of the last row already shown (keyset paging). */
-    listTasks(options: { status?: TaskStatus; conversationId?: string; project?: string; before?: string; limit?: number } = {}): Task[] {
+    /** Newest first; `before` is the last row already shown (`created_at` + id, keyset paging). */
+    listTasks(options: { status?: TaskStatus; conversationId?: string; project?: string; before?: Cursor; limit?: number } = {}): Task[] {
         const where: string[] = []
         const values: unknown[] = []
         if (options.status) {
@@ -295,14 +316,15 @@ export class Store {
             values.push(options.project)
         }
         if (options.before) {
-            where.push('created_at < ?')
-            values.push(options.before)
+            const cursor = keyset('created_at', options.before, '')
+            where.push(cursor.sql)
+            values.push(...cursor.values)
         }
         values.push(options.limit ?? 100)
         return this.db
             .prepare(
                 `SELECT * FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-                 ORDER BY created_at DESC LIMIT ?`
+                 ORDER BY created_at DESC, id DESC LIMIT ?`
             )
             .all(...(values as never[])) as unknown as Task[]
     }
@@ -330,15 +352,14 @@ export class Store {
             .all() as unknown as Task[]
     }
 
-    /** Tasks left in `running` by a previous supervisor process are lost. */
-    failOrphanedTasks(): number {
-        const result = this.db
+    /** Tasks left in `running` by a previous supervisor process are lost; returns them as failed. */
+    failOrphanedTasks(): Task[] {
+        return this.db
             .prepare(
                 `UPDATE tasks SET status = 'failed', error = 'supervisor restarted while the task was running',
-                 finished_at = ? WHERE status = 'running'`
+                 finished_at = ? WHERE status = 'running' RETURNING *`
             )
-            .run(now())
-        return Number(result.changes)
+            .all(now()) as unknown as Task[]
     }
 
     stats(): TaskStats {
@@ -486,8 +507,9 @@ export class Store {
         return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
     }
 
-    auditStats(query: Pick<AuditQuery, 'since' | 'project' | 'agent'>): AuditStats {
-        const { sql, values } = this.auditWhere({ ...query, kind: 'all' })
+    /** Totals for the same filter as the list (kind included), so "N of total" and paging agree. */
+    auditStats(query: Pick<AuditQuery, 'since' | 'project' | 'agent' | 'kind'>): AuditStats {
+        const { sql, values } = this.auditWhere({ ...query, before: undefined })
         const row = this.db
             .prepare(
                 `SELECT COUNT(*) AS events,
@@ -582,6 +604,13 @@ export class Store {
             .prepare(`SELECT * FROM task_events WHERE task_id IN (${taskIds.map(() => '?').join(', ')}) ORDER BY id ASC`)
             .all(...(taskIds as never[])) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
         return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+    }
+
+    /** Tasks of a conversation that are not finished, for a client that (re)connects to the live feed. */
+    openTasks(conversationId: string): Task[] {
+        return this.db
+            .prepare(`SELECT * FROM tasks WHERE conversation_id = ? AND status IN ('queued', 'running') ORDER BY created_at ASC`)
+            .all(conversationId) as unknown as Task[]
     }
 
     listConversationEvents(conversationId: string, afterId = 0): TaskEvent[] {

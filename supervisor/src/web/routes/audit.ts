@@ -28,9 +28,13 @@ export function auditRoutes(): Hono<Env> {
             before: Number(c.req.query('before')) || undefined,
             limit: Math.min(Number(c.req.query('limit')) || 200, 1000)
         }
+        // One row past the page says whether there is another page; the count
+        // alone cannot, since events keep arriving while the client scrolls.
+        const page = store.listAudit({ ...query, limit: query.limit! + 1 })
         return c.json({
-            events: store.listAudit(query),
-            stats: store.auditStats({ since, agent: query.agent, project: query.project }),
+            events: page.slice(0, query.limit),
+            has_more: page.length > query.limit!,
+            stats: store.auditStats({ since, kind: query.kind, agent: query.agent, project: query.project }),
             facets: store.auditFacets(since)
         })
     })
