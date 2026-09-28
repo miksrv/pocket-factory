@@ -19,6 +19,8 @@ export interface Task {
     cache_creation_tokens: number
     /** Share of the 5-hour window this task consumed (0..1), null when unknown. */
     window_5h_delta: number | null
+    /** Workspace the task worked in, detected from its tool calls or set on the conversation. */
+    project: string | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -28,8 +30,43 @@ export interface TaskEvent {
     id: number
     task_id: string
     ts: string
-    type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error'
+    type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits'
     payload: Record<string, unknown>
+    /** Sub-agent type that produced the event; null for the orchestrator. */
+    agent: string | null
+    parent_tool_use_id: string | null
+}
+
+export interface AuditEvent extends TaskEvent {
+    project: string | null
+    conversation_id: string
+    session_id: string | null
+}
+
+export type AuditPeriod = '1h' | '24h' | '7d' | '30d' | 'all'
+export type AuditKind = 'all' | 'llm' | 'tools' | 'files' | 'agents' | 'sessions' | 'limits'
+
+export interface AgentActivity {
+    /** null = the orchestrator. */
+    agent: string | null
+    runs: number
+    running: number
+    tokens: number
+    last_active: string | null
+}
+
+export interface ModelInfo {
+    id: string
+    display_name: string
+    created_at: string
+    max_input_tokens: number | null
+    max_tokens: number | null
+}
+
+export interface Audit {
+    events: AuditEvent[]
+    stats: { events: number; agents: number; tasks: number; tokens: number }
+    facets: { agents: string[]; projects: string[] }
 }
 
 export interface Conversation {
@@ -41,12 +78,17 @@ export interface Conversation {
     project: string | null
     created_at: string
     updated_at: string
+    deleted_at: string | null
 }
 
-export interface ConversationDetail extends Conversation {
+export interface ConversationHistory {
+    /** Oldest first. */
     tasks: Task[]
     events: TaskEvent[]
+    has_more: boolean
 }
+
+export interface ConversationDetail extends Conversation, ConversationHistory {}
 
 export interface Stats {
     queued: number
@@ -115,7 +157,11 @@ export interface CatalogEntry {
 
 export interface SessionSummary {
     session_id: string
+    /** Claude Code's slug for the cwd ('/' → '-'); lossy, shown only as a fallback. */
     workspace: string
+    cwd: string | null
+    /** cwd relative to the workspaces root: a repo name, '.' for the root, or an absolute path outside it. */
+    project: string | null
     path: string
     started_at: string
     updated_at: string
@@ -141,7 +187,10 @@ export interface TranscriptEntry {
 }
 
 export interface SessionDetail extends SessionSummary {
+    /** A window of the transcript; `offset` is the index of its first entry. */
     entries: TranscriptEntry[]
+    offset: number
+    stats: { total: number; messages: number; tokens_in: number; tokens_out: number }
 }
 
 export interface Preset {
@@ -176,15 +225,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
     status: () => request<Status>('/status'),
-    tasks: (status?: TaskStatus) => request<Task[]>(`/tasks${status ? `?status=${status}` : ''}`),
+    /** Newest first, one page; pass `before` = created_at of the last task for the next. */
+    tasks: (q: { status?: TaskStatus; project?: string; before?: string; limit?: number } = {}) => {
+        const params = new URLSearchParams()
+        if (q.status) params.set('status', q.status)
+        if (q.project) params.set('project', q.project)
+        if (q.before) params.set('before', q.before)
+        if (q.limit) params.set('limit', String(q.limit))
+        const qs = params.toString()
+        return request<Task[]>(`/tasks${qs ? `?${qs}` : ''}`)
+    },
+    taskProjects: () => request<string[]>('/tasks/projects'),
     task: (id: string) => request<Task & { events: TaskEvent[]; conversation: Conversation }>(`/tasks/${id}`),
     stopTask: (id: string) => request<{ stopped: boolean }>(`/tasks/${id}/stop`, { method: 'POST' }),
+
+    audit: (q: { period: AuditPeriod; kind: AuditKind; agent?: string; project?: string; before?: number }) => {
+        const params = new URLSearchParams({ period: q.period, kind: q.kind })
+        if (q.agent) params.set('agent', q.agent)
+        if (q.project) params.set('project', q.project)
+        if (q.before) params.set('before', String(q.before))
+        return request<Audit>(`/audit?${params}`)
+    },
+
+    agentActivity: (period: AuditPeriod = '7d') => request<AgentActivity[]>(`/activity/agents?period=${period}`),
+
+    /** Models the subscription can use; empty when the token cannot list them. */
+    models: () => request<ModelInfo[]>('/models'),
+    /** Tool names the CLI offers (from its last session start), or a built-in default list. */
+    tools: () => request<{ common: string[]; reported: string[]; source: 'cli' | 'default' }>('/tools'),
 
     usage: () => request<Usage>('/usage'),
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 
-    conversations: () => request<Conversation[]>('/conversations'),
+    conversations: (before?: string, limit = 50) => request<Conversation[]>(`/conversations?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
     conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
+    deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
+    conversationHistory: (id: string, before: string) => request<ConversationHistory>(`/conversations/${id}/history?before=${encodeURIComponent(before)}`),
     createConversation: (title?: string) =>
         request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
     sendMessage: (id: string, prompt: string) =>
@@ -196,8 +272,9 @@ export const api = {
         request<CatalogEntry>(`/${kind}/${name}`, { method: 'PUT', body: JSON.stringify(doc) }),
     remove: (kind: Kind, name: string) => request<void>(`/${kind}/${name}`, { method: 'DELETE' }),
 
-    sessions: () => request<SessionSummary[]>('/sessions'),
-    session: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+    sessions: (before?: string, limit = 50) => request<SessionSummary[]>(`/sessions?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
+    /** A window of `limit` entries ending before index `before` (default: the end of the transcript). */
+    session: (id: string, before?: number, limit = 200) => request<SessionDetail>(`/sessions/${id}?limit=${limit}${before ? `&before=${before}` : ''}`),
 
     presets: () => request<Preset[]>('/presets'),
     installPreset: (name: string, overwrite = false) =>
