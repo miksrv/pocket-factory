@@ -47,7 +47,7 @@ export function HistoryPage() {
                             <tbody>
                                 {log.data.map((entry) => (
                                     <tr key={entry.repo + entry.hash} className={`click${open?.hash === entry.hash ? ' selected' : ''}`} onClick={() => show(entry)}>
-                                        <td>
+                                        <td className="col-main">
                                             <div>{entry.message}</div>
                                             <div className="dim small mono">
                                                 {entry.repo} · {entry.hash.slice(0, 7)}

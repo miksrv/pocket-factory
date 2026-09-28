@@ -29,7 +29,7 @@ export function SessionsPage() {
                                     <td className="mono">
                                         <Link to={`/sessions/${s.session_id}`}>{s.session_id.slice(0, 8)}</Link>
                                     </td>
-                                    <td>
+                                    <td className="col-main">
                                         {s.first_prompt ?? <span className="dim">—</span>}
                                         {s.task_id && (
                                             <span className="dim small">

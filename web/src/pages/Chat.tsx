@@ -17,7 +17,7 @@ export function ChatPage() {
     }
 
     return (
-        <div className="chat">
+        <div className={`chat${id ? ' has-thread' : ''}`}>
             <div className="side">
                 <div className="card-head" style={{ padding: '12px 14px' }}>
                     <span>Conversations</span>
@@ -123,10 +123,15 @@ function Thread({ id, onSent }: { id: string; onSent: () => void }) {
     return (
         <div className="thread">
             <div className="thread-head">
-                <div>
+                <div className="row">
+                    <Link to="/chat" className="btn mobile-only" style={{ textDecoration: 'none' }}>
+                        ‹
+                    </Link>
+                    <div>
                     <strong>{conversation?.title ?? '…'}</strong>
                     <div className="dim small">
                         {conversation?.channel} · session {conversation?.session_id ? <Link to={`/sessions/${conversation.session_id}`}>{conversation.session_id.slice(0, 8)}</Link> : 'none yet'}
+                    </div>
                     </div>
                 </div>
                 {active && (

@@ -97,7 +97,7 @@ export function ProjectsPage() {
                             </div>
                             {hosts.length === 0 && <div className="dim small">No hosts.</div>}
                             {hosts.map((h, i) => (
-                                <div key={i} className="row top" style={{ marginBottom: 8 }}>
+                                <div key={i} className="row top hosts-row" style={{ marginBottom: 8 }}>
                                     <input style={{ width: 140 }} placeholder="production" value={h.name ?? ''} onChange={(e) => setHost(i, { name: e.target.value })} />
                                     <input className="mono" style={{ width: 220 }} placeholder="deploy@203.0.113.10" value={h.ssh ?? ''} onChange={(e) => setHost(i, { ssh: e.target.value })} />
                                     <input className="mono" style={{ width: 200 }} placeholder="/srv/app" value={h.path ?? ''} onChange={(e) => setHost(i, { path: e.target.value })} />

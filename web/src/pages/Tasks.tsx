@@ -45,7 +45,7 @@ export function TasksPage() {
                                     <td>
                                         <StatusBadge status={task.status} />
                                     </td>
-                                    <td>
+                                    <td className="col-main">
                                         <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
                                         {task.error && task.status === 'failed' && <div className="error small">{task.error.slice(0, 160)}</div>}
                                     </td>

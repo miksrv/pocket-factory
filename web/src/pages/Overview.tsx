@@ -61,7 +61,7 @@ export function OverviewPage() {
                                     <td style={{ width: 110 }}>
                                         <StatusBadge status={task.status} />
                                     </td>
-                                    <td>
+                                    <td className="col-main">
                                         <Link to={`/tasks/${task.id}`} style={{ color: 'var(--text)' }}>
                                             {task.prompt.slice(0, 110)}
                                         </Link>
