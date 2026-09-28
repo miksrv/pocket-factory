@@ -1,0 +1,5 @@
+{
+    "title": "Bug tracker fixer",
+    "description": "Take a defect ticket from your tracker (Trac, Jira, ClickUp, GitHub Issues), reproduce it, find the root cause, fix it on a branch and open a PR that references the ticket.",
+    "tags": ["bugfix", "tracker", "pipeline"]
+}
