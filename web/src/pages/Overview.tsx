@@ -1,13 +1,15 @@
 import { Link } from 'react-router-dom'
 
+import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
+import { Tile } from '../components/Tile'
 import { PageHead, StatusBadge } from '../components/ui'
-import { api, fmt, taskTokens } from '../lib/api'
+import { api, fmt, type Task, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 export function OverviewPage() {
     const status = useAsync(() => api.status(), [], 5_000)
-    const tasks = useAsync(() => api.tasks(), [], 5_000)
+    const tasks = useAsync(() => api.tasks({ limit: 8 }), [], 5_000)
     const agents = useAsync(() => api.list('agents'), [])
     const skills = useAsync(() => api.list('skills'), [])
     const projects = useAsync(() => api.list('projects'), [])
@@ -25,7 +27,7 @@ export function OverviewPage() {
             <div className="card pad0">
                 <div className="card-head">
                     <span className="row">
-                        <span className="tile sm gray">◎</span>
+                        <Tile icon="control" color="gray" small />
                         Control plane
                     </span>
                     <span className={`live${d ? (d.claude.logged_in ? '' : ' warn') : ' off'}`}>{d ? (d.claude.logged_in ? 'Live' : 'Not logged in') : 'Offline'}</span>
@@ -55,40 +57,14 @@ export function OverviewPage() {
             <h2>Subscription</h2>
             <LimitsCard limits={d?.limits} onChange={(limits) => d && status.setData({ ...d, limits })} />
 
-            <h2>Recent tasks</h2>
-            <div className="card pad0">
-                {tasks.data?.length ? (
-                    <table>
-                        <tbody>
-                            {tasks.data.slice(0, 8).map((task) => (
-                                <tr key={task.id}>
-                                    <td style={{ width: 110 }}>
-                                        <StatusBadge status={task.status} />
-                                    </td>
-                                    <td className="col-main">
-                                        <Link to={`/tasks/${task.id}`} style={{ color: 'var(--text)' }}>
-                                            {task.prompt.slice(0, 110)}
-                                        </Link>
-                                    </td>
-                                    <td style={{ width: 90 }}>
-                                        <span className="badge plain">{task.source}</span>
-                                    </td>
-                                    <td className="dim nowrap" style={{ width: 150, textAlign: 'right' }}>
-                                        {task.num_turns} turns · {fmt.tokens(taskTokens(task))}
-                                    </td>
-                                    <td className="dim nowrap" style={{ width: 100, textAlign: 'right' }}>
-                                        {fmt.ago(task.created_at)}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                ) : (
-                    <div className="empty">No tasks yet. Send one from Telegram or start a chat.</div>
-                )}
-                <div className="card-foot">
-                    <Link to="/tasks">All tasks →</Link>
-                    <span>{tasks.data?.length ?? 0} total</span>
+            <div className="overview-grid">
+                <div>
+                    <h2>Team agents</h2>
+                    <AgentsPanel />
+                </div>
+                <div>
+                    <h2>Recent tasks</h2>
+                    <RecentTasks tasks={tasks.data} doneToday={s?.done_today} />
                 </div>
             </div>
 
@@ -100,6 +76,46 @@ export function OverviewPage() {
                 <Check ok={Boolean(d?.telegram.enabled)} label="Telegram" detail={d?.telegram.enabled ? `bot enabled · ${d.telegram.allowed_user_ids.length} allowed user(s)` : 'TELEGRAM_BOT_TOKEN missing — web only'} warn />
                 <Check ok={Boolean(d?.stt.enabled)} label="Voice input" detail={d?.stt.enabled ? d.stt.model : 'GROQ_API_KEY missing — text only'} warn />
                 <Check ok={(d?.workspaces.length ?? 0) > 0} label="Workspaces" detail={`${d?.workspaces.length ?? 0} repositories in ${d?.paths.workspaces ?? '…'}`} />
+            </div>
+        </div>
+    )
+}
+
+function RecentTasks({ tasks, doneToday }: { tasks: Task[] | undefined; doneToday: number | undefined }) {
+    return (
+        <div className="card pad0">
+            {tasks?.length ? (
+                <table>
+                    <tbody>
+                        {tasks.map((task) => (
+                            <tr key={task.id}>
+                                <td style={{ width: 110 }}>
+                                    <StatusBadge status={task.status} />
+                                </td>
+                                <td className="col-main">
+                                    <Link to={`/tasks/${task.id}`} style={{ color: 'var(--text)' }}>
+                                        {task.prompt.slice(0, 110)}
+                                    </Link>
+                                </td>
+                                <td style={{ width: 90 }}>
+                                    <span className="badge plain">{task.source}</span>
+                                </td>
+                                <td className="dim nowrap" style={{ width: 150, textAlign: 'right' }}>
+                                    {task.num_turns} turns · {fmt.tokens(taskTokens(task))}
+                                </td>
+                                <td className="dim nowrap" style={{ width: 100, textAlign: 'right' }}>
+                                    {fmt.ago(task.created_at)}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            ) : (
+                <div className="empty">No tasks yet. Send one from Telegram or start a chat.</div>
+            )}
+            <div className="card-foot">
+                <Link to="/tasks">All tasks →</Link>
+                <span>{doneToday !== undefined ? `${doneToday} done today` : ''}</span>
             </div>
         </div>
     )
