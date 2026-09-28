@@ -39,7 +39,7 @@ export class History {
             {
                 name: 'claude',
                 dir: claudeDir,
-                ignore: ['*', '!.gitignore', '!CLAUDE.md', '!agents', '!agents/**', '!skills', '!skills/**', ''].join('\n')
+                ignore: ['*', '!CLAUDE.md', '!agents', '!agents/**', '!skills', '!skills/**', ''].join('\n')
             },
             { name: 'config', dir: configDir }
         ]
@@ -48,12 +48,13 @@ export class History {
     async init(): Promise<void> {
         for (const repo of this.repos) {
             fs.mkdirSync(repo.dir, { recursive: true })
-            if (repo.ignore !== undefined) {
-                const file = path.join(repo.dir, '.gitignore')
-                if (!fs.existsSync(file)) fs.writeFileSync(file, repo.ignore)
-            }
-            if (!fs.existsSync(path.join(repo.dir, '.git'))) {
-                await this.git(repo, ['init', '-q', '-b', 'main'])
+            const fresh = !fs.existsSync(path.join(repo.dir, '.git'))
+            if (fresh) await this.git(repo, ['init', '-q', '-b', 'main'])
+            // Exclusions go to .git/info/exclude, not a .gitignore: a nested
+            // .gitignore with negations would leak into the outer repository
+            // when the volume lives inside a checkout (yarn dev).
+            if (repo.ignore !== undefined) fs.writeFileSync(path.join(repo.dir, '.git', 'info', 'exclude'), repo.ignore)
+            if (fresh) {
                 await this.commit(repo, 'initial state')
                 log.info(`initialised git history in ${repo.dir}`)
             }
