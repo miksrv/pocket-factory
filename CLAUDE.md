@@ -66,14 +66,25 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   - `web/` Hono server: basic auth, `/api/*` routes, serves `web/dist`
 - `web/src/` — Vite + React SPA, no UI framework, one `styles.css`; `lib/api.ts` typed client,
   `components/Editor.tsx` shared list+form for agents/skills/projects, pages per screen.
-  Every list is keyset-paged (`lib/usePaged.ts` + `components/LoadMore.tsx` sentinel): tasks and
-  sessions by timestamp, audit by event id, chat threads and transcripts load older items on
-  demand; polling refreshes only the first page
+  `components/ui.tsx` is the shared vocabulary and the only place markup for it lives: `Button`
+  (every button and button-styled link, `variant` / `size` / `to`), `Stat`, `Tabs`,
+  `FilterSelect`, `Intro` (empty pane with one action), `Markdown`, `StopButton`, `Empty`,
+  `ErrorBox`, `PageHead`; `LoadMore` / `LoadEarlier` in `components/LoadMore.tsx`. Pages compose
+  these, never repeat their markup. Every list is keyset-paged (`lib/usePaged.ts` +
+  `LoadMore` sentinel) with a `(timestamp, id)` cursor sent as `before` + `before_id`, so equal
+  timestamps neither skip nor repeat rows; the audit log pages by event id and the server says
+  `has_more`. Polling refreshes only the first page and drops rows that left it. `lib/unsaved.ts`
+  is the one "unsaved edits" flag the editor sets and the sidebar checks
 - `templates/claude/` — seeded into `data/claude/` on **every** container start with `cp -n`: new
   files appear, edited files are never overwritten. On the host, copy by hand the same way.
 - `presets/<name>/` — `preset.json` + `agents/` `skills/` `projects/`; installed from the UI
 - `docker/entrypoint.sh` — seeds `/data`, git identity + `safe.directory '*'`, `gh auth setup-git`,
   links `/data/secrets/ssh` → `~/.ssh`
+- Without `WEB_AUTH_PASSWORD` the API answers only to localhost `Host` names plus
+  `WEB_ALLOWED_HOSTS`, and refuses mutating requests with a foreign `Origin` (DNS-rebinding /
+  CSRF guard, `web/server.ts`). `CLAUDE_TASK_TIMEOUT_MIN` bounds a task's wall-clock time (0 =
+  none); a stop sends SIGTERM to the CLI's process group and SIGKILL 10 s later. A conversation
+  whose session cannot be resumed forgets the session id and the task runs once more from scratch
 - `data/` — runtime state, gitignored, bind-mounted; `WORKSPACES_DIR` in `.env` points the container
   (and `yarn dev`) at the owner's existing repositories
 

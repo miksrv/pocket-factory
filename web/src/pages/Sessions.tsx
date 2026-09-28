@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import { LoadMore } from '../components/LoadMore'
-import { Empty, ErrorBox, PageHead } from '../components/ui'
+import { LoadEarlier, LoadMore } from '../components/LoadMore'
+import { Empty, ErrorBox, Markdown, PageHead, Stat } from '../components/ui'
 import { api, fmt, type SessionDetail, type TranscriptEntry } from '../lib/api'
-import { renderMarkdown } from '../lib/markdown'
 import { usePaged } from '../lib/usePaged'
 
 const PAGE = 50
 const WINDOW = 200
+/** A transcript untouched for this long is finished: no point polling its tail. */
+const LIVE_MS = 10 * 60_000
 
 export function SessionsPage() {
     const sessions = usePaged((before) => api.sessions(before, PAGE), {
@@ -18,49 +19,51 @@ export function SessionsPage() {
         pollMs: 15_000
     })
     return (
-        <div className="page">
+        <div className="page fill">
             <PageHead title="Sessions" sub="Claude Code transcripts on the volume — the log of record. Nothing is duplicated; this reads the JSONL files." />
             <ErrorBox error={sessions.error} />
             <div className="card pad0">
-                {sessions.items.length ? (
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Session</th>
-                                <th>First prompt</th>
-                                <th>Project</th>
-                                <th>Size</th>
-                                <th>Updated</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {sessions.items.map((s) => (
-                                <tr key={s.session_id}>
-                                    <td className="mono">
-                                        <Link to={`/sessions/${s.session_id}`}>{s.session_id.slice(0, 8)}</Link>
-                                    </td>
-                                    <td className="col-main">
-                                        {s.first_prompt ?? <span className="dim">—</span>}
-                                        {s.task_id && (
-                                            <span className="dim small">
-                                                {' '}
-                                                · <Link to={`/tasks/${s.task_id}`}>task</Link>
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td title={s.cwd ?? s.workspace}>
-                                        <Project project={s.project} fallback={s.workspace} />
-                                    </td>
-                                    <td className="dim">{fmt.bytes(s.size)}</td>
-                                    <td className="dim nowrap">{fmt.ago(s.updated_at)}</td>
+                <div className="card-scroll">
+                    {sessions.items.length ? (
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Session</th>
+                                    <th>First prompt</th>
+                                    <th>Project</th>
+                                    <th>Size</th>
+                                    <th>Updated</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                ) : (
-                    <Empty>{sessions.loading ? 'Loading…' : 'No transcripts yet.'}</Empty>
-                )}
-                <LoadMore hasMore={sessions.hasMore} loading={sessions.loading} onMore={sessions.loadMore} shown={sessions.items.length} noun="sessions" />
+                            </thead>
+                            <tbody>
+                                {sessions.items.map((s) => (
+                                    <tr key={s.session_id}>
+                                        <td className="mono">
+                                            <Link to={`/sessions/${s.session_id}`}>{s.session_id.slice(0, 8)}</Link>
+                                        </td>
+                                        <td className="col-main">
+                                            {s.first_prompt ?? <span className="dim">—</span>}
+                                            {s.task_id && (
+                                                <span className="dim small">
+                                                    {' '}
+                                                    · <Link to={`/tasks/${s.task_id}`}>task</Link>
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td title={s.cwd ?? s.workspace}>
+                                            <Project project={s.project} fallback={s.workspace} />
+                                        </td>
+                                        <td className="dim">{fmt.bytes(s.size)}</td>
+                                        <td className="dim nowrap">{fmt.ago(s.updated_at)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <Empty>{sessions.loading ? 'Loading…' : 'No transcripts yet.'}</Empty>
+                    )}
+                    <LoadMore hasMore={sessions.hasMore} loading={sessions.loading} onMore={sessions.loadMore} shown={sessions.items.length} noun="sessions" />
+                </div>
             </div>
         </div>
     )
@@ -110,11 +113,16 @@ export function SessionPage() {
 
     useEffect(() => {
         let cancelled = false
+        let timer: ReturnType<typeof setInterval> | undefined
         const tail = () =>
             api
                 .session(id, undefined, WINDOW)
                 .then((detail) => {
                     if (cancelled) return
+                    if (Date.now() - new Date(detail.updated_at).getTime() > LIVE_MS && timer) {
+                        clearInterval(timer)
+                        timer = undefined
+                    }
                     setSession(detail)
                     setError(undefined)
                     setEntries((prev) => {
@@ -127,7 +135,7 @@ export function SessionPage() {
                 })
                 .catch((e: Error) => !cancelled && setError(e.message))
         void tail()
-        const timer = setInterval(tail, 5_000)
+        timer = setInterval(tail, 5_000)
         return () => {
             cancelled = true
             clearInterval(timer)
@@ -173,19 +181,13 @@ export function SessionPage() {
             />
             <ErrorBox error={error} />
             <div className="cards" style={{ marginBottom: 16 }}>
-                <div className="card stat"><div className="value" style={{ fontSize: 18 }}>{s.stats.messages}</div><div className="label">Messages</div></div>
-                <div className="card stat"><div className="value" style={{ fontSize: 18 }}>{fmt.tokens(s.stats.tokens_in)}</div><div className="label">Input tokens (incl. cache)</div></div>
-                <div className="card stat"><div className="value" style={{ fontSize: 18 }}>{fmt.tokens(s.stats.tokens_out)}</div><div className="label">Output tokens</div></div>
-                <div className="card stat"><div className="value" style={{ fontSize: 18 }}>{fmt.when(s.updated_at)}</div><div className="label">Last activity</div></div>
+                <Stat card label="Messages" value={s.stats.messages} />
+                <Stat card label="Input tokens (incl. cache)" value={fmt.tokens(s.stats.tokens_in)} />
+                <Stat card label="Output tokens" value={fmt.tokens(s.stats.tokens_out)} />
+                <Stat card label="Last activity" value={fmt.when(s.updated_at)} />
             </div>
             <div className="card">
-                {range.start > 0 && (
-                    <div className="load-earlier">
-                        <button className="sm" onClick={loadEarlier} disabled={loadingEarlier}>
-                            {loadingEarlier ? 'Loading…' : `Load earlier entries (${range.start.toLocaleString()} before this)`}
-                        </button>
-                    </div>
-                )}
+                {range.start > 0 && <LoadEarlier loading={loadingEarlier} onMore={loadEarlier} label={`Load earlier entries (${range.start.toLocaleString()} before this)`} />}
                 {turns.map((entry, i) => {
                     const role = entry.message?.role ?? entry.type
                     const text = textOf(entry.message?.content)
@@ -198,7 +200,7 @@ export function SessionPage() {
                                 {entry.message?.model ? ` · ${entry.message.model}` : ''}
                                 {entry.timestamp ? ` · ${new Date(entry.timestamp).toLocaleTimeString()}` : ''}
                             </div>
-                            <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />
+                            <Markdown source={text} />
                         </div>
                     )
                 })}

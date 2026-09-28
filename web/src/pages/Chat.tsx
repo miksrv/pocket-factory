@@ -4,7 +4,8 @@ import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
 
 import { AssistantTurn } from '../components/AssistantTurn'
 import { Channel } from '../components/Icon'
-import { LoadMore } from '../components/LoadMore'
+import { LoadEarlier, LoadMore } from '../components/LoadMore'
+import { Button, Empty, Intro, StopButton } from '../components/ui'
 import { api, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
 import { usePaged } from '../lib/usePaged'
 
@@ -13,29 +14,37 @@ const PAGE = 50
 export function ChatPage() {
     const { id } = useParams()
     const navigate = useNavigate()
+    // Not keyed on the open thread: switching threads must not rebuild the
+    // list and drop the pages the reader scrolled to.
     const conversations = usePaged((before) => api.conversations(before, PAGE), {
         key: (c) => c.id,
         cursor: (c) => c.updated_at,
         pageSize: PAGE,
-        deps: [id],
         pollMs: 10_000
     })
+    const [error, setError] = useState<string | null>(null)
 
     const startNew = async () => {
-        const conversation = await api.createConversation()
-        navigate(`/chat/${conversation.id}`)
+        try {
+            const conversation = await api.createConversation()
+            conversations.reload()
+            navigate(`/chat/${conversation.id}`)
+        } catch (e) {
+            setError((e as Error).message)
+        }
     }
 
     return (
         <div className={`chat${id ? ' has-thread' : ''}`}>
             <div className="side">
-                <div className="card-head" style={{ padding: '12px 14px' }}>
+                <div className="card-head">
                     <span>Conversations</span>
-                    <button className="sm primary" onClick={startNew}>
+                    <Button variant="primary" size="sm" onClick={startNew}>
                         New
-                    </button>
+                    </Button>
                 </div>
                 <div className="list">
+                    {(error || conversations.error) && <div className="error small" style={{ padding: '8px 14px' }}>{error ?? conversations.error}</div>}
                     {conversations.items.map((c) => (
                         <NavLink key={c.id} to={`/chat/${c.id}`}>
                             <div className="grow">
@@ -47,7 +56,7 @@ export function ChatPage() {
                             </div>
                         </NavLink>
                     ))}
-                    {conversations.items.length === 0 && !conversations.loading && <div className="empty">No conversations yet.</div>}
+                    {conversations.items.length === 0 && !conversations.loading && <Empty>No conversations yet.</Empty>}
                     {(conversations.hasMore || conversations.items.length > PAGE) && (
                         <LoadMore hasMore={conversations.hasMore} loading={conversations.loading} onMore={conversations.loadMore} shown={conversations.items.length} noun="conversations" />
                     )}
@@ -64,26 +73,18 @@ export function ChatPage() {
                     }}
                 />
             ) : (
-                <Intro onNew={startNew} />
+                <div className="thread">
+                    <Intro text="Talk to Claude Code exactly as from Telegram — same rules, same projects, same session continuity." action="Start a conversation" onAction={startNew} />
+                </div>
             )}
         </div>
     )
 }
 
-function Intro({ onNew }: { onNew: () => void }) {
-    return (
-        <div className="thread intro">
-            <div className="empty">
-                <p>Talk to Claude Code exactly as from Telegram — same rules, same projects, same session continuity.</p>
-                <button className="primary" onClick={onNew}>
-                    Start a conversation
-                </button>
-            </div>
-        </div>
-    )
-}
-
 const NEAR_BOTTOM = 80
+
+/** Order of a task's life, so a stale row can never replace a newer one. */
+const rank = (status: Task['status']) => (status === 'queued' ? 0 : status === 'running' ? 1 : 2)
 
 function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onDeleted: () => void }) {
     const [conversation, setConversation] = useState<Conversation | null>(null)
@@ -99,27 +100,50 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
     const composer = useRef<HTMLTextAreaElement>(null)
     const lastEvent = useRef(0)
     const keepScroll = useRef<number | null>(null)
+    const tasksRef = useRef(tasks)
+    tasksRef.current = tasks
+
+    // A task row is replaced only by a newer state of itself: the POST
+    // response ("queued") may arrive after the stream already said "running".
+    const mergeTask = (task: Task) =>
+        setTasks((prev) => {
+            const known = prev.get(task.id)
+            if (known && rank(known.status) > rank(task.status)) return prev
+            return new Map(prev).set(task.id, task)
+        })
 
     useEffect(() => {
+        let cancelled = false
         let stop = () => {}
         api.conversation(id)
             .then((detail) => {
+                if (cancelled) return // unmounted before the load finished: never open a stream nobody closes
                 setConversation(detail)
                 setTasks(new Map(detail.tasks.map((t) => [t.id, t])))
                 setEvents(detail.events)
                 setHasEarlier(detail.has_more)
                 lastEvent.current = detail.events.at(-1)?.id ?? 0
-                stop = streamConversation(id, lastEvent.current, {
-                    onTask: (task) => setTasks((prev) => new Map(prev).set(task.id, task)),
+                const refresh = (taskId: string) => api.task(taskId).then(mergeTask).catch(() => undefined)
+                stop = streamConversation(id, () => lastEvent.current, {
+                    onTask: mergeTask,
                     onEvent: (event) => {
                         if (event.id <= lastEvent.current) return
                         lastEvent.current = event.id
                         setEvents((prev) => [...prev, event])
+                        // The stream replays events but not task rows: a terminal event is the cue to refetch the task.
+                        if (event.type === 'status' || event.type === 'error') void refresh(event.task_id)
+                    },
+                    onReconnect: () => {
+                        for (const task of tasksRef.current.values()) if (task.status === 'running' || task.status === 'queued') void refresh(task.id)
                     }
                 })
             })
-            .catch((e: Error) => setError(e.message))
-        return () => stop()
+            .catch((e: Error) => !cancelled && setError(e.message))
+        return () => {
+            cancelled = true
+            stop()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id])
 
     const scrollToBottom = () => {
@@ -160,12 +184,16 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
         el.style.height = `${Math.min(el.scrollHeight + 2, 220)}px`
     }, [prompt])
 
+    const ordered = [...tasks.values()].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+    const running = ordered.find((t) => t.status === 'running' || t.status === 'queued')
+    const active = Boolean(running)
+
     const loadEarlier = async () => {
-        const oldest = [...tasks.values()].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))[0]
+        const oldest = ordered[0]
         if (!oldest || loadingEarlier) return
         setLoadingEarlier(true)
         try {
-            const page = await api.conversationHistory(id, oldest.created_at)
+            const page = await api.conversationHistory(id, { ts: oldest.created_at, id: oldest.id })
             keepScroll.current = messages.current?.scrollHeight ?? null
             setTasks((prev) => {
                 const next = new Map(prev)
@@ -191,38 +219,39 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
         }
     }
 
+    const [sending, setSending] = useState(false)
     const send = async (e?: FormEvent) => {
         e?.preventDefault()
         const text = prompt.trim()
-        if (!text) return
-        setPrompt('')
+        if (!text || sending) return
+        setSending(true)
         setPinned(true)
         try {
             const task = await api.sendMessage(id, text)
-            setTasks((prev) => new Map(prev).set(task.id, task))
+            mergeTask(task)
+            setPrompt('') // only once it is queued: a failed send keeps the draft
+            setError(null)
             onSent()
         } catch (err) {
             setError((err as Error).message)
+        } finally {
+            setSending(false)
         }
     }
 
-    const ordered = [...tasks.values()].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     const byTask = new Map<string, TaskEvent[]>()
     for (const event of events) {
         const list = byTask.get(event.task_id)
         if (list) list.push(event)
         else byTask.set(event.task_id, [event])
     }
-    const running = ordered.find((t) => t.status === 'running' || t.status === 'queued')
-    const active = Boolean(running)
-
     return (
         <div className="thread">
             <div className="thread-head">
                 <div className="row">
-                    <Link to="/chat" className="btn mobile-only" style={{ textDecoration: 'none' }}>
+                    <Button to="/chat" className="mobile-only" aria-label="All conversations">
                         ‹
-                    </Link>
+                    </Button>
                     <div>
                         <strong>{conversation?.title ?? '…'}</strong>
                         <div className="dim small">
@@ -233,27 +262,19 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
                     </div>
                 </div>
                 <div className="row">
-                    {active ? (
-                        <button className="sm danger" onClick={() => running && void api.stopTask(running.id)}>
-                            Stop
-                        </button>
+                    {running ? (
+                        <StopButton taskId={running.id} size="sm" />
                     ) : (
-                        <button className="sm" onClick={remove} title="Remove from the list; tasks and audit events stay">
+                        <Button size="sm" onClick={remove} title="Remove from the list; tasks and audit events stay">
                             Delete
-                        </button>
+                        </Button>
                     )}
                 </div>
             </div>
             <div className="messages-wrap">
                 <div className="messages" ref={messages} onScroll={onScroll}>
-                    {hasEarlier && (
-                        <div className="load-earlier">
-                            <button className="sm" onClick={loadEarlier} disabled={loadingEarlier}>
-                                {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
-                            </button>
-                        </div>
-                    )}
-                    {ordered.length === 0 && conversation && <div className="empty">Nothing here yet. Describe the first task below.</div>}
+                    {hasEarlier && <LoadEarlier loading={loadingEarlier} onMore={loadEarlier} label="Load earlier messages" />}
+                    {ordered.length === 0 && conversation && <Empty>Nothing here yet. Describe the first task below.</Empty>}
                     {ordered.map((task) => (
                         <div key={task.id} className="exchange">
                             <div className="msg user">
@@ -269,9 +290,9 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
                     {error && <div className="tool error">{error}</div>}
                 </div>
                 {unseen && (
-                    <button className="jump" onClick={scrollToBottom}>
+                    <Button variant="primary" className="jump" onClick={scrollToBottom}>
                         <ArrowDown size={14} /> New messages
-                    </button>
+                    </Button>
                 )}
             </div>
             <form className="composer" onSubmit={send}>
@@ -289,9 +310,9 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
                     rows={1}
                     autoFocus
                 />
-                <button className="primary send" type="submit" disabled={!prompt.trim()} title="Send (Enter)">
+                <Button variant="primary" className="send" type="submit" disabled={!prompt.trim() || sending} title="Send (Enter)" aria-label="Send">
                     <SendHorizontal size={16} />
-                </button>
+                </Button>
                 <div className="composer-hint dim">
                     Enter to send · Shift+Enter for a new line{active ? ' · a task is running, yours will queue' : ''}
                 </div>

@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { summarizeInput } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
-import { ErrorBox, PageHead } from '../components/ui'
-import { api, type AuditEvent, type AuditKind, type AuditPeriod, fmt } from '../lib/api'
-import { useAsync } from '../lib/useAsync'
+import { ErrorBox, Empty, FilterSelect, PageHead, Stat, Tabs } from '../components/ui'
+import { api, type Audit, type AuditEvent, type AuditKind, type AuditPeriod, fmt } from '../lib/api'
+import { usePaged } from '../lib/usePaged'
 
 const PERIODS: Array<{ value: AuditPeriod; label: string }> = [
     { value: '1h', label: 'Last hour' },
@@ -26,6 +26,7 @@ const KINDS: Array<{ value: AuditKind; label: string }> = [
 ]
 
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const PAGE = 200
 
 /** Badge label and colour, then the one-line description, for each event. */
 function describe(e: AuditEvent): { badge: string; tone: string; text: string } {
@@ -48,7 +49,7 @@ function describe(e: AuditEvent): { badge: string; tone: string; text: string } 
         }
         case 'status': {
             const status = String(p.status)
-            if (status === 'running') return { badge: 'SESSION', tone: 'gray', text: 'Task started' }
+            if (status === 'running') return { badge: 'SESSION', tone: 'gray', text: p.note ? `Task started · ${String(p.note)}` : 'Task started' }
             const stats = [`${Number(p.num_turns ?? 0)} turns`, `${fmt.tokens(Number(p.tokens ?? 0))} tokens`, fmt.duration(Number(p.duration_ms ?? 0))].join(' · ')
             return { badge: 'SESSION', tone: status === 'done' ? 'green' : 'gray', text: `Task ${status === 'done' ? 'completed' : status} (${stats})` }
         }
@@ -72,11 +73,16 @@ function clock(iso: string): { time: string; day: string | null } {
     return { time, day: today ? null : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) }
 }
 
+const isPeriod = (v: string | null): v is AuditPeriod => PERIODS.some((p) => p.value === v)
+const isKind = (v: string | null): v is AuditKind => KINDS.some((k) => k.value === v)
+
 export function AuditPage() {
     // Filters live in the URL so that links from Overview and Agents can preset them.
     const [params, setParams] = useSearchParams()
-    const period = (params.get('period') as AuditPeriod | null) ?? '24h'
-    const kind = (params.get('kind') as AuditKind | null) ?? 'all'
+    const rawPeriod = params.get('period')
+    const rawKind = params.get('kind')
+    const period = isPeriod(rawPeriod) ? rawPeriod : '24h'
+    const kind = isKind(rawKind) ? rawKind : 'all'
     const agent = params.get('agent') ?? ''
     const project = params.get('project') ?? ''
     const setParam = (key: string, fallback: string) => (value: string) =>
@@ -94,34 +100,31 @@ export function AuditPage() {
     const setAgent = setParam('agent', '')
     const setProject = setParam('project', '')
     const [open, setOpen] = useState<number | null>(null)
-    const [more, setMore] = useState<AuditEvent[]>([])
-    const [loadingMore, setLoadingMore] = useState(false)
-
-    const audit = useAsync(() => api.audit({ period, kind, agent, project }), [period, kind, agent, project], 10_000)
-    const d = audit.data
-    const events = [...(d?.events ?? []), ...more]
-    const last = events.at(-1)
-
-    const loadMore = async () => {
-        if (!last) return
-        setLoadingMore(true)
-        try {
-            const page = await api.audit({ period, kind, agent, project, before: last.id })
-            setMore((prev) => [...prev, ...page.events])
-        } finally {
-            setLoadingMore(false)
+    // Totals and facets come with the first page; the list itself is keyset-paged by event id.
+    const [summary, setSummary] = useState<Pick<Audit, 'stats' | 'facets'> | null>(null)
+    const events = usePaged(
+        (before) =>
+            api.audit({ period, kind, agent, project, before: before ? Number(before.id) : undefined }).then((page) => {
+                if (!before) setSummary({ stats: page.stats, facets: page.facets })
+                hasMoreRef.current = page.has_more
+                return page.events
+            }),
+        {
+            key: (e) => String(e.id),
+            cursor: (e) => e.ts,
+            pageSize: PAGE,
+            deps: [period, kind, agent, project],
+            pollMs: 10_000,
+            hasMore: () => hasMoreRef.current
         }
-    }
-    const reset = (set: (v: string) => void) => (v: string) => {
-        set(v)
-        setMore([])
-        setOpen(null)
-    }
+    )
+    const hasMoreRef = useRef(false)
+    const d = summary
 
     return (
-        <div className="page">
+        <div className="page fill">
             <PageHead title="Audit log" sub="Every model call, tool call and sub-agent, attributed to the agent that did it and the project it worked in.">
-                <select value={period} onChange={(e) => reset(setPeriod)(e.target.value)} style={{ width: 170 }}>
+                <select className="filter" value={period} onChange={(e) => setPeriod(e.target.value)} aria-label="Period">
                     {PERIODS.map((p) => (
                         <option key={p.value} value={p.value}>
                             {p.label}
@@ -129,7 +132,7 @@ export function AuditPage() {
                     ))}
                 </select>
             </PageHead>
-            <ErrorBox error={audit.error} />
+            <ErrorBox error={events.error} />
 
             <div className="card pad0">
                 <div className="stat-row">
@@ -139,86 +142,66 @@ export function AuditPage() {
                     <Stat label="Tokens" value={d ? fmt.tokens(d.stats.tokens) : '…'} />
                 </div>
                 <div className="audit-bar">
-                    <div className="tabs">
-                        {KINDS.map((k) => (
-                            <button key={k.value} className={kind === k.value ? 'active' : ''} onClick={() => reset(setKind)(k.value)}>
-                                {k.label}
-                            </button>
-                        ))}
-                    </div>
+                    <Tabs items={KINDS} value={kind} onChange={setKind} />
                     <div className="row">
-                        <select value={agent} onChange={(e) => reset(setAgent)(e.target.value)} style={{ width: 160 }}>
-                            <option value="">all agents</option>
-                            <option value="orchestrator">orchestrator</option>
-                            {agent && agent !== 'orchestrator' && !d?.facets.agents.includes(agent) && <option value={agent}>{agent}</option>}
-                            {d?.facets.agents.map((a) => (
-                                <option key={a} value={a}>
-                                    {a}
-                                </option>
-                            ))}
-                        </select>
-                        <select value={project} onChange={(e) => reset(setProject)(e.target.value)} style={{ width: 180 }}>
-                            <option value="">all projects</option>
-                            {project && !d?.facets.projects.includes(project) && <option value={project}>{project}</option>}
-                            {d?.facets.projects.map((p) => (
-                                <option key={p} value={p}>
-                                    {p}
-                                </option>
-                            ))}
-                        </select>
+                        <FilterSelect label="Agent" all="all agents" value={agent} onChange={setAgent} options={['orchestrator', ...(d?.facets.agents ?? [])]} />
+                        <FilterSelect label="Project" all="all projects" value={project} onChange={setProject} options={d?.facets.projects ?? []} />
                     </div>
                 </div>
-                {events.length ? (
-                    <div className="audit">
-                        {events.map((e) => {
-                            const { badge, tone, text } = describe(e)
-                            const { time, day } = clock(e.ts)
-                            const expanded = open === e.id
-                            return (
-                                <div key={e.id} className={`audit-row${expanded ? ' open' : ''}`}>
-                                    <div className="audit-line" onClick={() => setOpen(expanded ? null : e.id)}>
-                                        <span className="audit-time dim">
-                                            {day && <span className="audit-day">{day} </span>}
-                                            {time}
-                                        </span>
-                                        <span className={`badge plain ${tone} audit-badge`}>{badge}</span>
-                                        <span className="audit-text">{text}</span>
-                                        <span className="audit-meta">
-                                            {e.project && <span className="badge plain">{e.project}</span>}
-                                            <span className={`audit-agent${e.agent ? '' : ' dim'}`}>{e.agent ?? 'orchestrator'}</span>
-                                        </span>
-                                    </div>
-                                    {expanded && (
-                                        <div className="audit-detail">
-                                            <div className="row wrap small dim" style={{ marginBottom: 6 }}>
-                                                <span>{fmt.when(e.ts)}</span>
-                                                <Link to={`/tasks/${e.task_id}`}>task {e.task_id.slice(0, 8)}</Link>
-                                                <Link to={`/chat/${e.conversation_id}`}>conversation</Link>
-                                                {e.session_id && <Link to={`/sessions/${e.session_id}`}>transcript</Link>}
-                                                {e.parent_tool_use_id && <span>spawned by {e.parent_tool_use_id.slice(0, 14)}</span>}
-                                            </div>
-                                            <pre style={{ margin: 0, maxHeight: 360 }}>{JSON.stringify(e.payload, null, 2)}</pre>
+                <div className="card-scroll">
+                    {events.items.length ? (
+                        <div className="audit">
+                            {events.items.map((e) => {
+                                const { badge, tone, text } = describe(e)
+                                const { time, day } = clock(e.ts)
+                                const expanded = open === e.id
+                                return (
+                                    <div key={e.id} className={`audit-row${expanded ? ' open' : ''}`}>
+                                        <div
+                                            className="audit-line"
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-expanded={expanded}
+                                            onClick={() => setOpen(expanded ? null : e.id)}
+                                            onKeyDown={(k) => {
+                                                if (k.key === 'Enter' || k.key === ' ') {
+                                                    k.preventDefault()
+                                                    setOpen(expanded ? null : e.id)
+                                                }
+                                            }}
+                                        >
+                                            <span className="audit-time dim">
+                                                {day && <span className="audit-day">{day} </span>}
+                                                {time}
+                                            </span>
+                                            <span className={`badge plain ${tone} audit-badge`}>{badge}</span>
+                                            <span className="audit-text">{text}</span>
+                                            <span className="audit-meta">
+                                                {e.project && <span className="badge plain">{e.project}</span>}
+                                                <span className={`audit-agent${e.agent ? '' : ' dim'}`}>{e.agent ?? 'orchestrator'}</span>
+                                            </span>
                                         </div>
-                                    )}
-                                </div>
-                            )
-                        })}
-                    </div>
-                ) : (
-                    <div className="empty">{audit.loading ? 'Loading…' : 'No events in this period.'}</div>
-                )}
-                <LoadMore hasMore={Boolean(d && d.stats.events > events.length)} loading={loadingMore} onMore={loadMore} shown={events.length} total={d?.stats.events} noun="events" />
-            </div>
-        </div>
-    )
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-    return (
-        <div className="stat">
-            <div className="label">{label}</div>
-            <div className="value" style={{ fontSize: 18 }}>
-                {value}
+                                        {expanded && (
+                                            <div className="audit-detail">
+                                                <div className="row wrap small dim" style={{ marginBottom: 6 }}>
+                                                    <span>{fmt.when(e.ts)}</span>
+                                                    <Link to={`/tasks/${e.task_id}`}>task {e.task_id.slice(0, 8)}</Link>
+                                                    <Link to={`/chat/${e.conversation_id}`}>conversation</Link>
+                                                    {e.session_id && <Link to={`/sessions/${e.session_id}`}>transcript</Link>}
+                                                    {e.parent_tool_use_id && <span>spawned by {e.parent_tool_use_id.slice(0, 14)}</span>}
+                                                </div>
+                                                <pre className="audit-payload">{JSON.stringify(e.payload, null, 2)}</pre>
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    ) : (
+                        <Empty>{events.loading ? 'Loading…' : 'No events in this period.'}</Empty>
+                    )}
+                    <LoadMore hasMore={events.hasMore} loading={events.loading} onMore={events.loadMore} shown={events.items.length} total={d?.stats.events} noun="events" />
+                </div>
             </div>
         </div>
     )

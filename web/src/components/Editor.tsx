@@ -1,11 +1,11 @@
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
+import { NavLink, useNavigate, useParams } from 'react-router-dom'
 
 import { api, type CatalogEntry, fmt, type Kind } from '../lib/api'
-import { renderMarkdown } from '../lib/markdown'
+import { confirmLeave, setUnsaved } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { Tile } from './Tile'
-import { Empty, ErrorBox, PageHead, useToast } from './ui'
+import { Button, Empty, ErrorBox, Intro, Markdown, PageHead, Tabs, useToast } from './ui'
 
 export interface EditorProps {
     kind: Kind
@@ -21,9 +21,15 @@ export interface EditorProps {
     describe?: (entry: CatalogEntry) => string
     /** Where the page's back link goes (the agents grid, for instance). */
     backTo?: { to: string; label: string }
+    /** What the empty form pane says before an entry is picked, and the label of its create button. */
+    intro?: string
+    newLabel?: string
 }
 
-const DISCARD = 'You have unsaved changes. Discard them?'
+const MODES = [
+    { value: 'edit', label: 'Edit' },
+    { value: 'preview', label: 'Preview' }
+] as const
 
 /**
  * List + editor for one kind of factory file. The page fills the viewport:
@@ -31,13 +37,17 @@ const DISCARD = 'You have unsaved changes. Discard them?'
  * The frontmatter form is kind-specific; the Markdown body is a plain
  * textarea — the same text the agent reads — with a preview.
  */
-export function Editor({ kind, title, sub, form, defaults, template, bodyLabel = 'Instructions (Markdown)', describe, backTo }: EditorProps) {
+export function Editor({ kind, title, sub, form, defaults, template, bodyLabel = 'Instructions (Markdown)', describe, backTo, intro = 'Select an entry or create a new one.', newLabel = 'New' }: EditorProps) {
     const { name } = useParams()
     const navigate = useNavigate()
     const list = useAsync(() => api.list(kind), [kind])
     const [toast, showToast] = useToast()
     const [filter, setFilter] = useState('')
     const [dirty, setDirty] = useState(false)
+    useEffect(() => {
+        setUnsaved(dirty)
+        return () => setUnsaved(false)
+    }, [dirty])
 
     const creating = name === 'new'
     const selected = list.data?.find((e) => e.name === name)
@@ -48,26 +58,25 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
 
     // Leaving an edited form through the list or the New button asks first.
     const guard = (e: MouseEvent) => {
-        if (dirty && !window.confirm(DISCARD)) e.preventDefault()
+        if (!confirmLeave()) e.preventDefault()
     }
+    const startNew = () => {
+        if (!confirmLeave()) return
+        navigate(`/${kind}/new`)
+    }
+    const names = new Set((list.data ?? []).map((e) => e.name))
 
     return (
         <div className="page editor-page">
             <PageHead title={title} sub={sub}>
                 {backTo && (
-                    <Link className="btn" to={backTo.to} onClick={guard}>
+                    <Button to={backTo.to} onClick={guard}>
                         ‹ {backTo.label}
-                    </Link>
+                    </Button>
                 )}
-                <button
-                    className="primary"
-                    onClick={() => {
-                        if (dirty && !window.confirm(DISCARD)) return
-                        navigate(`/${kind}/new`)
-                    }}
-                >
+                <Button variant="primary" onClick={startNew}>
                     New
-                </button>
+                </Button>
             </PageHead>
             <ErrorBox error={list.error} />
             <div className="editor-layout">
@@ -104,6 +113,7 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                         template={template}
                         form={form}
                         bodyLabel={bodyLabel}
+                        taken={names}
                         onDirty={setDirty}
                         onSaved={(saved) => {
                             showToast(`Saved ${kind}/${saved.name}`)
@@ -118,7 +128,7 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                     />
                 ) : (
                     <div className="card form-pane">
-                        <Empty>Select an entry or create a new one.</Empty>
+                        <Intro text={intro} action={newLabel} onAction={startNew} />
                     </div>
                 )}
             </div>
@@ -134,6 +144,7 @@ function Form({
     template,
     form,
     bodyLabel,
+    taken,
     onDirty,
     onSaved,
     onDeleted
@@ -144,6 +155,8 @@ function Form({
     template: string
     form: EditorProps['form']
     bodyLabel: string
+    /** Names that exist already: a new entry may not take one (the agent's file would be replaced). */
+    taken: Set<string>
     onDirty: (dirty: boolean) => void
     onSaved: (entry: CatalogEntry) => void
     onDeleted: () => void
@@ -155,8 +168,14 @@ function Form({
     const [error, setError] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const textarea = useRef<HTMLTextAreaElement>(null)
-    const dirty = entry ? body !== entry.body || JSON.stringify(fm) !== JSON.stringify(entry.frontmatter) : true
-    const canSave = !busy && Boolean(name.trim()) && dirty
+    // Empty fields are dropped on save, so compare what would be saved with
+    // what is on disk; a fresh form is clean until something is typed.
+    const clean = (record: Record<string, unknown>) => Object.fromEntries(Object.entries(record).filter(([, v]) => v !== '' && v !== undefined && v !== null))
+    const same = (a: Record<string, unknown>, b: Record<string, unknown>) => JSON.stringify(clean(a)) === JSON.stringify(clean(b))
+    const dirty = entry ? body !== entry.body || !same(fm, entry.frontmatter) : Boolean(name.trim()) || body !== template || !same(fm, defaults)
+    const trimmed = name.trim()
+    const nameTaken = !entry && taken.has(trimmed)
+    const canSave = !busy && Boolean(trimmed) && !nameTaken && dirty
 
     useEffect(() => {
         onDirty(dirty)
@@ -185,8 +204,11 @@ function Form({
         setBusy(true)
         setError(null)
         try {
-            const clean = Object.fromEntries(Object.entries(fm).filter(([, v]) => v !== '' && v !== undefined && v !== null))
-            onSaved(await api.save(kind, name.trim(), { frontmatter: clean, body }))
+            const saved = await api.save(kind, trimmed, { frontmatter: clean(fm), body }, !entry)
+            // The form stays mounted for the same name: adopt the saved state so it reads as clean.
+            setFm(saved.frontmatter)
+            setBody(saved.body)
+            onSaved(saved)
         } catch (e) {
             setError((e as Error).message)
         } finally {
@@ -244,20 +266,21 @@ function Form({
                     ) : (
                         <label className="field">
                             <span>Name (file name, a-z 0-9 - _ .)</span>
-                            <input className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder={`my-${kind.slice(0, -1)}`} autoFocus />
+                            <input className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder={`my-${kind.slice(0, -1)}`} autoFocus aria-invalid={nameTaken} />
+                            {nameTaken && <span className="error">{`${kind}/${trimmed} already exists — open it from the list to edit it.`}</span>}
                         </label>
                     )}
                 </div>
                 <span className={`badge ${dirty ? 'queued' : 'done'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>
                 <div className="toolbar">
                     {entry && (
-                        <button className="danger" onClick={remove}>
+                        <Button variant="danger" onClick={remove}>
                             Delete
-                        </button>
+                        </Button>
                     )}
-                    <button className="primary" onClick={save} disabled={!canSave} title="⌘S / Ctrl+S">
+                    <Button variant="primary" onClick={save} disabled={!canSave} title="⌘S / Ctrl+S">
                         {busy ? 'Saving…' : 'Save'}
-                    </button>
+                    </Button>
                 </div>
             </div>
             <div className="form-body">
@@ -270,19 +293,12 @@ function Form({
                             {lines} lines · {body.length.toLocaleString()} chars
                         </div>
                     </div>
-                    <div className="tabs">
-                        <button className={mode === 'edit' ? 'active' : ''} onClick={() => setMode('edit')}>
-                            Edit
-                        </button>
-                        <button className={mode === 'preview' ? 'active' : ''} onClick={() => setMode('preview')}>
-                            Preview
-                        </button>
-                    </div>
+                    <Tabs items={MODES} value={mode} onChange={setMode} />
                 </div>
                 {mode === 'edit' ? (
                     <textarea ref={textarea} className="mono body" value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={onBodyKey} spellCheck={false} />
                 ) : (
-                    <div className="md preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }} />
+                    <Markdown className="preview" source={body} />
                 )}
             </div>
         </div>

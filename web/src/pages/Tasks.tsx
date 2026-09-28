@@ -3,12 +3,12 @@ import { Link, useParams } from 'react-router-dom'
 
 import { EventFeed } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
-import { Empty, ErrorBox, PageHead, StatusBadge } from '../components/ui'
+import { Empty, ErrorBox, FilterSelect, PageHead, Stat, StatusBadge, StopButton, Tabs } from '../components/ui'
 import { api, fmt, taskTokens, type TaskStatus } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { usePaged } from '../lib/usePaged'
 
-const FILTERS: Array<TaskStatus | 'all'> = ['all', 'running', 'queued', 'done', 'failed', 'cancelled']
+const FILTERS = (['all', 'running', 'queued', 'done', 'failed', 'cancelled'] as const).map((value) => ({ value, label: value }))
 const PAGE = 50
 
 export function TasksPage() {
@@ -24,77 +24,62 @@ export function TasksPage() {
     })
 
     return (
-        <div className="page">
+        <div className="page fill">
             <PageHead title="Tasks" sub="Every task from every channel — Telegram, web, later cron and webhooks." />
             <ErrorBox error={tasks.error} />
             <div className="card pad0">
                 <div className="audit-bar">
-                    <div className="tabs">
-                        {FILTERS.map((f) => (
-                            <button key={f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
-                                {f}
-                            </button>
-                        ))}
-                    </div>
-                    <select value={project} onChange={(e) => setProject(e.target.value)} style={{ width: 180 }}>
-                        <option value="">all projects</option>
-                        {projects.data?.map((p) => (
-                            <option key={p} value={p}>
-                                {p}
-                            </option>
-                        ))}
-                    </select>
+                    <Tabs items={FILTERS} value={filter} onChange={setFilter} />
+                    <FilterSelect label="Project" all="all projects" value={project} onChange={setProject} options={projects.data ?? []} />
                 </div>
-                {tasks.items.length ? (
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Status</th>
-                                <th>Task</th>
-                                <th>Project</th>
-                                <th>Source</th>
-                                <th>Turns</th>
-                                <th>Tokens</th>
-                                <th>Window</th>
-                                <th>Time</th>
-                                <th>Created</th>
-                                <th />
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {tasks.items.map((task) => (
-                                <tr key={task.id}>
-                                    <td>
-                                        <StatusBadge status={task.status} />
-                                    </td>
-                                    <td className="col-main">
-                                        <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
-                                        {task.error && task.status === 'failed' && <div className="error small">{task.error.slice(0, 160)}</div>}
-                                    </td>
-                                    <td>{task.project ? <span className="badge plain">{task.project}</span> : <span className="dim">—</span>}</td>
-                                    <td>
-                                        <span className="badge plain">{task.source}</span>
-                                    </td>
-                                    <td>{task.num_turns}</td>
-                                    <td>{fmt.tokens(taskTokens(task))}</td>
-                                    <td className="dim nowrap">{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
-                                    <td>{fmt.duration(task.duration_ms)}</td>
-                                    <td className="dim nowrap">{fmt.ago(task.created_at)}</td>
-                                    <td>
-                                        {(task.status === 'running' || task.status === 'queued') && (
-                                            <button className="sm danger" onClick={() => api.stopTask(task.id).then(tasks.reload)}>
-                                                Stop
-                                            </button>
-                                        )}
-                                    </td>
+                <div className="card-scroll">
+                    {tasks.items.length ? (
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Task</th>
+                                    <th>Project</th>
+                                    <th>Source</th>
+                                    <th>Turns</th>
+                                    <th>Tokens</th>
+                                    <th>Window</th>
+                                    <th>Time</th>
+                                    <th>Created</th>
+                                    <th />
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                ) : (
-                    <Empty>{tasks.loading ? 'Loading…' : 'No tasks.'}</Empty>
-                )}
-                <LoadMore hasMore={tasks.hasMore} loading={tasks.loading} onMore={tasks.loadMore} shown={tasks.items.length} noun="tasks" />
+                            </thead>
+                            <tbody>
+                                {tasks.items.map((task) => (
+                                    <tr key={task.id}>
+                                        <td>
+                                            <StatusBadge status={task.status} />
+                                        </td>
+                                        <td className="col-main">
+                                            <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
+                                            {task.error && task.status === 'failed' && <div className="error small">{task.error.slice(0, 160)}</div>}
+                                        </td>
+                                        <td>{task.project ? <span className="badge plain">{task.project}</span> : <span className="dim">—</span>}</td>
+                                        <td>
+                                            <span className="badge plain">{task.source}</span>
+                                        </td>
+                                        <td>{task.num_turns}</td>
+                                        <td>{fmt.tokens(taskTokens(task))}</td>
+                                        <td className="dim nowrap">{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
+                                        <td>{fmt.duration(task.duration_ms)}</td>
+                                        <td className="dim nowrap">{fmt.ago(task.created_at)}</td>
+                                        <td>
+                                            {(task.status === 'running' || task.status === 'queued') && <StopButton taskId={task.id} size="sm" onStopped={tasks.reload} />}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <Empty>{tasks.loading ? 'Loading…' : 'No tasks.'}</Empty>
+                    )}
+                    <LoadMore hasMore={tasks.hasMore} loading={tasks.loading} onMore={tasks.loadMore} shown={tasks.items.length} noun="tasks" />
+                </div>
             </div>
         </div>
     )
@@ -123,18 +108,14 @@ export function TaskPage() {
                     </span>
                 }
             >
-                {(t.status === 'running' || t.status === 'queued') && (
-                    <button className="danger" onClick={() => api.stopTask(t.id).then(task.reload)}>
-                        Stop
-                    </button>
-                )}
+                {(t.status === 'running' || t.status === 'queued') && <StopButton taskId={t.id} onStopped={task.reload} />}
             </PageHead>
 
             <div className="cards" style={{ marginBottom: 16 }}>
-                <Kv label="Turns" value={t.num_turns} />
-                <Kv label="Duration" value={fmt.duration(t.duration_ms)} />
-                <Kv label="Tokens" value={fmt.tokens(taskTokens(t))} sub={`${fmt.tokens(t.input_tokens)} in · ${fmt.tokens(t.output_tokens)} out · ${fmt.tokens(t.cache_read_tokens)} cache read · ${fmt.tokens(t.cache_creation_tokens)} cache write`} />
-                <Kv label="5-hour window" value={fmt.windowDelta(t.window_5h_delta) ?? '—'} sub={t.window_5h_delta === null ? 'not reported by the CLI' : 'share of the window this task consumed'} />
+                <Stat card label="Turns" value={t.num_turns} />
+                <Stat card label="Duration" value={fmt.duration(t.duration_ms)} />
+                <Stat card label="Tokens" value={fmt.tokens(taskTokens(t))} sub={`${fmt.tokens(t.input_tokens)} in · ${fmt.tokens(t.output_tokens)} out · ${fmt.tokens(t.cache_read_tokens)} cache read · ${fmt.tokens(t.cache_creation_tokens)} cache write`} />
+                <Stat card label="5-hour window" value={fmt.windowDelta(t.window_5h_delta) ?? '—'} sub={t.window_5h_delta === null ? 'not reported by the CLI' : 'share of the window this task consumed'} />
             </div>
 
             <h2>Prompt</h2>
@@ -146,18 +127,6 @@ export function TaskPage() {
             <div className="card">
                 <EventFeed events={t.events} finalText={t.status === 'done' ? t.result : null} error={t.status === 'failed' ? t.error : null} />
             </div>
-        </div>
-    )
-}
-
-function Kv({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
-    return (
-        <div className="card stat">
-            <div className="value" style={{ fontSize: 18 }}>
-                {value}
-            </div>
-            <div className="label">{label}</div>
-            {sub && <div className="dim small" style={{ marginTop: 4 }}>{sub}</div>}
         </div>
     )
 }

@@ -1,4 +1,7 @@
+import { useState } from 'react'
+
 import { Editor, Field, str } from '../components/Editor'
+import { Button } from '../components/ui'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
@@ -14,6 +17,30 @@ const TEMPLATE = `Notes for the agent: conventions, gotchas, what never to touch
 
 const TRACKERS = ['none', 'github', 'clickup', 'trac', 'jira']
 
+/**
+ * A list edited as lines. The text is kept as typed (a trailing newline or
+ * space would otherwise vanish under the cursor) and parsed on the way out.
+ */
+function LinesInput({ value, onChange }: { value: string[]; onChange: (lines: string[]) => void }) {
+    const [text, setText] = useState(value.join('\n'))
+    return (
+        <textarea
+            className="mono"
+            rows={3}
+            value={text}
+            onChange={(e) => {
+                setText(e.target.value)
+                onChange(
+                    e.target.value
+                        .split('\n')
+                        .map((s) => s.trim())
+                        .filter(Boolean)
+                )
+            }}
+        />
+    )
+}
+
 export function ProjectsPage() {
     const status = useAsync(() => api.status(), [])
     const skills = useAsync(() => api.list('skills'), [])
@@ -27,6 +54,8 @@ export function ProjectsPage() {
             defaults={{ name: '', repo: '', default_branch: 'main', pr_base: 'main', branch_prefix: 'feature/', skill: 'feature-to-pr', tracker: { type: 'none' }, hosts: [], checks: [] }}
             template={TEMPLATE}
             bodyLabel="Notes for the agent (Markdown)"
+            intro="A project file tells the agent where a repository lives, how to branch, what to run and which hosts it touches. Pick one from the list to edit it, or describe a new one."
+            newLabel="New project"
             describe={(e) => [e.frontmatter.name, e.frontmatter.repo].filter(Boolean).join(' · ')}
             form={(fm, set) => {
                 const tracker = (fm.tracker as Record<string, unknown> | undefined) ?? {}
@@ -84,16 +113,16 @@ export function ProjectsPage() {
                             <input value={str(tracker.review_state)} onChange={(e) => set({ tracker: { ...tracker, review_state: e.target.value } })} placeholder="Review" />
                         </Field>
                         <Field label="Checks (one per line)" hint="Run before a PR is opened. All must pass.">
-                            <textarea className="mono" rows={3} value={checks.join('\n')} onChange={(e) => set({ checks: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
+                            <LinesInput value={checks} onChange={(next) => set({ checks: next })} />
                         </Field>
                         <div style={{ gridColumn: '1 / -1' }}>
                             <div className="row between" style={{ marginBottom: 6 }}>
                                 <span className="dim small" style={{ fontWeight: 500 }}>
                                     HOSTS — servers this project runs on (reachable with keys in data/secrets/ssh/)
                                 </span>
-                                <button className="sm" onClick={() => set({ hosts: [...hosts, { name: '', ssh: '' }] })}>
+                                <Button size="sm" onClick={() => set({ hosts: [...hosts, { name: '', ssh: '' }] })}>
                                     Add host
-                                </button>
+                                </Button>
                             </div>
                             {hosts.length === 0 && <div className="dim small">No hosts.</div>}
                             {hosts.map((h, i) => (
@@ -102,9 +131,9 @@ export function ProjectsPage() {
                                     <input className="mono" style={{ width: 220 }} placeholder="deploy@203.0.113.10" value={h.ssh ?? ''} onChange={(e) => setHost(i, { ssh: e.target.value })} />
                                     <input className="mono" style={{ width: 200 }} placeholder="/srv/app" value={h.path ?? ''} onChange={(e) => setHost(i, { path: e.target.value })} />
                                     <input className="grow" placeholder="notes: how to restart, where logs are" value={h.notes ?? ''} onChange={(e) => setHost(i, { notes: e.target.value })} />
-                                    <button className="sm danger" onClick={() => set({ hosts: hosts.filter((_, j) => j !== i) })}>
+                                    <Button size="sm" variant="danger" onClick={() => set({ hosts: hosts.filter((_, j) => j !== i) })} aria-label="Remove host">
                                         ×
-                                    </button>
+                                    </Button>
                                 </div>
                             ))}
                         </div>

@@ -1,9 +1,10 @@
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import { AgentStatus, auditLink, rosterOf } from '../components/AgentsPanel'
 import { Editor, Field, str } from '../components/Editor'
 import { Tile } from '../components/Tile'
-import { Empty, ErrorBox, PageHead } from '../components/ui'
+import { Button, Empty, ErrorBox, PageHead } from '../components/ui'
 import { api, fmt } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
@@ -15,6 +16,12 @@ const ALIASES: Array<{ value: string; label: string }> = [
     { value: 'opus', label: 'opus — current Opus' },
     { value: 'haiku', label: 'haiku — current Haiku' }
 ]
+
+const splitTools = (value: string) =>
+    value
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
 
 const TEMPLATE = `You are the <role> of a personal software factory.
 
@@ -44,9 +51,9 @@ function AgentGrid() {
     return (
         <div className="page">
             <PageHead title="Agents" sub="Claude Code sub-agents: roles with their own tools, model and system prompt. Files in data/claude/agents/; built-ins appear once the audit log has seen them.">
-                <button className="primary" onClick={() => navigate('/agents/new')}>
+                <Button variant="primary" onClick={() => navigate('/agents/new')}>
                     New agent
-                </button>
+                </Button>
             </PageHead>
             <ErrorBox error={entries.error ?? activity.error} />
             {rows.length === 0 && !entries.loading && (
@@ -56,10 +63,7 @@ function AgentGrid() {
             )}
             <div className="agent-grid">
                 {rows.map((r) => {
-                    const tools = str(r.entry?.frontmatter.tools)
-                        .split(',')
-                        .map((t) => t.trim())
-                        .filter(Boolean)
+                    const tools = splitTools(str(r.entry?.frontmatter.tools))
                     const model = str(r.entry?.frontmatter.model)
                     return (
                         <div key={r.name} className="card agent-card">
@@ -75,7 +79,7 @@ function AgentGrid() {
                             <div className="agent-stats dim small">
                                 {r.activity ? (
                                     <>
-                                        <span>{r.activity.runs} run{r.activity.runs === 1 ? '' : 's'} in 7 days</span>
+                                        <span>{fmt.plural(r.activity.runs, 'run')} in 7 days</span>
                                         <span>{fmt.tokens(r.activity.tokens)} tokens</span>
                                         <span>last {fmt.ago(r.activity.last_active)}</span>
                                     </>
@@ -99,13 +103,13 @@ function AgentGrid() {
                                     )}
                                 </div>
                                 <div className="row">
-                                    <Link className="btn sm" to={auditLink(r.name)}>
+                                    <Button size="sm" to={auditLink(r.name)}>
                                         Audit log
-                                    </Link>
+                                    </Button>
                                     {r.entry && (
-                                        <Link className="btn sm" to={`/agents/${r.name}`}>
+                                        <Button size="sm" to={`/agents/${r.name}`}>
                                             Edit
-                                        </Link>
+                                        </Button>
                                     )}
                                 </div>
                             </div>
@@ -116,12 +120,6 @@ function AgentGrid() {
         </div>
     )
 }
-
-const splitTools = (value: string) =>
-    value
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean)
 
 /**
  * `tools:` is an allowlist of Claude Code tool names, not free text. Known
@@ -144,14 +142,17 @@ function ToolPicker({
     const selected = splitTools(value)
     const known = [...common, ...reported]
     const extra = selected.filter((t) => !known.includes(t))
+    // The field keeps what was typed (", " included) until it parses to something else.
+    const [extraText, setExtraText] = useState(extra.join(', '))
+    const shownExtra = splitTools(extraText).join(',') === extra.join(',') ? extraText : extra.join(', ')
     const toggle = (tool: string) => {
         const next = selected.includes(tool) ? selected.filter((t) => t !== tool) : [...selected, tool]
         onChange(next.join(', '))
     }
     const chip = (tool: string) => (
-        <button key={tool} type="button" className={`chip${selected.includes(tool) ? ' on' : ''}`} onClick={() => toggle(tool)}>
+        <Button key={tool} className={`chip${selected.includes(tool) ? ' on' : ''}`} onClick={() => toggle(tool)} aria-pressed={selected.includes(tool)}>
             {tool}
-        </button>
+        </Button>
     )
     return (
         <div className="tool-picker">
@@ -172,9 +173,12 @@ function ToolPicker({
             )}
             <input
                 className="mono"
-                value={extra.join(', ')}
+                value={shownExtra}
                 placeholder="MCP tools, comma separated — e.g. mcp__github__get_issue"
-                onChange={(e) => onChange([...selected.filter((t) => known.includes(t)), ...splitTools(e.target.value)].join(', '))}
+                onChange={(e) => {
+                    setExtraText(e.target.value)
+                    onChange([...selected.filter((t) => known.includes(t)), ...splitTools(e.target.value)].join(', '))
+                }}
             />
             <span className="dim">
                 {selected.length ? `${selected.length} allowed: ${selected.join(', ')}` : 'None selected — the agent inherits every tool.'}

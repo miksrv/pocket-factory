@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { Component, type ErrorInfo, type ReactNode, useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { api } from '../lib/api'
+import { confirmLeave } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { Icon, type IconName } from './Icon'
 import { LimitsInline } from './Limits'
+import { Button } from './ui'
 
 const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }> = [
     { to: '/', label: 'Overview', icon: 'overview' },
@@ -69,9 +71,9 @@ export function Layout() {
     return (
         <div className={`app${collapsed ? ' collapsed' : ''}${open ? ' drawer-open' : ''}`}>
             <header className="topbar">
-                <button className="icon-btn" aria-label="Menu" onClick={() => setOpen(true)}>
+                <Button className="icon-btn" aria-label="Menu" onClick={() => setOpen(true)}>
                     ☰
-                </button>
+                </Button>
                 <span className="brand" style={{ padding: 0 }}>
                     <Logo />
                     Pocket Factory
@@ -83,15 +85,15 @@ export function Layout() {
                 <div className="brand">
                     <Logo />
                     <span className="label">Pocket Factory</span>
-                    <button className="icon-btn mobile-only" aria-label="Close menu" onClick={() => setOpen(false)} style={{ marginLeft: 'auto' }}>
+                    <Button className="icon-btn mobile-only" aria-label="Close menu" onClick={() => setOpen(false)}>
                         ×
-                    </button>
+                    </Button>
                 </div>
                 <nav className="nav">
                     {NAV.map((item) => (
                         <div key={item.to}>
                             {item.section && <div className="section">{collapsed ? '·' : item.section}</div>}
-                            <NavLink to={item.to} end={item.to === '/'} title={item.label}>
+                            <NavLink to={item.to} end={item.to === '/'} title={item.label} onClick={(e) => !confirmLeave() && e.preventDefault()}>
                                 <span className="icon">
                                     <Icon name={item.icon} />
                                 </span>
@@ -113,16 +115,50 @@ export function Layout() {
                         <LimitsInline limits={status.data?.limits} />
                     </NavLink>
                 </div>
-                <button className="collapse desktop-only" onClick={() => setCollapsed((v) => !v)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label="Toggle sidebar">
+                <Button variant="ghost" className="collapse desktop-only" onClick={() => setCollapsed((v) => !v)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label="Toggle sidebar">
                     {collapsed ? '»' : '«'}
                     <span className="label"> Collapse</span>
-                </button>
+                </Button>
             </aside>
             <main className="main">
-                <Outlet />
+                <PageBoundary key={location.pathname}>
+                    <Outlet />
+                </PageBoundary>
             </main>
         </div>
     )
+}
+
+/**
+ * A page that throws while rendering (an unexpected API shape, say) shows
+ * its error inside the layout instead of blanking the whole app. Keyed on the
+ * path, so navigating elsewhere gives the next page a clean start.
+ */
+class PageBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+    state = { error: null as Error | null }
+
+    static getDerivedStateFromError(error: Error) {
+        return { error }
+    }
+
+    componentDidCatch(error: Error, info: ErrorInfo) {
+        console.error('page crashed', error, info.componentStack)
+    }
+
+    render() {
+        if (!this.state.error) return this.props.children
+        return (
+            <div className="page">
+                <div className="card error">
+                    <strong>This page hit an error.</strong>
+                    <pre style={{ marginBottom: 0 }}>{this.state.error.message}</pre>
+                    <Button size="sm" style={{ marginTop: 10 }} onClick={() => this.setState({ error: null })}>
+                        Try again
+                    </Button>
+                </div>
+            </div>
+        )
+    }
 }
 
 function Logo() {

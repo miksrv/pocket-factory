@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Fragment } from 'react'
+import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 
 import { Layout } from './components/Layout'
 import { AgentsPage } from './pages/Agents'
@@ -12,6 +13,12 @@ import { SettingsPage } from './pages/Settings'
 import { SkillsPage } from './pages/Skills'
 import { TaskPage, TasksPage } from './pages/Tasks'
 
+/** Remounts the page when the route id changes, so per-id state (a transcript window) never mixes two ids. */
+function Keyed({ element }: { element: React.ReactElement }) {
+    const { id } = useParams()
+    return <Fragment key={id}>{element}</Fragment>
+}
+
 export function App() {
     return (
         <Routes>
@@ -22,7 +29,7 @@ export function App() {
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="chat/:id" element={<ChatPage />} />
                 <Route path="sessions" element={<SessionsPage />} />
-                <Route path="sessions/:id" element={<SessionPage />} />
+                <Route path="sessions/:id" element={<Keyed element={<SessionPage />} />} />
                 <Route path="audit" element={<AuditPage />} />
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="agents/:name" element={<AgentsPage />} />
