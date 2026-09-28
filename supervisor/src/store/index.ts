@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 
+import type { RateLimits } from '../claude/runner.js'
+
 export type Channel = 'telegram' | 'web'
 export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -27,10 +29,15 @@ export interface Task {
     result: string | null
     error: string | null
     num_turns: number
+    /** CLI list-price estimate, kept for the record only. */
     cost_usd: number
     duration_ms: number
     input_tokens: number
     output_tokens: number
+    cache_read_tokens: number
+    cache_creation_tokens: number
+    /** Share of the 5-hour window consumed by this task (0..1), null when the CLI reported nothing. */
+    window_5h_delta: number | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -49,9 +56,48 @@ export interface TaskStats {
     running: number
     done_today: number
     failed_today: number
-    cost_today: number
-    cost_total: number
+    /** All tokens (input, output, cache read, cache creation) of tasks created today / ever. */
+    tokens_today: number
+    tokens_total: number
 }
+
+/** A persisted rate-limit reading; see `RateLimits` for where it comes from. */
+export interface RateLimitSnapshot extends RateLimits {
+    id: number
+    ts: string
+    task_id: string | null
+}
+
+interface RateLimitRow {
+    id: number
+    ts: string
+    task_id: string | null
+    status: string
+    five_hour_used: number | null
+    five_hour_resets_at: string | null
+    seven_day_used: number | null
+    seven_day_resets_at: string | null
+}
+
+function snapshotFromRow(row: RateLimitRow): RateLimitSnapshot {
+    return {
+        id: row.id,
+        ts: row.ts,
+        task_id: row.task_id,
+        status: row.status,
+        five_hour:
+            row.five_hour_used !== null && row.five_hour_resets_at
+                ? { used: row.five_hour_used, resets_at: row.five_hour_resets_at }
+                : null,
+        seven_day:
+            row.seven_day_used !== null && row.seven_day_resets_at
+                ? { used: row.seven_day_used, resets_at: row.seven_day_resets_at }
+                : null
+    }
+}
+
+const sameWindow = (a: RateLimits['five_hour'], b: RateLimits['five_hour']) =>
+    (a === null && b === null) || (a !== null && b !== null && a.used === b.used && a.resets_at === b.resets_at)
 
 const now = () => new Date().toISOString()
 
@@ -128,6 +174,9 @@ export class Store {
             duration_ms: 0,
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            window_5h_delta: null,
             created_at: now(),
             started_at: null,
             finished_at: null
@@ -216,9 +265,12 @@ export class Store {
                     SUM(status = 'running') AS running,
                     SUM(status = 'done'   AND substr(finished_at, 1, 10) = ?) AS done_today,
                     SUM(status = 'failed' AND substr(finished_at, 1, 10) = ?) AS failed_today,
-                    SUM(CASE WHEN substr(created_at, 1, 10) = ? THEN cost_usd ELSE 0 END) AS cost_today,
-                    SUM(cost_usd) AS cost_total
-                 FROM tasks`
+                    SUM(CASE WHEN substr(created_at, 1, 10) = ? THEN tokens ELSE 0 END) AS tokens_today,
+                    SUM(tokens) AS tokens_total
+                 FROM (
+                    SELECT *, input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens AS tokens
+                    FROM tasks
+                 )`
             )
             .get(today, today, today) as Record<keyof TaskStats, number | null>
         return {
@@ -226,9 +278,54 @@ export class Store {
             running: row.running ?? 0,
             done_today: row.done_today ?? 0,
             failed_today: row.failed_today ?? 0,
-            cost_today: row.cost_today ?? 0,
-            cost_total: row.cost_total ?? 0
+            tokens_today: row.tokens_today ?? 0,
+            tokens_total: row.tokens_total ?? 0
         }
+    }
+
+    // ---- rate limits ------------------------------------------------------
+
+    latestRateLimits(): RateLimitSnapshot | undefined {
+        const row = this.db.prepare('SELECT * FROM rate_limits ORDER BY id DESC LIMIT 1').get() as RateLimitRow | undefined
+        return row ? snapshotFromRow(row) : undefined
+    }
+
+    listRateLimits(limit = 100): RateLimitSnapshot[] {
+        const rows = this.db.prepare('SELECT * FROM rate_limits ORDER BY id DESC LIMIT ?').all(limit) as unknown as RateLimitRow[]
+        return rows.map(snapshotFromRow).reverse()
+    }
+
+    /**
+     * Persist a reading. Unchanged readings only refresh the timestamp of the
+     * latest row, so the table records changes rather than every API call.
+     */
+    recordRateLimits(limits: RateLimits, taskId: string | null): RateLimitSnapshot {
+        const ts = now()
+        const latest = this.latestRateLimits()
+        if (
+            latest &&
+            latest.status === limits.status &&
+            sameWindow(latest.five_hour, limits.five_hour) &&
+            sameWindow(latest.seven_day, limits.seven_day)
+        ) {
+            this.db.prepare('UPDATE rate_limits SET ts = ?, task_id = ? WHERE id = ?').run(ts, taskId, latest.id)
+            return { ...latest, ts, task_id: taskId }
+        }
+        const result = this.db
+            .prepare(
+                `INSERT INTO rate_limits (ts, task_id, status, five_hour_used, five_hour_resets_at, seven_day_used, seven_day_resets_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+                ts,
+                taskId,
+                limits.status,
+                limits.five_hour?.used ?? null,
+                limits.five_hour?.resets_at ?? null,
+                limits.seven_day?.used ?? null,
+                limits.seven_day?.resets_at ?? null
+            )
+        return { id: Number(result.lastInsertRowid), ts, task_id: taskId, ...limits }
     }
 
     // ---- task events ------------------------------------------------------

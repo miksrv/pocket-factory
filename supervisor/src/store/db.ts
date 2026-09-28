@@ -53,6 +53,25 @@ const MIGRATIONS: string[] = [
         payload TEXT NOT NULL                   -- JSON
     );
     CREATE INDEX task_events_task ON task_events(task_id, id);
+    `,
+    // v2: the subscription is metered in tokens and rolling windows, not money.
+    `
+    ALTER TABLE tasks ADD COLUMN cache_read_tokens     INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE tasks ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE tasks ADD COLUMN window_5h_delta       REAL;   -- share of the 5-hour window this task consumed (0..1), null if unknown
+
+    -- Rate-limit status as reported by the CLI after API calls (one row per change).
+    CREATE TABLE rate_limits (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts                  TEXT NOT NULL,
+        task_id             TEXT,                   -- null for a manual probe
+        status              TEXT NOT NULL,          -- allowed | allowed_warning | rejected
+        five_hour_used      REAL,                   -- 0..1
+        five_hour_resets_at TEXT,
+        seven_day_used      REAL,                   -- 0..1
+        seven_day_resets_at TEXT
+    );
+    CREATE INDEX rate_limits_ts ON rate_limits(ts);
     `
 ]
 
