@@ -6,14 +6,16 @@
     "license": "MIT",
     "packageManager": "yarn@4.9.2",
     "workspaces": [
-        "supervisor"
+        "supervisor",
+        "web"
     ],
     "scripts": {
         "dev": "yarn workspace @pocket-factory/supervisor dev",
         "build": "yarn workspaces foreach -A run build",
         "typecheck": "yarn workspaces foreach -A run typecheck",
         "up": "docker compose up -d --build",
-        "logs": "docker compose logs -f supervisor"
+        "logs": "docker compose logs -f supervisor",
+        "dev:web": "yarn workspace @pocket-factory/web dev"
     },
     "engines": {
         "node": ">=22"

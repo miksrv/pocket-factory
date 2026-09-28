@@ -114,7 +114,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const conversation = this.store.getConversation(task.conversation_id)!
         const started = this.store.updateTask(task.id, { status: 'running', started_at: new Date().toISOString() })
         this.emit('task', started)
-        this.store.addEvent(task.id, 'status', { status: 'running' })
+        this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running' }))
 
         const handle = runClaude({
             prompt: task.prompt,
