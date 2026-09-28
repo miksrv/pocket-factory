@@ -51,7 +51,7 @@ export function statusRoutes(): Hono<Env> {
             },
             github: { cli: gh, token: Boolean(process.env.GH_TOKEN) },
             git: { version: git },
-            telegram: { allowed_user_ids: [...config.telegram.allowedUserIds] },
+            telegram: { enabled: Boolean(config.telegram.botToken), allowed_user_ids: [...config.telegram.allowedUserIds] },
             stt: { enabled: Boolean(config.stt.groqApiKey), model: config.stt.model, language: config.stt.language ?? null },
             paths: { data: config.paths.dataRoot, workspaces: config.paths.workspacesRoot, config: config.paths.configRoot },
             max_concurrent_sessions: config.maxConcurrentSessions,

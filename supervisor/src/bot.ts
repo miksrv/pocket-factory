@@ -42,6 +42,7 @@ function footer(task: Task): string {
 }
 
 export function createBot(config: Config, tasks: TaskService): Bot {
+    if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
 
     const conversationFor = (ctx: Context) => tasks.conversationFor('telegram', String(ctx.chat!.id))

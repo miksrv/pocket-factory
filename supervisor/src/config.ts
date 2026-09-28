@@ -2,7 +2,8 @@ import path from 'node:path'
 
 export interface Config {
     telegram: {
-        botToken: string
+        /** Empty = Telegram disabled; the factory runs web-only. */
+        botToken: string | undefined
         allowedUserIds: Set<number>
     }
     claude: {
@@ -59,13 +60,14 @@ function number(name: string, fallback: number): number {
 }
 
 export function loadConfig(): Config {
+    const botToken = optional('TELEGRAM_BOT_TOKEN')
     const allowedUserIds = new Set(
-        required('TELEGRAM_ALLOWED_USER_IDS')
+        (optional('TELEGRAM_ALLOWED_USER_IDS') ?? '')
             .split(',')
             .map((id) => Number(id.trim()))
             .filter((id) => Number.isInteger(id) && id > 0)
     )
-    if (allowedUserIds.size === 0) {
+    if (botToken && allowedUserIds.size === 0) {
         throw new Error('TELEGRAM_ALLOWED_USER_IDS must contain at least one numeric Telegram user id')
     }
 
@@ -73,7 +75,7 @@ export function loadConfig(): Config {
 
     return {
         telegram: {
-            botToken: required('TELEGRAM_BOT_TOKEN'),
+            botToken,
             allowedUserIds
         },
         claude: {

@@ -26,6 +26,7 @@ export function SettingsPage() {
                         <Row k="git" v={s.git.version ?? 'not found'} />
                     </Section>
                     <Section title="Telegram">
+                        <Row k="Bot" v={s.telegram.enabled ? 'enabled (long polling)' : 'disabled — TELEGRAM_BOT_TOKEN not set, web only'} />
                         <Row k="Allowed user ids" v={s.telegram.allowed_user_ids.join(', ')} mono />
                         <Row k="Voice input" v={s.stt.enabled ? `${s.stt.model}${s.stt.language ? ` · ${s.stt.language}` : ' · autodetect'}` : 'disabled (GROQ_API_KEY missing)'} />
                     </Section>
@@ -37,7 +38,7 @@ export function SettingsPage() {
                     <Section title={`Workspaces (${s.workspaces.length})`}>
                         <div className="row wrap">
                             {s.workspaces.map((w) => (
-                                <span key={w.name} className="badge tag" title={w.git ? 'git repository' : 'not a git repository'}>
+                                <span key={w.name} className="badge plain" title={w.git ? 'git repository' : 'not a git repository'}>
                                     {w.git ? '' : '⚠ '}
                                     {w.name}
                                 </span>
@@ -61,11 +62,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
     return (
-        <div className="row" style={{ padding: '4px 0' }}>
-            <span className="dim" style={{ width: 180, flexShrink: 0 }}>
-                {k}
-            </span>
-            <span className={mono ? 'mono small' : ''}>{v}</span>
+        <div className="kv">
+            <span>{k}</span>
+            <span className={mono ? 'small' : ''}>{v}</span>
         </div>
     )
 }

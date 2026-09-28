@@ -66,7 +66,7 @@ export interface Status {
     }
     github: { cli: string | null; token: boolean }
     git: { version: string | null }
-    telegram: { allowed_user_ids: number[] }
+    telegram: { enabled: boolean; allowed_user_ids: number[] }
     stt: { enabled: boolean; model: string; language: string | null }
     paths: { data: string; workspaces: string; config: string }
     max_concurrent_sessions: number

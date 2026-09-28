@@ -18,6 +18,7 @@ yarn install                 # Yarn 4 workspaces (corepack)
 yarn typecheck               # tsc --noEmit for all workspaces
 yarn build                   # supervisor → supervisor/dist, web → web/dist
 yarn dev                     # supervisor + API on :8080 on the host (reads .env itself, CLAUDE_CONFIG_DIR=data/claude)
+TELEGRAM_BOT_TOKEN= yarn dev # web-only: use this while the container runs, or Telegram answers 409 to both pollers
 yarn dev:web                 # Vite dev server on :5173 proxying /api → :8080
 docker compose up -d --build # build image + (re)start the supervisor container
 docker compose logs -f supervisor
@@ -70,6 +71,9 @@ the Chat page keeps an SSE connection open, so give it a timeout.
 - Single language: TypeScript for supervisor, API and UI. No Python service (asked and answered:
   it would add a runtime and duplicate the types for nothing).
 - Web UI is a Vite SPA served by the supervisor, not a separate Next.js service: one container, no SSR.
+- UI theme: light, Guild.ai-like (paper background, dot grid, mono font, pastel pills, icon tiles).
+  Tokens live in `web/src/styles.css`; no UI framework, keep it that way.
+- Telegram is optional (`TELEGRAM_BOT_TOKEN` empty = web-only).
 - Project files carry `hosts:` (SSH targets) for sub-agents; keys live in `data/secrets/ssh`, mounted
   read-only. GitHub still goes through the PAT, never SSH.
 - The owner decides when to commit — never commit unprompted. When asked to commit: no

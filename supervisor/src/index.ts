@@ -44,7 +44,11 @@ async function main(): Promise<void> {
             void history.commitAll(`agent: ${task.prompt.slice(0, 60).replace(/\s+/g, ' ')} (task ${task.id.slice(0, 8)})`)
         }
     })
-    const bot = createBot(config, tasks)
+    // Telegram is optional: without a token the factory is web-only (also
+    // handy for a second dev instance next to the container, which would
+    // otherwise fight over long polling).
+    const bot = config.telegram.botToken ? createBot(config, tasks) : null
+    if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({
         config,
@@ -56,20 +60,22 @@ async function main(): Promise<void> {
         presets: new Presets(config.presetsDir)
     })
 
+    const shutdown = (signal: string) => {
+        log.info(`${signal} received, stopping`)
+        void bot?.stop()
+        void tasks.shutdown().then(() => process.exit(0))
+    }
+    process.once('SIGINT', () => shutdown('SIGINT'))
+    process.once('SIGTERM', () => shutdown('SIGTERM'))
+
+    if (!bot) return
+
     // Registers the command menu in Telegram, so the client autocompletes them.
     await bot.api.setMyCommands([
         { command: 'new', description: 'Start a fresh session' },
         { command: 'stop', description: 'Cancel the running task' },
         { command: 'status', description: 'What is going on' }
     ])
-
-    const shutdown = (signal: string) => {
-        log.info(`${signal} received, stopping`)
-        void bot.stop()
-        void tasks.shutdown().then(() => process.exit(0))
-    }
-    process.once('SIGINT', () => shutdown('SIGINT'))
-    process.once('SIGTERM', () => shutdown('SIGTERM'))
 
     await bot.start({
         onStart: (info) => log.info(`polling as @${info.username}`)

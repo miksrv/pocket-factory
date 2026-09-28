@@ -110,7 +110,8 @@ yarn dev:web                  # Vite dev server on :5173, proxies /api to :8080
 
 `CLAUDE_CONFIG_DIR` defaults to `data/claude`, so the host CLI uses the same agents, skills and
 transcripts as the container; the OAuth token in `.env` logs it in. Keep
-`CLAUDE_PERMISSION_MODE=acceptEdits` outside the container.
+`CLAUDE_PERMISSION_MODE=acceptEdits` outside the container. Telegram allows one poller per bot
+token, so while the container is running start the host copy web-only: `TELEGRAM_BOT_TOKEN= yarn dev`.
 
 ## License
 
