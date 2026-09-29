@@ -7,16 +7,10 @@ description: Connect a new repository to the factory by writing its project file
 
 ## Steps
 
-1. Find the checkout under `/data/workspaces/`. If the name is ambiguous or
-   missing, list the candidates and ask.
-2. Inspect it: README, package manifests, CI config, existing branches, PR
-   templates, `CLAUDE.md`. Derive stack, default branch, lint/test/build
-   commands, branch naming in use.
-3. Ask the owner, in one message, only what you could not infer: PR target
-   branch if unclear, tracker and workflow, hosts the project runs on, any
-   rule they want enforced.
-4. Write `/data/config/projects/<slug>.md` in the format below. Keep the
-   free-form notes short and concrete.
+1. Find the checkout under `/data/workspaces/`. If the name is ambiguous or missing, list the candidates and ask.
+2. Inspect it: README, package manifests, CI config, existing branches, PR templates, `CLAUDE.md`. Derive stack, default branch, lint/test/build commands, branch naming in use.
+3. Ask the owner, in one message, only what you could not infer: PR target branch if unclear, tracker and workflow (and what to do with a ticket once its PR is open: which status, tag or assignee), hosts the project runs on and which key in `/data/secrets/ssh/` opens each (list the file names there, never their contents), any rule they want enforced.
+4. Write `/data/config/projects/<slug>.md` in the format below, where `<slug>` is the checkout's directory name exactly as it is under `/data/workspaces/` (case included): tasks name projects by that directory. Keep the free-form notes short and concrete.
 5. Show the owner the file and confirm.
 
 ## Project file format
@@ -29,15 +23,14 @@ path: /data/workspaces/astronomy-portal
 repo: https://github.com/owner/astronomy-portal
 default_branch: main
 pr_base: main
-branch_prefix: feature/
 skill: feature-to-pr
 tracker:
   type: github        # github | clickup | trac | jira | none
   url: https://github.com/owner/astronomy-portal/issues
-  review_state: Review
 hosts:
   - name: production
-    ssh: deploy@203.0.113.10
+    ssh: deploy@203.0.113.10        # user@host or user@host:port
+    key: id_ed25519                 # file name in /data/secrets/ssh, optional
     path: /srv/astronomy-portal
     notes: docker compose; restart with `docker compose up -d`
 checks:
@@ -50,6 +43,4 @@ Free-form notes for the agent: conventions, gotchas, what never to touch,
 how deploys work, where the docs are.
 ```
 
-`path` defaults to `/data/workspaces/<slug>`. `hosts` are reachable with the
-SSH keys the owner placed in `/data/secrets/ssh/` (see README); never copy
-keys anywhere.
+`path` defaults to `/data/workspaces/<slug>`. `skill` names the workflow for development tasks: `feature-to-pr` by default, or one installed from a preset (for example `fullstack-feature` for a `client/` + `server/` layout); list what exists in `/data/claude/skills/` and pick the one whose description matches. Branches are `feature/…` for features and `fix/…` for defects unless the repository says otherwise; write a convention into the notes rather than a field. The same goes for the tracker: `tracker` holds only the type and the URL; what happens to a ticket after its PR is open (the status to set, a tag, an assignee) is a sentence in the notes. `hosts` are reachable only with the SSH keys the owner placed in `/data/secrets/ssh/` (`key` picks one; passwords are not supported); never copy keys anywhere, never write a key or password into a project file.
