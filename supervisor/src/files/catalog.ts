@@ -18,18 +18,19 @@ export interface CatalogEntry {
     path: string
     frontmatter: Record<string, unknown>
     body: string
+    /** The file's frontmatter is not valid YAML; the UI must not save over it blindly. */
+    frontmatter_error?: string
     updated_at: string
     size: number
 }
 
-const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
+/** Letters of both cases: Claude Code's built-in agents (`Explore`, `Plan`) are overridden by a file of the same name. */
+const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 export class BadName extends Error {}
 export class NotFound extends Error {}
 
 export class Catalog {
-    /** Called after every save/remove with a commit-style message. */
-
     constructor(
         private readonly claudeDir: string,
         private readonly configDir: string
@@ -47,7 +48,7 @@ export class Catalog {
     }
 
     fileFor(kind: Kind, name: string): string {
-        if (!NAME.test(name)) throw new BadName(`Invalid ${kind} name "${name}": use a-z, 0-9, dot, dash, underscore`)
+        if (!NAME.test(name)) throw new BadName(`Invalid ${kind} name "${name}": use letters, digits, dot, dash, underscore`)
         return kind === 'skills' ? path.join(this.dirFor(kind), name, 'SKILL.md') : path.join(this.dirFor(kind), `${name}.md`)
     }
 
@@ -82,6 +83,7 @@ export class Catalog {
             path: file,
             frontmatter: doc.frontmatter,
             body: doc.body,
+            ...(doc.frontmatter_error ? { frontmatter_error: doc.frontmatter_error } : {}),
             updated_at: stat.mtime.toISOString(),
             size: stat.size
         }
@@ -94,7 +96,6 @@ export class Catalog {
         // Claude Code requires `name` in agent and skill frontmatter and it must match the file.
         if (kind !== 'projects') frontmatter.name = name
         if (kind === 'projects' && !frontmatter.slug) frontmatter.slug = name
-        const existed = fs.existsSync(file)
         fs.writeFileSync(file, serializeMarkdown({ frontmatter, body: doc.body }))
         return this.get(kind, name)
     }

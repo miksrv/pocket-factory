@@ -27,9 +27,12 @@ export function chunk(text: string): string[] {
         if (cut < budget / 2) cut = budget
         let head = rest.slice(0, cut)
         rest = rest.slice(cut).trimStart()
-        // Which fence is open at the end of this chunk?
+        // Which fence is open at the end of this chunk? The head already
+        // starts with the re-opened fence when one carried over, so the
+        // scan starts from a clean state.
+        openFence = null
         for (const line of head.split('\n')) {
-            const fence = line.match(/^\s*```(\w*)\s*$/)
+            const fence = line.match(/^\s*```(\S*)/)
             if (fence) openFence = openFence === null ? fence[1] : null
         }
         if (openFence !== null) {
@@ -150,7 +153,8 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 'Pocket Factory is online.',
                 '',
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
-                '/new — start a fresh session',
+                '/new [project] — start a fresh session, optionally inside a project checkout',
+                '/project <name> — bind this chat to a project (its MCP servers, agents and rules apply)',
                 '/stop — cancel the running task',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)'
@@ -158,9 +162,31 @@ export function createBot(config: Config, tasks: TaskService): Bot {
         )
     })
 
+    // `/new` forgets the session; `/new <project>` also starts the next one inside that checkout.
     bot.command('new', async (ctx) => {
-        tasks.newConversation('telegram', String(ctx.chat.id))
-        await ctx.reply('Fresh session. Next message starts from scratch.')
+        const project = ctx.match.trim() || null
+        if (project && !tasks.hasProject(project)) {
+            await ctx.reply(`Unknown project "${project}". Projects are the files in /data/config/projects; say "onboard project ${project}" to create one.`)
+            return
+        }
+        tasks.newConversation('telegram', String(ctx.chat.id), null, project)
+        await ctx.reply(project ? `Fresh session in ${project}. Next message runs from its checkout.` : 'Fresh session. Next message starts from scratch.')
+    })
+
+    // `/project <name>` binds the current chat; the Claude Code session restarts in the project's directory.
+    bot.command('project', async (ctx) => {
+        const conversation = conversationFor(ctx)
+        const project = ctx.match.trim()
+        if (!project) {
+            await ctx.reply(conversation.project ? `This chat works in ${conversation.project}. /project <name> to switch, /project - to unbind.` : 'This chat is not bound to a project. /project <name> binds it.')
+            return
+        }
+        try {
+            const updated = tasks.setProject(conversation.id, project === '-' ? null : project)
+            await ctx.reply(updated.project ? `Bound to ${updated.project}. The next task runs from its checkout in a fresh session.` : 'Unbound. The next task runs from the workspaces root.')
+        } catch (error) {
+            await ctx.reply(`❌ ${error instanceof Error ? error.message : error}`)
+        }
     })
 
     bot.command('stop', async (ctx) => {
@@ -180,6 +206,7 @@ export function createBot(config: Config, tasks: TaskService): Bot {
         await ctx.reply(
             [
                 `Running task: ${active ? 'yes' : 'no'}`,
+                `Project: ${conversation.project ?? 'none (workspaces root)'}`,
                 `Session: ${conversation.session_id ?? 'none'}`,
                 `Workspaces: ${config.paths.workspacesRoot}`,
                 `Model: ${config.claude.model ?? 'CLI default'}`,
@@ -218,9 +245,9 @@ export function createBot(config: Config, tasks: TaskService): Bot {
 
     const submit = async (ctx: Context, prompt: string) => {
         const conversation = conversationFor(ctx)
-        const queuedBefore = tasks.activeTask(conversation.id)
+        const waits = tasks.willWait(conversation.id)
         tasks.submit(conversation.id, 'telegram', prompt)
-        await ctx.reply(queuedBefore ? '⏳ Queued after the running task…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…')
+        await ctx.reply(waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…')
     }
 
     bot.on('message:text', async (ctx) => {
@@ -241,13 +268,14 @@ export function createBot(config: Config, tasks: TaskService): Bot {
             try {
                 const file = await ctx.api.getFile(media.file_id)
                 if (!file.file_path) throw new Error('Telegram returned no file path')
-                const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`)
+                const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(60_000) })
                 if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
                 const audio = Buffer.from(await response.arrayBuffer())
-                const text = await transcribe(audio, file.file_path.split('/').pop() ?? 'voice.ogg', {
+                const text = await transcribe(audio, file.file_path, {
                     apiKey,
                     model: config.stt.model,
-                    language: config.stt.language
+                    language: config.stt.language,
+                    mimeType: media.mime_type
                 })
                 if (!text) {
                     await ctx.reply('Could not make out any words in that recording.')

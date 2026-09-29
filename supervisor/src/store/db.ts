@@ -94,6 +94,12 @@ const MIGRATIONS: string[] = [
         value      TEXT NOT NULL,               -- JSON
         updated_at TEXT NOT NULL
     );
+    `,
+    // v6: a task interrupted by a supervisor restart goes back to the queue and
+    // resumes its session; the counter bounds how often (a task that keeps
+    // crashing the supervisor must not loop).
+    `
+    ALTER TABLE tasks ADD COLUMN restarts INTEGER NOT NULL DEFAULT 0;
     `
 ]
 

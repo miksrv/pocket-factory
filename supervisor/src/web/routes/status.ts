@@ -33,6 +33,14 @@ function toolVersions(): Promise<[string | null, string | null, string | null]> 
     return versions.value
 }
 
+/** Owners with a token of their own (GH_TOKEN_<OWNER>), as the env suffix lower-cased. */
+function tokenOwners(): string[] {
+    return Object.keys(process.env)
+        .filter((key) => key.startsWith('GH_TOKEN_') && process.env[key])
+        .map((key) => key.slice('GH_TOKEN_'.length).toLowerCase())
+        .sort()
+}
+
 export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
@@ -61,7 +69,7 @@ export function statusRoutes(): Hono<Env> {
                 config_dir: config.claude.configDir,
                 logged_in: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) || fs.existsSync(path.join(config.claude.configDir, '.credentials.json'))
             },
-            github: { cli: gh, token: Boolean(process.env.GH_TOKEN) },
+            github: { cli: gh, token: Boolean(process.env.GH_TOKEN), owners: tokenOwners() },
             git: { version: git },
             telegram: { enabled: Boolean(config.telegram.botToken), allowed_user_ids: [...config.telegram.allowedUserIds] },
             stt: { enabled: Boolean(config.stt.groqApiKey), model: config.stt.model, language: config.stt.language ?? null },

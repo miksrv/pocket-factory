@@ -2,12 +2,29 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
+import { type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { createLogger } from '../logger.js'
 import type { Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
 
 const log = createLogger('tasks')
+
+/**
+ * What the session manager needs to know about projects and transcripts;
+ * provided by the catalog and the transcript index so that this module
+ * stays free of file-format details.
+ */
+export interface Workspace {
+    /** Checkout directory of a project slug, or null when the project or its directory does not exist. */
+    projectPath: (slug: string) => string | null
+    /** MCP servers a project's checkout declares (`.mcp.json` names) and the ones its project file allows (`mcp:`), if restricted. */
+    projectMcp: (slug: string) => { declared: string[]; allowed: string[] | null }
+    /** Claude Code's directory slug of the cwd a session was recorded under, or null when the transcript is unknown. */
+    sessionWorkspace: (sessionId: string) => string | null
+}
+
+/** Claude Code names a session's directory after its cwd with every non-alphanumeric character as "-". */
+export const claudeSlug = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-')
 
 export interface TaskServiceEvents {
     /** A task row changed (queued → running → done / failed / cancelled). */
@@ -24,6 +41,22 @@ const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** One Haiku turn should not take longer than this; a hung probe would block `/usage refresh` for good. */
 const PROBE_TIMEOUT_MS = 5 * 60_000
+
+/**
+ * How many supervisor restarts a task survives: it goes back to the queue and
+ * resumes its session that many times, then fails. One is enough for a deploy
+ * or a reboot; a task that keeps taking the supervisor down must not loop.
+ */
+const MAX_RESTARTS = 1
+
+/**
+ * Variables the CLI (and so every Bash call of the agent) must not see: they
+ * belong to the supervisor, not to the work. Compose hands the whole .env to
+ * the container; a prompt injection that reads `env` would otherwise walk
+ * away with the bot token and the UI password. GitHub tokens and MCP
+ * secrets (`${VAR}` in mcp.json) stay, the agent needs them.
+ */
+const PRIVATE_ENV = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USER_IDS', 'WEB_AUTH_USER', 'WEB_AUTH_PASSWORD', 'GROQ_API_KEY']
 
 /**
  * Which workspace a tool call touches: the first workspace directory name
@@ -49,7 +82,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly running = new Map<string, RunHandle>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
-    /** Tasks found `running` at startup, failed by the store; announced once a listener can deliver. */
+    /** Tasks found `running` at startup and failed by the store (restart limit reached); announced once a listener can deliver. */
     private readonly orphaned: Task[]
     private ticking = false
     private stopped = false
@@ -58,14 +91,24 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     constructor(
         private readonly store: Store,
-        private readonly config: Config
+        private readonly config: Config,
+        private readonly workspace: Workspace
     ) {
         super()
-        this.orphaned = store.failOrphanedTasks()
-        for (const task of this.orphaned) {
+        // Tasks that were running when the previous supervisor stopped: their
+        // CLI is gone, but the conversation remembers the session, so the run
+        // continues where the transcript ends (the prompt is sent once more
+        // to the resumed session). Tasks over the restart limit fail instead.
+        const { requeued, failed } = store.recoverOrphanedTasks(MAX_RESTARTS)
+        for (const task of requeued) {
+            store.addEvent(task.id, 'status', { status: 'queued', note: 'supervisor restarted while the task was running; resuming the session' })
+        }
+        for (const task of failed) {
             store.addEvent(task.id, 'error', { status: 'failed', error: task.error ?? undefined })
         }
-        if (this.orphaned.length > 0) log.warn(`${this.orphaned.length} task(s) were running when the supervisor died; marked failed`)
+        this.orphaned = failed
+        if (requeued.length > 0) log.warn(`${requeued.length} task(s) were running when the supervisor stopped; re-queued`)
+        if (failed.length > 0) log.warn(`${failed.length} task(s) hit the restart limit; marked failed`)
         // Tasks queued before a restart are still queued; pick them up.
         queueMicrotask(() => this.tick())
     }
@@ -84,8 +127,38 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.store.findConversation(channel, externalId) ?? this.store.createConversation(channel, externalId)
     }
 
-    newConversation(channel: Channel, externalId: string | null, title: string | null = null): Conversation {
-        return this.store.createConversation(channel, externalId, title)
+    newConversation(channel: Channel, externalId: string | null, title: string | null = null, project: string | null = null): Conversation {
+        return this.store.createConversation(channel, externalId, title, project)
+    }
+
+    /**
+     * Bind a conversation to a project (or unbind with null). The next task
+     * runs from that project's checkout, so its .mcp.json, agents, skills
+     * and CLAUDE.md apply; the Claude Code session cannot follow a cwd
+     * change, so the conversation forgets its session id.
+     */
+    setProject(conversationId: string, project: string | null): Conversation {
+        const conversation = this.store.getConversation(conversationId)
+        if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
+        if (project && !this.workspace.projectPath(project)) throw new Error(`Unknown project "${project}" or its checkout is missing`)
+        if (this.activeTask(conversationId)) throw new Error('a task is running in this conversation; wait for it to finish')
+        if (conversation.project !== project) this.store.updateConversation(conversationId, { project, session_id: null })
+        return this.store.getConversation(conversationId)!
+    }
+
+    /** A project file exists and its checkout is on disk. */
+    hasProject(slug: string): boolean {
+        return this.workspace.projectPath(slug) !== null
+    }
+
+    /** Where a conversation's tasks run: the project's checkout, else the workspaces root. */
+    cwdFor(conversation: Conversation): string {
+        return (conversation.project && this.workspace.projectPath(conversation.project)) || this.config.paths.workspacesRoot
+    }
+
+    /** MCP servers of the last session per project (or the root), as the CLI reported them. */
+    mcpStatus(): Record<string, McpServerStatus[]> {
+        return this.store.getMeta<Record<string, McpServerStatus[]>>('claude.mcp') ?? {}
     }
 
     conversationOf(task: Task): Conversation | undefined {
@@ -101,7 +174,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         // from the conversation: one session may serve several projects in turn.
         const task = this.store.createTask(conversationId, source, prompt)
         if (!conversation.title) {
-            this.store.updateConversation(conversationId, { title: prompt.slice(0, 80) })
+            this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
         log.info(`queued ${task.id} (${source}): ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}`)
         this.emit('task', task)
@@ -112,6 +185,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** Returns the running task of a conversation, if any. */
     activeTask(conversationId: string): Task | undefined {
         return this.store.listTasks({ conversationId, status: 'running', limit: 1 })[0]
+    }
+
+    /** Whether a task submitted now waits: this conversation is busy or queued, or every session slot is taken. */
+    willWait(conversationId: string): boolean {
+        if (this.running.size >= this.config.maxConcurrentSessions) return true
+        return this.store.listTasks({ conversationId, status: 'running', limit: 1 }).length > 0 || this.store.listTasks({ conversationId, status: 'queued', limit: 1 }).length > 0
     }
 
     runningTaskIds(): string[] {
@@ -133,10 +212,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return false
     }
 
-    /** Stop every task and wait for the CLIs to exit (SIGKILL follows after the runner's grace period). */
+    /**
+     * Stop every CLI and wait for it to exit (SIGKILL follows after the
+     * runner's grace period). Running tasks are not cancelled: they stay
+     * `running` in the store and the next supervisor re-queues them.
+     */
     async shutdown(): Promise<void> {
         this.stopped = true
-        for (const id of this.running.keys()) this.stop(id)
+        for (const handle of this.running.values()) handle.kill()
         await Promise.allSettled([...this.running.values()].map((handle) => handle.result))
     }
 
@@ -184,10 +267,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             maxTurns: 1,
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
-            env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
+            env: this.agentEnv(),
             timeoutMs: PROBE_TIMEOUT_MS,
+            mcpConfig: this.mcpConfigFile(),
             onEvent: (event) => {
-                if (event.type === 'init') this.rememberTools(event.tools)
+                if (event.type === 'init') {
+                    this.rememberTools(event.tools)
+                    this.rememberMcp('.', event.mcpServers)
+                }
             }
         })
         this.probe = handle.result
@@ -202,9 +289,61 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.probe
     }
 
+    /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. */
+    private agentEnv(): NodeJS.ProcessEnv {
+        const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CONFIG_DIR: this.config.claude.configDir }
+        for (const name of PRIVATE_ENV) delete env[name]
+        return env
+    }
+
     /** Tool names the CLI announced at session start; the agent editor offers them as choices. */
     tools(): string[] {
         return this.store.getMeta<string[]>('claude.tools') ?? []
+    }
+
+    private rememberMcp(scope: string, servers: McpServerStatus[]): void {
+        const all = this.mcpStatus()
+        const known = all[scope] ?? []
+        if (known.length === servers.length && known.every((s, i) => s.name === servers[i].name && s.status === servers[i].status)) return
+        this.store.setMeta('claude.mcp', { ...all, [scope]: servers })
+    }
+
+    /** `--mcp-config` for the factory's own servers, when the owner wrote the file. */
+    private mcpConfigFile(): string | undefined {
+        const file = path.join(this.config.paths.configRoot, 'mcp.json')
+        return fs.existsSync(file) ? file : undefined
+    }
+
+    /** Names of the owner's servers in `data/config/mcp.json`. */
+    private globalMcpServers(): string[] {
+        const file = this.mcpConfigFile()
+        if (!file) return []
+        try {
+            return Object.keys((JSON.parse(fs.readFileSync(file, 'utf8')) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {})
+        } catch {
+            return []
+        }
+    }
+
+    /**
+     * Per-session settings layer: `disabledMcpjsonServers` for a project that restricts its
+     * checkout's .mcp.json with `mcp:` (an allowlist does not work in -p mode), and a
+     * `permissions.allow` rule for every MCP server the session loads. Nobody can answer a
+     * permission prompt in -p mode, so without a rule every MCP tool call is denied
+     * ("Claude requested permissions … but you haven't granted it yet") whatever the
+     * permission mode; loading a server is the owner's consent to its tools.
+     */
+    private sessionSettings(project: string | null): Record<string, unknown> {
+        const settings: Record<string, unknown> = {}
+        const servers = new Set(this.globalMcpServers())
+        if (project) {
+            const { declared, allowed } = this.workspace.projectMcp(project)
+            const disabled = allowed ? declared.filter((name) => !allowed.includes(name)) : []
+            if (disabled.length) settings.disabledMcpjsonServers = disabled
+            for (const name of declared) if (!disabled.includes(name)) servers.add(name)
+        }
+        if (servers.size) settings.permissions = { allow: [...servers].map((name) => `mcp__${name}`) }
+        return settings
     }
 
     private rememberTools(tools: string[]): void {
@@ -260,6 +399,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      */
     private async attempt(task: Task, mayRetry: boolean): Promise<void> {
         const conversation = this.store.getConversation(task.conversation_id)!
+        const cwd = this.cwdFor(conversation)
+        // A session lives in the directory it started in: resuming it from another
+        // cwd fails, so a conversation that moved (its project was detected or set
+        // after the first task) starts a fresh session there instead of failing once.
+        if (conversation.session_id) {
+            const recorded = this.workspace.sessionWorkspace(conversation.session_id)
+            if (recorded && recorded !== claudeSlug(cwd)) {
+                log.info(`conversation ${conversation.id} moved to ${cwd}; session ${conversation.session_id} stays behind`)
+                this.store.updateConversation(conversation.id, { session_id: null })
+                conversation.session_id = null
+                this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running', note: `fresh session in ${cwd}` }))
+            }
+        }
 
         // The 5-hour reading before this task's first API call: the previous
         // snapshot if it is recent and from the same window (other Claude Code
@@ -274,19 +426,22 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
         const handle = runClaude({
             prompt: task.prompt,
-            cwd: this.config.paths.workspacesRoot,
+            cwd,
             resumeSessionId: conversation.session_id ?? undefined,
+            mcpConfig: this.mcpConfigFile(),
+            settings: this.sessionSettings(conversation.project),
             model: this.config.claude.model,
             maxTurns: this.config.claude.maxTurns,
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
-            env: { CLAUDE_CONFIG_DIR: this.config.claude.configDir },
+            env: this.agentEnv(),
             timeoutMs: this.config.claude.taskTimeoutMs,
             onEvent: (event) => {
                 sawOutput = true
                 const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
+                    this.rememberMcp(conversation.project ?? '.', event.mcpServers)
                     return
                 }
                 if (event.type === 'rate_limit') {
@@ -337,7 +492,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             })
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            if (this.stopRequested.has(task.id) || this.stopped) {
+            if (this.stopped && !this.stopRequested.has(task.id)) {
+                // Supervisor shutdown, not the owner's stop: leave the task
+                // `running` for the next process to re-queue (see constructor).
+                log.info(`task ${task.id} interrupted by shutdown; it resumes after the restart`)
+                return
+            }
+            if (this.stopRequested.has(task.id)) {
                 this.finish(task.id, { status: 'cancelled', error: message })
                 return
             }
@@ -371,4 +532,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         log.info(`${task.status} ${task.id}: ${task.num_turns} turns · ${fmtTokens(tokens)} tokens · ${Math.round(task.duration_ms / 1000)}s`)
         this.emit('task', task)
     }
+}
+
+const TITLE_MAX = 60
+
+/** A conversation title from its first prompt: the first line, cut at a word boundary. */
+export function titleFrom(prompt: string): string {
+    const line = prompt.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? ''
+    const text = line.replace(/\s+/g, ' ')
+    if (text.length <= TITLE_MAX) return text
+    const cut = text.slice(0, TITLE_MAX)
+    const atWord = cut.lastIndexOf(' ')
+    return (atWord > TITLE_MAX / 2 ? cut.slice(0, atWord) : cut).replace(/[\s,;:.\-–—]+$/, '') + '…'
 }

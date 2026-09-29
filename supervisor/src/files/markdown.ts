@@ -3,6 +3,8 @@ import YAML from 'yaml'
 export interface MarkdownDoc<T = Record<string, unknown>> {
     frontmatter: T
     body: string
+    /** Set when the frontmatter block exists but is not valid YAML; `frontmatter` is then `{}`. */
+    frontmatter_error?: string
 }
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
@@ -12,13 +14,19 @@ export function parseMarkdown<T = Record<string, unknown>>(source: string): Mark
     const match = source.match(FRONTMATTER)
     if (!match) return { frontmatter: {} as T, body: source }
     let frontmatter: unknown
+    let error: string | undefined
     try {
         frontmatter = YAML.parse(match[1]) ?? {}
-    } catch {
+    } catch (e) {
         frontmatter = {}
+        error = e instanceof Error ? e.message.split('\n')[0] : String(e)
     }
-    if (typeof frontmatter !== 'object' || Array.isArray(frontmatter)) frontmatter = {}
-    return { frontmatter: frontmatter as T, body: source.slice(match[0].length) }
+    if (typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
+        frontmatter = {}
+        error ??= 'frontmatter is not a mapping'
+    }
+    const body = source.slice(match[0].length)
+    return error ? { frontmatter: frontmatter as T, body, frontmatter_error: error } : { frontmatter: frontmatter as T, body }
 }
 
 export function serializeMarkdown(doc: MarkdownDoc<unknown>): string {

@@ -5,6 +5,9 @@ import type { Conversation, Task, TaskEvent } from '../../store/index.js'
 import type { Env } from '../context.js'
 import { cursorOf } from './cursor.js'
 
+/** Absent, null or a string: what an optional text field of a request body may be. */
+const isOptionalString = (v: unknown): v is string | null | undefined => v === undefined || v === null || typeof v === 'string'
+
 export function conversationRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
@@ -20,10 +23,28 @@ export function conversationRoutes(): Hono<Env> {
         return conversation && !conversation.deleted_at ? conversation : undefined
     }
 
+    /** `project` binds the conversation to a checkout from the start: its tasks run there. */
     app.post('/', async (c) => {
         const { tasks } = c.get('app')
-        const body = (await c.req.json().catch(() => ({}))) as { title?: string }
-        return c.json(tasks.newConversation('web', null, body.title ?? null), 201)
+        const body = (await c.req.json().catch(() => ({}))) as { title?: unknown; project?: unknown }
+        if (!isOptionalString(body.title) || !isOptionalString(body.project)) return c.json({ error: 'title and project must be strings' }, 400)
+        const project = body.project?.trim() || null
+        if (project && !tasks.hasProject(project)) return c.json({ error: `unknown project "${project}" or its checkout is missing` }, 400)
+        return c.json(tasks.newConversation('web', null, body.title ?? null, project), 201)
+    })
+
+    /** Change the project of a conversation (null unbinds); refused while a task runs. The session starts afresh in the new cwd. */
+    app.patch('/:id', async (c) => {
+        const { tasks } = c.get('app')
+        const conversation = live(c)
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        const body = (await c.req.json().catch(() => ({}))) as { project?: unknown }
+        if (!isOptionalString(body.project)) return c.json({ error: 'project must be a string or null' }, 400)
+        try {
+            return c.json(tasks.setProject(conversation.id, body.project?.trim() || null))
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 409)
+        }
     })
 
     const PAGE = 20
@@ -89,7 +110,7 @@ export function conversationRoutes(): Hono<Env> {
         const { tasks, store } = c.get('app')
         const conversation = live(c)
         if (!conversation) return c.json({ error: 'conversation not found' }, 404)
-        const after = Number(c.req.query('after') ?? 0)
+        const after = Number(c.req.query('after')) || 0
 
         return streamSSE(c, async (stream) => {
             const send = (event: string, data: unknown) =>

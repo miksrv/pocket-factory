@@ -119,7 +119,13 @@ export function loadConfig(): Config {
             distDir: optional('WEB_DIST') ?? path.resolve(process.cwd(), 'web', 'dist')
         },
         presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),
-        maxConcurrentSessions: number('MAX_CONCURRENT_SESSIONS', 2),
-        logLevel: (optional('LOG_LEVEL') as Config['logLevel']) ?? 'info'
+        maxConcurrentSessions: Math.max(1, Math.floor(number('MAX_CONCURRENT_SESSIONS', 2))),
+        logLevel: logLevel(optional('LOG_LEVEL'))
     }
+}
+
+function logLevel(raw: string | undefined): Config['logLevel'] {
+    if (raw === undefined) return 'info'
+    if (raw === 'debug' || raw === 'info' || raw === 'warn' || raw === 'error') return raw
+    throw new Error(`LOG_LEVEL must be debug, info, warn or error, got "${raw}"`)
 }

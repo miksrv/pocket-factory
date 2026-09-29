@@ -1,66 +1,14 @@
 import { Hono } from 'hono'
 
-import { createLogger } from '../../logger.js'
 import type { Env } from '../context.js'
 
-const log = createLogger('models')
-
-export interface ModelInfo {
-    id: string
-    display_name: string
-    created_at: string
-    max_input_tokens: number | null
-    max_tokens: number | null
-}
-
-interface ModelsResponse {
-    data?: Array<{ id: string; display_name?: string; created_at?: string; max_input_tokens?: number; max_tokens?: number }>
-}
-
-const TTL = 60 * 60 * 1000
-let cache: { at: number; models: ModelInfo[] } | null = null
-
 /**
- * Models the subscription can use, from the Claude API's models list with
- * the same OAuth token the CLI runs on. Read-only metadata, cached for an
- * hour; an empty list means the token is missing or the call failed, and
- * the UI falls back to the CLI aliases.
+ * There is no model list endpoint: an agent file names a CLI alias (`sonnet`,
+ * `opus`, `haiku`, `fable`, `inherit`) and the CLI resolves it to the current
+ * model of the subscription. Listing models would mean calling the Claude API
+ * with the owner's token, which is the CLI's alone (SPEC §8), or spending
+ * turns on probes.
  */
-async function listModels(): Promise<ModelInfo[]> {
-    if (cache && Date.now() - cache.at < TTL) return cache.models
-    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN
-    if (!token) return []
-    try {
-        const response = await fetch('https://api.anthropic.com/v1/models?limit=100', {
-            headers: {
-                Authorization: `Bearer ${token}`,
-                'anthropic-beta': 'oauth-2025-04-20',
-                'anthropic-version': '2023-06-01'
-            },
-            signal: AbortSignal.timeout(15_000)
-        })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const body = (await response.json()) as ModelsResponse
-        const models = (body.data ?? []).map((m) => ({
-            id: m.id,
-            display_name: m.display_name ?? m.id,
-            created_at: m.created_at ?? '',
-            max_input_tokens: m.max_input_tokens ?? null,
-            max_tokens: m.max_tokens ?? null
-        }))
-        cache = { at: Date.now(), models }
-        return models
-    } catch (error) {
-        log.warn(`models list failed: ${error instanceof Error ? error.message : error}`)
-        return cache?.models ?? []
-    }
-}
-
-export function modelRoutes(): Hono<Env> {
-    const app = new Hono<Env>()
-    app.get('/', async (c) => c.json(await listModels()))
-    return app
-}
 
 /**
  * The tools an agent file usually lists. The CLI's own session list is not

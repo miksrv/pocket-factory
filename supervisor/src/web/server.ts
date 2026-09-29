@@ -5,15 +5,18 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { basicAuth } from 'hono/basic-auth'
+import { bodyLimit } from 'hono/body-limit'
 
 import { createLogger } from '../logger.js'
 import { BadName, NotFound } from '../files/catalog.js'
 import type { AppContext, Env } from './context.js'
 import { conversationRoutes } from './routes/conversations.js'
 import { fileRoutes } from './routes/files.js'
+import { hostRoutes } from './routes/hosts.js'
+import { mcpRoutes } from './routes/mcp.js'
 import { activityRoutes } from './routes/activity.js'
 import { auditRoutes } from './routes/audit.js'
-import { modelRoutes, toolRoutes } from './routes/models.js'
+import { toolRoutes } from './routes/models.js'
 import { presetRoutes } from './routes/presets.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { statusRoutes } from './routes/status.js'
@@ -44,30 +47,38 @@ export function createApp(app: AppContext): Hono<Env> {
     // auth is the floor; put Tailscale / Caddy / Cloudflare Access in front.
     if (web.authPassword) {
         hono.use('*', basicAuth({ username: web.authUser, password: web.authPassword }))
-    } else {
-        // Without a password the API trusts whoever reaches the port, so it
-        // must at least refuse requests a page on another site could make:
-        // a DNS-rebinding page arrives with a foreign Host, a cross-site form
-        // or fetch with a foreign Origin. Local names are always allowed;
-        // WEB_ALLOWED_HOSTS adds a LAN or tunnel name.
-        hono.use('/api/*', async (c, next) => {
-            const host = hostnameOf(c.req.header('host'))
-            if (!isLocal(host) && !web.allowedHosts.has(host)) {
-                return c.json({ error: `host "${host}" not allowed; set WEB_ALLOWED_HOSTS or WEB_AUTH_PASSWORD` }, 403)
-            }
-            const origin = c.req.header('origin')
-            if (origin && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
-                let originHost = ''
-                try {
-                    originHost = new URL(origin).hostname.toLowerCase()
-                } catch {
-                    // malformed: treated as foreign
-                }
-                if (originHost !== host) return c.json({ error: 'cross-site request refused' }, 403)
-            }
-            await next()
-        })
     }
+
+    // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
+    hono.use('/api/*', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
+
+    hono.use('/api/*', async (c, next) => {
+        const host = hostnameOf(c.req.header('host'))
+        // Without a password the API trusts whoever reaches the port, so it
+        // must at least refuse a DNS-rebinding page, which arrives with a
+        // foreign Host. Local names are always allowed; WEB_ALLOWED_HOSTS
+        // adds a LAN or tunnel name. With a password the browser holds no
+        // credentials for a foreign name, so any Host is fine.
+        if (!web.authPassword && !isLocal(host) && !web.allowedHosts.has(host)) {
+            return c.json({ error: `host "${host}" not allowed; set WEB_ALLOWED_HOSTS or WEB_AUTH_PASSWORD` }, 403)
+        }
+        // A cross-site form or fetch carries a foreign Origin. Basic auth does
+        // not help here: the browser attaches the stored credentials to a
+        // cross-site POST as well, and the routes parse JSON whatever the
+        // content type, so the check applies in both modes. Requests without
+        // an Origin (curl, scripts) pass.
+        const origin = c.req.header('origin')
+        if (origin && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+            let originHost = ''
+            try {
+                originHost = new URL(origin).hostname.toLowerCase()
+            } catch {
+                // malformed: treated as foreign
+            }
+            if (originHost !== host) return c.json({ error: 'cross-site request refused' }, 403)
+        }
+        await next()
+    })
 
     hono.onError((error, c) => {
         if (error instanceof BadName) return c.json({ error: error.message }, 400)
@@ -85,8 +96,9 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/presets', presetRoutes())
     api.route('/audit', auditRoutes())
     api.route('/activity', activityRoutes())
-    api.route('/models', modelRoutes())
     api.route('/tools', toolRoutes())
+    api.route('/hosts', hostRoutes())
+    api.route('/mcp', mcpRoutes())
     api.route('/', fileRoutes())
     api.notFound((c) => c.json({ error: 'not found' }, 404))
     hono.route('/api', api)

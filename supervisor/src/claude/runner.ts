@@ -43,9 +43,17 @@ export type RunnerEvent = EventOrigin &
               durationMs?: number
           }
         | { type: 'rate_limit'; limits: RateLimits }
-        /** The CLI's session setup: which tools this run has. */
-        | { type: 'init'; tools: string[]; model: string }
+        /** The CLI's session setup: which tools this run has and which MCP servers it connected. */
+        | { type: 'init'; tools: string[]; model: string; mcpServers: McpServerStatus[] }
     )
+
+/** An MCP server as the CLI reported it at session start. */
+export interface McpServerStatus {
+    name: string
+    status: string
+    /** Where the CLI found it: `project` (.mcp.json), `user`, `--mcp-config` … */
+    source: string | null
+}
 
 /** One rolling window of the subscription: share used (0..1) and when it resets. */
 export interface RateLimitWindow {
@@ -73,10 +81,14 @@ export interface RunOptions {
     maxTurns: number
     maxBudgetUsd: number
     permissionMode: string
-    /** Extra environment for the CLI (CLAUDE_CONFIG_DIR etc.). */
+    /** The CLI's whole environment; defaults to the supervisor's own. */
     env?: NodeJS.ProcessEnv
     /** Wall-clock limit for the whole run; 0 = none. A hung tool otherwise holds a session slot forever. */
     timeoutMs?: number
+    /** Extra MCP servers for this run (`--mcp-config`), as a path to a JSON file. */
+    mcpConfig?: string
+    /** Settings for this run (`--settings`), e.g. `disabledMcpjsonServers`. */
+    settings?: Record<string, unknown>
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -147,6 +159,7 @@ interface StreamEvent {
     parent_tool_use_id?: string | null
     // system/init
     tools?: Array<string | { name?: string }>
+    mcp_servers?: Array<{ name?: string; status?: string; source?: string }>
     model?: string
     subagent_type?: string
     // system/task_* events
@@ -213,6 +226,8 @@ export function runClaude(options: RunOptions): RunHandle {
     ]
     if (options.model) args.push('--model', options.model)
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
+    if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig)
+    if (options.settings && Object.keys(options.settings).length) args.push('--settings', JSON.stringify(options.settings))
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 
@@ -220,7 +235,7 @@ export function runClaude(options: RunOptions): RunHandle {
     // spawned (a dev server started through Bash would otherwise outlive it).
     const child: ChildProcess = spawn('claude', args, {
         cwd: options.cwd,
-        env: { ...process.env, ...options.env },
+        env: options.env ?? process.env,
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: process.platform !== 'win32'
     })
@@ -296,7 +311,8 @@ export function runClaude(options: RunOptions): RunHandle {
                 sessionFromInit = event.session_id
                 resolveSession(event.session_id)
                 const tools = (event.tools ?? []).map((t) => (typeof t === 'string' ? t : (t.name ?? ''))).filter(Boolean)
-                if (tools.length) emit({ type: 'init', agent: null, parentToolUseId: null, tools, model: event.model ?? '' })
+                const mcpServers = (event.mcp_servers ?? []).filter((s) => s.name).map((s) => ({ name: s.name!, status: s.status ?? 'unknown', source: s.source ?? null }))
+                if (tools.length) emit({ type: 'init', agent: null, parentToolUseId: null, tools, model: event.model ?? '', mcpServers })
                 return
             }
             if (event.type === 'system' && event.subtype === 'task_started' && event.tool_use_id && event.subagent_type) {
@@ -396,7 +412,12 @@ export function runClaude(options: RunOptions): RunHandle {
             stderr.push(chunk.toString())
         })
 
-        child.on('error', reject)
+        child.on('error', (error) => {
+            // spawn failed (no `claude` on PATH): `close` never comes, so the
+            // timeout timer would otherwise fire against nothing.
+            for (const timer of timers) clearTimeout(timer)
+            reject(error)
+        })
         child.on('close', (code, signal) => {
             for (const timer of timers) clearTimeout(timer)
             const errText = stderr.join('').trim()

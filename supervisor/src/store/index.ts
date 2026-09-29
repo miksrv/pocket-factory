@@ -42,6 +42,8 @@ export interface Task {
     window_5h_delta: number | null
     /** Workspace the task worked in: set from the conversation or detected from tool calls. */
     project: string | null
+    /** How many supervisor restarts interrupted this task; it is re-queued while under the limit. */
+    restarts: number
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -198,7 +200,7 @@ export class Store {
         return this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as Conversation | undefined
     }
 
-    createConversation(channel: Channel, externalId: string | null, title: string | null = null): Conversation {
+    createConversation(channel: Channel, externalId: string | null, title: string | null = null, project: string | null = null): Conversation {
         const ts = now()
         const conversation: Conversation = {
             id: randomUUID(),
@@ -206,7 +208,7 @@ export class Store {
             external_id: externalId,
             title,
             session_id: null,
-            project: null,
+            project,
             created_at: ts,
             updated_at: ts,
             deleted_at: null
@@ -214,9 +216,9 @@ export class Store {
         this.db
             .prepare(
                 `INSERT INTO conversations (id, channel, external_id, title, session_id, project, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)`
+                 VALUES (?, ?, ?, ?, NULL, ?, ?, ?)`
             )
-            .run(conversation.id, channel, externalId, title, ts, ts)
+            .run(conversation.id, channel, externalId, title, project, ts, ts)
         return conversation
     }
 
@@ -268,6 +270,7 @@ export class Store {
             cache_creation_tokens: 0,
             window_5h_delta: null,
             project,
+            restarts: 0,
             created_at: now(),
             started_at: null,
             finished_at: null
@@ -352,14 +355,25 @@ export class Store {
             .all() as unknown as Task[]
     }
 
-    /** Tasks left in `running` by a previous supervisor process are lost; returns them as failed. */
-    failOrphanedTasks(): Task[] {
-        return this.db
+    /**
+     * Tasks left in `running` by a previous supervisor process: their CLI is
+     * gone. Those interrupted fewer than `maxRestarts` times go back to the
+     * queue (the next run resumes the conversation's session), the rest fail.
+     */
+    recoverOrphanedTasks(maxRestarts: number): { requeued: Task[]; failed: Task[] } {
+        const requeued = this.db
+            .prepare(
+                `UPDATE tasks SET status = 'queued', restarts = restarts + 1, started_at = NULL
+                 WHERE status = 'running' AND restarts < ? RETURNING *`
+            )
+            .all(maxRestarts) as unknown as Task[]
+        const failed = this.db
             .prepare(
                 `UPDATE tasks SET status = 'failed', error = 'supervisor restarted while the task was running',
                  finished_at = ? WHERE status = 'running' RETURNING *`
             )
             .all(now()) as unknown as Task[]
+        return { requeued, failed }
     }
 
     stats(): TaskStats {

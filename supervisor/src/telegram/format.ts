@@ -38,7 +38,7 @@ export function markdownToTelegramHtml(markdown: string): string {
     let codeBlock: string[] | null = null
 
     for (const line of lines) {
-        const fence = line.match(/^\s*```(\w*)\s*$/)
+        const fence = line.match(/^\s*```/)
         if (fence) {
             if (codeBlock === null) {
                 codeBlock = []
@@ -58,6 +58,10 @@ export function markdownToTelegramHtml(markdown: string): string {
             out.push(`<b>${inline(heading[1])}</b>`)
             continue
         }
+        if (/^\s*([-*_]\s*){3,}$/.test(line)) {
+            out.push('———')
+            continue
+        }
         const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/)
         if (bullet) {
             out.push(`${bullet[1]}• ${inline(bullet[2])}`)
@@ -66,10 +70,6 @@ export function markdownToTelegramHtml(markdown: string): string {
         const quote = line.match(/^\s*>\s?(.*)$/)
         if (quote) {
             out.push(`<i>${inline(quote[1])}</i>`)
-            continue
-        }
-        if (/^\s*([-*_]\s*){3,}$/.test(line)) {
-            out.push('———')
             continue
         }
         out.push(inline(line))

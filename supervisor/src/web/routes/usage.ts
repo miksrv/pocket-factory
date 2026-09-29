@@ -14,7 +14,7 @@ export function usageRoutes(): Hono<Env> {
         const { store, tasks } = c.get('app')
         return c.json({
             latest: tasks.limits() ?? null,
-            history: store.listRateLimits(Number(c.req.query('limit') ?? 100)),
+            history: store.listRateLimits(Math.min(Number(c.req.query('limit')) || 100, 1000)),
             probing: tasks.probing()
         })
     })
