@@ -4,7 +4,7 @@ import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
 import { Tile } from '../components/Tile'
 import { Button, Empty, PageHead, Stat, StatusBadge } from '../components/ui'
-import { api, fmt, type Task, taskTokens } from '../lib/api'
+import { api, fmt, type Status, type Task, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 export function OverviewPage() {
@@ -19,7 +19,7 @@ export function OverviewPage() {
     return (
         <div className="page">
             <PageHead title="Overview" sub="What the factory is doing right now.">
-                <Button to="/chat">New task</Button>
+                <Button variant="primary" to="/chat/new">New task</Button>
             </PageHead>
 
             <div className="card pad0">
@@ -70,7 +70,7 @@ export function OverviewPage() {
             <div className="card pad0">
                 <Check ok={Boolean(d?.claude.version)} label="Claude Code CLI" detail={d?.claude.version ?? 'not on PATH'} />
                 <Check ok={Boolean(d?.claude.logged_in)} label="Claude login" detail={d?.claude.logged_in ? 'CLAUDE_CODE_OAUTH_TOKEN present' : 'CLAUDE_CODE_OAUTH_TOKEN missing'} />
-                <Check ok={Boolean(d?.github.token)} label="GitHub" detail={d?.github.token ? `GH_TOKEN set · ${d.github.cli}` : 'GH_TOKEN missing — no push / PR'} />
+                <Check ok={Boolean(d && (d.github.token || d.github.owners.length))} label="GitHub" detail={githubDetail(d?.github)} />
                 <Check ok={Boolean(d?.telegram.enabled)} label="Telegram" detail={d?.telegram.enabled ? `bot enabled · ${d.telegram.allowed_user_ids.length} allowed user(s)` : 'TELEGRAM_BOT_TOKEN missing — web only'} warn />
                 <Check ok={Boolean(d?.stt.enabled)} label="Voice input" detail={d?.stt.enabled ? d.stt.model : 'GROQ_API_KEY missing — text only'} warn />
                 <Check ok={(d?.workspaces.length ?? 0) > 0} label="Workspaces" detail={`${d?.workspaces.length ?? 0} repositories in ${d?.paths.workspaces ?? '…'}`} />
@@ -117,6 +117,16 @@ function RecentTasks({ tasks, doneToday }: { tasks: Task[] | undefined; doneToda
             </div>
         </div>
     )
+}
+
+/** "GH_TOKEN + 2 owner tokens (acme, miksrv) · gh 2.x" or what is missing. */
+function githubDetail(github: Status['github'] | undefined): string {
+    if (!github) return '…'
+    const parts: string[] = []
+    if (github.token) parts.push('GH_TOKEN')
+    if (github.owners.length) parts.push(`${fmt.plural(github.owners.length, 'owner token')} (${github.owners.join(', ')})`)
+    if (!parts.length) return 'GH_TOKEN / GH_TOKEN_<OWNER> missing — no push / PR'
+    return `${parts.join(' + ')} · ${github.cli ?? 'gh not found'}`
 }
 
 function Check({ ok, label, detail, warn }: { ok: boolean; label: string; detail: string; warn?: boolean }) {

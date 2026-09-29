@@ -53,7 +53,7 @@ function Steps({ events, live }: { events: TaskEvent[]; live: boolean }) {
         if (details.current) details.current.open = live
     }, [live])
     return (
-        <details ref={details} className={`steps${live ? ' live' : ''}${errors ? ' has-error' : ''}`}>
+        <details ref={details} className={`steps${live ? ' steps-live' : ''}${errors ? ' has-error' : ''}`}>
             <summary>
                 <span className="steps-count">{fmt.plural(calls.length, 'step')}</span>
                 <span className="dim steps-names">{live ? lastStep(events) : names.slice(0, 6).join(' · ') + (names.length > 6 ? ' · …' : '')}</span>

@@ -21,6 +21,8 @@ export interface Task {
     window_5h_delta: number | null
     /** Workspace the task worked in, detected from its tool calls or set on the conversation. */
     project: string | null
+    /** Supervisor restarts that interrupted the task; it is re-queued once, then fails. */
+    restarts: number
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -53,14 +55,6 @@ export interface AgentActivity {
     running: number
     tokens: number
     last_active: string | null
-}
-
-export interface ModelInfo {
-    id: string
-    display_name: string
-    created_at: string
-    max_input_tokens: number | null
-    max_tokens: number | null
 }
 
 export interface Audit {
@@ -130,12 +124,6 @@ export interface RateLimits {
     seven_day: RateLimitWindow | null
 }
 
-export interface Usage {
-    latest: RateLimits | null
-    history: RateLimits[]
-    probing: boolean
-}
-
 export interface Status {
     stats: Stats
     running: string[]
@@ -149,7 +137,8 @@ export interface Status {
         config_dir: string
         logged_in: boolean
     }
-    github: { cli: string | null; token: boolean }
+    /** `token`: the fallback GH_TOKEN is set; `owners`: owners with a token of their own. */
+    github: { cli: string | null; token: boolean; owners: string[] }
     git: { version: string | null }
     telegram: { enabled: boolean; allowed_user_ids: number[] }
     stt: { enabled: boolean; model: string; language: string | null }
@@ -206,6 +195,35 @@ export interface SessionDetail extends SessionSummary {
     entries: TranscriptEntry[]
     offset: number
     stats: { total: number; messages: number; tokens_in: number; tokens_out: number }
+}
+
+export interface McpServer {
+    name: string
+    type: string
+    target: string
+    /** `${VAR}` references in the server's config and whether each is set for the supervisor. */
+    variables: Array<{ name: string; set: boolean }>
+}
+
+export interface McpStatus {
+    name: string
+    status: string
+    source: string | null
+}
+
+/** A server as written in mcp.json; header / env values the API withheld read `<kept>`. */
+export interface McpServerConfig {
+    type?: 'http' | 'sse' | 'stdio'
+    url?: string
+    command?: string
+    args?: string[]
+    headers?: Record<string, string>
+    env?: Record<string, string>
+}
+
+export interface McpOverview {
+    global: { file: string; servers: McpServer[]; config: Record<string, McpServerConfig>; error: string | null; last_session: McpStatus[] | null }
+    projects: Array<{ slug: string; path: string; checkout: boolean; servers: Array<McpServer & { enabled: boolean }>; allowed: string[] | null; error: string | null; last_session: McpStatus[] | null }>
 }
 
 export interface Preset {
@@ -271,12 +289,9 @@ export const api = {
 
     agentActivity: (period: AuditPeriod = '7d') => request<AgentActivity[]>(`/activity/agents?period=${period}`),
 
-    /** Models the subscription can use; empty when the token cannot list them. */
-    models: () => request<ModelInfo[]>('/models'),
     /** Tool names the CLI offers (from its last session start), or a built-in default list. */
     tools: () => request<{ common: string[]; reported: string[]; source: 'cli' | 'default' }>('/tools'),
 
-    usage: () => request<Usage>('/usage'),
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 
     conversations: (before?: Cursor, limit = 50) => request<Conversation[]>(`/conversations?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
@@ -284,13 +299,17 @@ export const api = {
     deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
     /** Tasks before the given one (the oldest shown), with their events. */
     conversationHistory: (id: string, before: Cursor) => request<ConversationHistory>(`/conversations/${id}/history?${cursorParams(new URLSearchParams(), before)}`),
-    createConversation: (title?: string) =>
-        request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
+    /** `project` binds the conversation to a checkout: its tasks run there, with the repository's MCP servers and agents. */
+    createConversation: (title?: string, project?: string | null) =>
+        request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({ title, project: project || undefined }) }),
+    /** Rebind (or unbind with null); refused while a task runs. The Claude Code session restarts in the new directory. */
+    setConversationProject: (id: string, project: string | null) => request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ project }) }),
+    mcp: () => request<McpOverview>('/mcp'),
+    saveMcp: (mcpServers: Record<string, McpServerConfig>) => request<{ saved: number }>('/mcp/global', { method: 'PUT', body: JSON.stringify({ mcpServers }) }),
     sendMessage: (id: string, prompt: string) =>
         request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt }) }),
 
     list: (kind: Kind) => request<CatalogEntry[]>(`/${kind}`),
-    get: (kind: Kind, name: string) => request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}`),
     /** `create` refuses to replace a file that already exists (409). */
     save: (kind: Kind, name: string, doc: { frontmatter: Record<string, unknown>; body: string }, create = false) =>
         request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(doc) }),
@@ -299,6 +318,11 @@ export const api = {
     sessions: (before?: Cursor, limit = 50) => request<SessionSummary[]>(`/sessions?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
     /** A window of `limit` entries ending before index `before` (default: the end of the transcript). */
     session: (id: string, before?: number, limit = 200) => request<SessionDetail>(`/sessions/${id}?limit=${limit}${before ? `&before=${before}` : ''}`),
+
+    /** Names of the SSH keys in data/secrets/ssh (never their contents). */
+    sshKeys: () => request<{ dir: string; keys: Array<{ name: string; public: boolean }>; known_hosts: boolean }>('/hosts/keys'),
+    /** `ssh -o BatchMode=yes user@host echo ok` with the chosen key. */
+    testHost: (ssh: string, key?: string) => request<{ ok: boolean; output: string; ms: number }>('/hosts/test', { method: 'POST', body: JSON.stringify({ ssh, key: key || undefined }) }),
 
     presets: () => request<Preset[]>('/presets'),
     installPreset: (name: string, overwrite = false) =>

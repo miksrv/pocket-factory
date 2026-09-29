@@ -127,7 +127,8 @@ export function Event({ event }: { event: TaskEvent }) {
             )
         }
         case 'status':
-            if (p.status === 'running') return null
+            // Lifecycle notes (fresh session, resumed after a restart) matter; a bare start does not.
+            if (p.status === 'running' || p.status === 'queued') return p.note ? <div className="dim small">{String(p.note)}</div> : null
             return (
                 <div className="dim small">
                     {String(p.status)} · {fmt.plural(Number(p.num_turns ?? 0), 'turn')} · {fmt.tokens(Number(p.tokens ?? 0))} tokens

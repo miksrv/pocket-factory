@@ -17,7 +17,12 @@ marked.use({
     }
 })
 
-/** Render Markdown produced by the agent. Sanitized: transcripts may quote untrusted content. */
-export function renderMarkdown(source: string): string {
-    return DOMPurify.sanitize(marked.parse(source, { async: false }) as string)
+/**
+ * Render Markdown. Sanitized: transcripts may quote untrusted content.
+ * `breaks` (the default) turns single newlines into line breaks, which is
+ * right for chat replies; a file written with hard-wrapped paragraphs is
+ * rendered with `breaks: false` so the wraps disappear.
+ */
+export function renderMarkdown(source: string, options: { breaks?: boolean } = {}): string {
+    return DOMPurify.sanitize(marked.parse(source, { async: false, breaks: options.breaks ?? true }) as string)
 }

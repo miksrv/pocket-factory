@@ -88,7 +88,7 @@ export function PresetsPage() {
                             Close
                         </Button>
                     </div>
-                    <Markdown source={open.readme ?? ''} />
+                    <Markdown source={open.readme ?? ''} document />
                 </div>
             )}
             {toast}

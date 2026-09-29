@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
@@ -53,7 +53,7 @@ export function SessionsPage() {
                                         <td title={s.cwd ?? s.workspace}>
                                             <Project project={s.project} fallback={s.workspace} />
                                         </td>
-                                        <td className="dim">{fmt.bytes(s.size)}</td>
+                                        <td className="dim nowrap">{fmt.bytes(s.size)}</td>
                                         <td className="dim nowrap">{fmt.ago(s.updated_at)}</td>
                                     </tr>
                                 ))}
@@ -107,6 +107,9 @@ export function SessionPage() {
     const [error, setError] = useState<string | undefined>()
     const [loadingEarlier, setLoadingEarlier] = useState(false)
     const keepScroll = useRef<number | null>(null)
+    // The page scrolls inside `.main`, not the window: measure and adjust that element.
+    const page = useRef<HTMLDivElement>(null)
+    const scroller = () => page.current?.closest<HTMLElement>('.main') ?? null
     // The poll closure outlives renders; read the loaded range through a ref.
     const rangeRef = useRef(range)
     rangeRef.current = range
@@ -142,9 +145,10 @@ export function SessionPage() {
         }
     }, [id])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (keepScroll.current === null) return
-        window.scrollBy(0, document.documentElement.scrollHeight - keepScroll.current)
+        const el = scroller()
+        if (el) el.scrollTop += el.scrollHeight - keepScroll.current
         keepScroll.current = null
     }, [entries])
 
@@ -153,7 +157,7 @@ export function SessionPage() {
         setLoadingEarlier(true)
         try {
             const page = await api.session(id, range.start, WINDOW)
-            keepScroll.current = document.documentElement.scrollHeight
+            keepScroll.current = scroller()?.scrollHeight ?? null
             setEntries((prev) => [...page.entries, ...prev])
             setRange((prev) => ({ ...prev, start: page.offset }))
         } catch (e) {
@@ -169,7 +173,7 @@ export function SessionPage() {
     const turns = entries.filter((e) => (e.type === 'user' || e.type === 'assistant') && e.message)
 
     return (
-        <div className="page">
+        <div className="page" ref={page}>
             <PageHead
                 title={`Session ${s.session_id.slice(0, 8)}`}
                 sub={

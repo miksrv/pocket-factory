@@ -298,7 +298,7 @@ function Form({
                 {mode === 'edit' ? (
                     <textarea ref={textarea} className="mono body" value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={onBodyKey} spellCheck={false} />
                 ) : (
-                    <Markdown className="preview" source={body} />
+                    <Markdown className="preview" source={body} document />
                 )}
             </div>
         </div>

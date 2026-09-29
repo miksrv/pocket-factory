@@ -37,6 +37,17 @@ export function usePaged<T>(
     const busy = useRef<number | null>(null)
     const cursorOf = (item: T): Cursor => ({ ts: cursor(item), id: key(item) })
     const more = options.hasMore ?? ((page: T[]) => page.length >= pageSize)
+    /** Strictly older on the server's `(ts DESC, id DESC)` order; numeric ids (audit events) compare as numbers. */
+    const olderThan = (item: T, floor: T): boolean => {
+        const a = cursor(item)
+        const b = cursor(floor)
+        if (a !== b) return a < b
+        const ai = key(item)
+        const bi = key(floor)
+        const an = Number(ai)
+        const bn = Number(bi)
+        return ai !== '' && bi !== '' && Number.isFinite(an) && Number.isFinite(bn) ? an < bn : ai < bi
+    }
 
     const load = useCallback(
         (mode: 'reset' | 'more' | 'poll') => {
@@ -61,11 +72,12 @@ export function usePaged<T>(
                         setHasMore(fresh.length > 0 && more(page))
                     } else {
                         // Newest page over the head of the list. Anything older than the
-                        // fresh page's tail is kept as is; anything in its range that it
-                        // does not contain has gone (finished, filtered out, deleted).
+                        // fresh page's tail (by the full (ts, id) cursor) is kept as is;
+                        // anything in its range that it does not contain has gone
+                        // (finished, filtered out, deleted).
                         const fresh = new Set(page.map(key))
-                        const floor = page.length ? cursor(page[page.length - 1]) : undefined
-                        setItems((prev) => [...page, ...prev.filter((item) => !fresh.has(key(item)) && (floor === undefined || cursor(item) < floor))])
+                        const floor = page.length ? page[page.length - 1] : undefined
+                        setItems((prev) => [...page, ...prev.filter((item) => !fresh.has(key(item)) && (floor === undefined || olderThan(item, floor)))])
                     }
                 })
                 .catch((e: Error) => gen === generation.current && setError(e.message))

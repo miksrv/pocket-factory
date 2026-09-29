@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { EventFeed } from '../components/EventFeed'
@@ -64,9 +64,9 @@ export function TasksPage() {
                                             <span className="badge plain">{task.source}</span>
                                         </td>
                                         <td>{task.num_turns}</td>
-                                        <td>{fmt.tokens(taskTokens(task))}</td>
+                                        <td className="nowrap">{fmt.tokens(taskTokens(task))}</td>
                                         <td className="dim nowrap">{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
-                                        <td>{fmt.duration(task.duration_ms)}</td>
+                                        <td className="nowrap">{fmt.duration(task.duration_ms)}</td>
                                         <td className="dim nowrap">{fmt.ago(task.created_at)}</td>
                                         <td>
                                             {(task.status === 'running' || task.status === 'queued') && <StopButton taskId={task.id} size="sm" onStopped={tasks.reload} />}
@@ -87,14 +87,20 @@ export function TasksPage() {
 
 export function TaskPage() {
     const { id = '' } = useParams()
-    const task = useAsync(() => api.task(id), [id], 3_000)
+    // Poll while the task can still change; a finished task is read once.
+    const [live, setLive] = useState(true)
+    const task = useAsync(() => api.task(id), [id], live ? 3_000 : undefined)
     const t = task.data
+    const active = t?.status === 'running' || t?.status === 'queued'
+    useEffect(() => setLive(!t || active), [t, active])
 
-    if (task.error) return <div className="page"><ErrorBox error={task.error} /></div>
+    // A transient poll error must not replace the task on screen: it shows above it.
+    if (task.error && !t) return <div className="page"><ErrorBox error={task.error} /></div>
     if (!t) return <div className="page dim">Loading…</div>
 
     return (
         <div className="page">
+            <ErrorBox error={task.error} />
             <PageHead
                 title="Task"
                 sub={

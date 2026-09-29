@@ -1,4 +1,5 @@
 import { Editor, Field, str } from '../components/Editor'
+import { GrowingTextarea } from '../components/ui'
 
 const TEMPLATE = `# <skill name>
 
@@ -26,8 +27,8 @@ export function SkillsPage() {
             intro="A skill is a procedure the agent follows step by step — feature-to-pr, onboard-project, anything you do the same way every time. Pick one from the list to edit it, or write a new one."
             newLabel="New skill"
             form={(fm, set) => (
-                <Field label="Description — when this skill applies" hint="Claude Code decides to load the skill from this sentence.">
-                    <input value={str(fm.description)} onChange={(e) => set({ description: e.target.value })} />
+                <Field label="Description — when this skill applies" hint="Claude Code decides to load the skill from this sentence." wide>
+                    <GrowingTextarea value={str(fm.description)} onChange={(e) => set({ description: e.target.value })} />
                 </Field>
             )}
         />

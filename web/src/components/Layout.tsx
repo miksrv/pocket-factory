@@ -121,7 +121,7 @@ export function Layout() {
                 </Button>
             </aside>
             <main className="main">
-                <PageBoundary key={location.pathname}>
+                <PageBoundary key={location.pathname.split('/')[1] ?? ''} resetKey={location.pathname}>
                     <Outlet />
                 </PageBoundary>
             </main>
@@ -132,9 +132,11 @@ export function Layout() {
 /**
  * A page that throws while rendering (an unexpected API shape, say) shows
  * its error inside the layout instead of blanking the whole app. Keyed on the
- * path, so navigating elsewhere gives the next page a clean start.
+ * first path segment only: a page keeps its state across its own routes (the
+ * chat's thread list, the editor's list), and a path change within the
+ * section clears a shown error through `resetKey`.
  */
-class PageBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
     state = { error: null as Error | null }
 
     static getDerivedStateFromError(error: Error) {
@@ -143,6 +145,10 @@ class PageBoundary extends Component<{ children: ReactNode }, { error: Error | n
 
     componentDidCatch(error: Error, info: ErrorInfo) {
         console.error('page crashed', error, info.componentStack)
+    }
+
+    componentDidUpdate(prev: { resetKey: string }) {
+        if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null })
     }
 
     render() {

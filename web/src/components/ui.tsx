@@ -1,5 +1,5 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import type { ButtonHTMLAttributes, MouseEventHandler, ReactNode, TextareaHTMLAttributes } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { api, type TaskStatus } from '../lib/api'
@@ -25,8 +25,10 @@ const buttonClass = (variant?: Variant, size?: 'sm', className?: string) => ['bt
 /** The one button: `<Button variant="primary">`, `<Button size="sm" to="/tasks">`. */
 export function Button({ variant, size, to, className, type = 'button', children, ...rest }: ButtonProps) {
     if (to) {
+        // The handler only reads the event (a guard calls preventDefault), so the element type is immaterial.
+        const onClick = rest.onClick as unknown as MouseEventHandler<HTMLAnchorElement> | undefined
         return (
-            <Link to={to} className={buttonClass(variant, size, className)} title={rest.title} aria-label={rest['aria-label']}>
+            <Link to={to} className={buttonClass(variant, size, className)} title={rest.title} aria-label={rest['aria-label']} onClick={onClick}>
                 {children}
             </Link>
         )
@@ -65,15 +67,28 @@ export function ErrorBox({ error }: { error?: string | null }) {
 /**
  * What a pane says before there is anything to show: one sentence and the
  * action that fills it (Chat before a thread, the editor before an entry).
+ * `children` are controls that go with the action (a project selector);
+ * `note` is a footnote under it.
  */
-export function Intro({ text, action, onAction }: { text: ReactNode; action: string; onAction: () => void }) {
+export function Intro({ text, action, onAction, note, children }: { text: ReactNode; action: string; onAction: () => void; note?: ReactNode; children?: ReactNode }) {
+    const button = (
+        <Button variant="primary" onClick={onAction}>
+            {action}
+        </Button>
+    )
     return (
         <div className="intro">
             <div className="empty">
                 <p>{text}</p>
-                <Button variant="primary" onClick={onAction}>
-                    {action}
-                </Button>
+                {children ? (
+                    <div className="intro-form">
+                        {children}
+                        {button}
+                    </div>
+                ) : (
+                    button
+                )}
+                {note && <p className="dim small">{note}</p>}
             </div>
         </div>
     )
@@ -115,9 +130,9 @@ export function Tabs<T extends string>({ items, value, onChange }: { items: Read
  * A filter dropdown with an "all" entry. A value that is not in `options`
  * (from a URL, or a project that no longer exists) still shows as selected.
  */
-export function FilterSelect({ value, onChange, all, options, label }: { value: string; onChange: (value: string) => void; all: string; options: string[]; label: string }) {
+export function FilterSelect({ value, onChange, all, options, label, disabled }: { value: string; onChange: (value: string) => void; all: string; options: string[]; label: string; disabled?: boolean }) {
     return (
-        <select className="filter" value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+        <select className="filter" value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} disabled={disabled}>
             <option value="">{all}</option>
             {value && !options.includes(value) && <option value={value}>{value}</option>}
             {options.map((o) => (
@@ -129,9 +144,21 @@ export function FilterSelect({ value, onChange, all, options, label }: { value: 
     )
 }
 
-/** Sanitized Markdown from the agent, a file or a preset README. */
-export function Markdown({ source, className }: { source: string; className?: string }) {
-    return <div className={className ? `md ${className}` : 'md'} dangerouslySetInnerHTML={{ __html: renderMarkdown(source) }} />
+/** A textarea for a sentence or two that grows with its text instead of scrolling. */
+export function GrowingTextarea({ value, className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
+    const ref = useRef<HTMLTextAreaElement>(null)
+    useLayoutEffect(() => {
+        const el = ref.current
+        if (!el) return
+        el.style.height = 'auto'
+        el.style.height = `${el.scrollHeight + 2}px`
+    }, [value])
+    return <textarea ref={ref} className={className ? `short ${className}` : 'short'} rows={1} value={value} {...rest} />
+}
+
+/** Sanitized Markdown from the agent (newlines break lines) or from a file (`document`: paragraphs reflow). */
+export function Markdown({ source, className, document }: { source: string; className?: string; document?: boolean }) {
+    return <div className={className ? `md ${className}` : 'md'} dangerouslySetInnerHTML={{ __html: renderMarkdown(source, { breaks: !document }) }} />
 }
 
 /** Stops a queued or running task; the same control on the Tasks list, the task page and the chat head. */

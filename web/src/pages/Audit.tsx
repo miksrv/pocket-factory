@@ -49,6 +49,7 @@ function describe(e: AuditEvent): { badge: string; tone: string; text: string } 
         }
         case 'status': {
             const status = String(p.status)
+            if (status === 'queued') return { badge: 'SESSION', tone: 'gray', text: p.note ? `Task re-queued · ${String(p.note)}` : 'Task queued' }
             if (status === 'running') return { badge: 'SESSION', tone: 'gray', text: p.note ? `Task started · ${String(p.note)}` : 'Task started' }
             const stats = [`${Number(p.num_turns ?? 0)} turns`, `${fmt.tokens(Number(p.tokens ?? 0))} tokens`, fmt.duration(Number(p.duration_ms ?? 0))].join(' · ')
             return { badge: 'SESSION', tone: status === 'done' ? 'green' : 'gray', text: `Task ${status === 'done' ? 'completed' : status} (${stats})` }
@@ -102,11 +103,19 @@ export function AuditPage() {
     const [open, setOpen] = useState<number | null>(null)
     // Totals and facets come with the first page; the list itself is keyset-paged by event id.
     const [summary, setSummary] = useState<Pick<Audit, 'stats' | 'facets'> | null>(null)
+    const hasMoreRef = useRef(false)
+    // usePaged drops a page requested under older filters, but the side effects below run
+    // regardless: they apply only when the request's filters are still the current ones.
+    const filters = JSON.stringify([period, kind, agent, project])
+    const current = useRef(filters)
+    current.current = filters
     const events = usePaged(
         (before) =>
             api.audit({ period, kind, agent, project, before: before ? Number(before.id) : undefined }).then((page) => {
-                if (!before) setSummary({ stats: page.stats, facets: page.facets })
-                hasMoreRef.current = page.has_more
+                if (filters === current.current) {
+                    if (!before) setSummary({ stats: page.stats, facets: page.facets })
+                    hasMoreRef.current = page.has_more
+                }
                 return page.events
             }),
         {
@@ -118,7 +127,6 @@ export function AuditPage() {
             hasMore: () => hasMoreRef.current
         }
     )
-    const hasMoreRef = useRef(false)
     const d = summary
 
     return (

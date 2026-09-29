@@ -4,17 +4,24 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { AgentStatus, auditLink, rosterOf } from '../components/AgentsPanel'
 import { Editor, Field, str } from '../components/Editor'
 import { Tile } from '../components/Tile'
-import { Button, Empty, ErrorBox, PageHead } from '../components/ui'
+import { Button, Empty, ErrorBox, GrowingTextarea, PageHead } from '../components/ui'
 import { api, fmt } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
-/** What the agent frontmatter accepts besides a model id: the CLI's aliases. */
+/**
+ * What `model:` in an agent file accepts: the CLI's aliases, which Claude
+ * Code resolves to the subscription's current model of that tier (so a file
+ * follows model releases by itself), or a full model id typed by hand. The
+ * list is deliberately static: finding out what an alias means today would
+ * cost either an API call with the owner's token or a turn per alias.
+ */
 const ALIASES: Array<{ value: string; label: string }> = [
     { value: '', label: 'CLI default' },
     { value: 'inherit', label: 'inherit — same model as the orchestrator' },
     { value: 'sonnet', label: 'sonnet — current Sonnet' },
     { value: 'opus', label: 'opus — current Opus' },
-    { value: 'haiku', label: 'haiku — current Haiku' }
+    { value: 'haiku', label: 'haiku — current Haiku' },
+    { value: 'fable', label: 'fable — current Fable (Max plans)' }
 ]
 
 const splitTools = (value: string) =>
@@ -189,7 +196,6 @@ function ToolPicker({
 }
 
 function AgentEditor() {
-    const models = useAsync(() => api.models(), [])
     const tools = useAsync(() => api.tools(), [])
     return (
         <Editor
@@ -202,32 +208,21 @@ function AgentEditor() {
             backTo={{ to: '/agents', label: 'All agents' }}
             form={(fm, set) => {
                 const model = str(fm.model)
-                const known = ALIASES.some((a) => a.value === model) || (models.data ?? []).some((m) => m.id === model)
+                const known = ALIASES.some((a) => a.value === model)
                 return (
                     <>
-                        <Field label="Model" hint={models.data?.length ? 'Aliases follow the CLI; ids are what the subscription can use right now.' : 'Aliases only — the model list could not be fetched.'}>
+                        <Field label="Model" hint="An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file.">
                             <select value={model} onChange={(e) => set({ model: e.target.value })}>
-                                <optgroup label="Aliases">
-                                    {ALIASES.map((a) => (
-                                        <option key={a.value} value={a.value}>
-                                            {a.label}
-                                        </option>
-                                    ))}
-                                </optgroup>
-                                {models.data && models.data.length > 0 && (
-                                    <optgroup label="Models on this subscription">
-                                        {models.data.map((m) => (
-                                            <option key={m.id} value={m.id}>
-                                                {m.display_name} — {m.id}
-                                            </option>
-                                        ))}
-                                    </optgroup>
-                                )}
+                                {ALIASES.map((a) => (
+                                    <option key={a.value} value={a.value}>
+                                        {a.label}
+                                    </option>
+                                ))}
                                 {!known && model && <option value={model}>{model}</option>}
                             </select>
                         </Field>
                         <Field label="Description — when the dispatcher should use this agent" hint="Claude Code matches tasks to agents by this text. Be specific." wide>
-                            <input value={str(fm.description)} onChange={(e) => set({ description: e.target.value })} />
+                            <GrowingTextarea value={str(fm.description)} onChange={(e) => set({ description: e.target.value })} />
                         </Field>
                         <Field label="Tools the agent may use" hint="An allowlist of Claude Code tool names. Read-only agents: Read, Bash, Grep, Glob." wide>
                             <ToolPicker value={str(fm.tools)} common={tools.data?.common ?? []} reported={tools.data?.reported ?? []} source={tools.data?.source ?? 'default'} onChange={(next) => set({ tools: next })} />

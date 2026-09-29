@@ -1,12 +1,13 @@
 import { ArrowDown, SendHorizontal } from 'lucide-react'
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
+import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { AssistantTurn } from '../components/AssistantTurn'
 import { Channel } from '../components/Icon'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
-import { Button, Empty, Intro, StopButton } from '../components/ui'
-import { api, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
+import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
+import { api, type CatalogEntry, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
+import { useAsync } from '../lib/useAsync'
 import { usePaged } from '../lib/usePaged'
 
 const PAGE = 50
@@ -23,23 +24,41 @@ export function ChatPage() {
         pollMs: 10_000
     })
     const [error, setError] = useState<string | null>(null)
+    const [params] = useSearchParams()
+    const projects = useAsync(() => api.list('projects'), [])
+    const [project, setProject] = useState('')
 
-    const startNew = async () => {
+    const startNew = async (slug: string | null = project || null) => {
         try {
-            const conversation = await api.createConversation()
+            const conversation = await api.createConversation(undefined, slug)
             conversations.reload()
-            navigate(`/chat/${conversation.id}`)
+            navigate(`/chat/${conversation.id}`, { replace: id === 'new' })
         } catch (e) {
             setError((e as Error).message)
         }
     }
 
+    // `/chat/new[?project=slug]` (the Overview's "New task") creates a conversation and opens it.
+    // Once per visit: StrictMode runs the effect twice in dev, which must not make two conversations.
+    const creating = id === 'new'
+    const started = useRef(false)
+    useEffect(() => {
+        if (!creating) {
+            started.current = false
+            return
+        }
+        if (started.current) return
+        started.current = true
+        void startNew(params.get('project'))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [creating])
+
     return (
-        <div className={`chat${id ? ' has-thread' : ''}`}>
+        <div className={`chat${id && !creating ? ' has-thread' : ''}`}>
             <div className="side">
                 <div className="card-head">
                     <span>Conversations</span>
-                    <Button variant="primary" size="sm" onClick={startNew}>
+                    <Button variant="primary" size="sm" onClick={() => startNew(null)}>
                         New
                     </Button>
                 </div>
@@ -48,7 +67,7 @@ export function ChatPage() {
                     {conversations.items.map((c) => (
                         <NavLink key={c.id} to={`/chat/${c.id}`}>
                             <div className="grow">
-                                <div className="title">{c.title ?? 'Untitled'}</div>
+                                <div className="title" title={c.title ?? undefined}>{c.title ?? 'Untitled'}</div>
                                 <div className="desc">
                                     <Channel channel={c.channel} />
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
@@ -62,7 +81,7 @@ export function ChatPage() {
                     )}
                 </div>
             </div>
-            {id ? (
+            {id && !creating ? (
                 <Thread
                     key={id}
                     id={id}
@@ -71,10 +90,22 @@ export function ChatPage() {
                         conversations.reload()
                         navigate('/chat')
                     }}
+                    projects={projects.data ?? []}
                 />
             ) : (
                 <div className="thread">
-                    <Intro text="Talk to Claude Code exactly as from Telegram — same rules, same projects, same session continuity." action="Start a conversation" onAction={startNew} />
+                    {creating ? (
+                        <Empty>Starting a conversation…</Empty>
+                    ) : (
+                        <Intro
+                            text="Talk to Claude Code exactly as from Telegram — same rules, same projects, same session continuity."
+                            action="Start a conversation"
+                            onAction={() => startNew()}
+                            note="Bound to a project, the conversation runs from its checkout: the repository's MCP servers, agents and rules apply."
+                        >
+                            <ProjectSelect value={project} onChange={setProject} projects={projects.data ?? []} />
+                        </Intro>
+                    )}
                 </div>
             )}
         </div>
@@ -86,7 +117,12 @@ const NEAR_BOTTOM = 80
 /** Order of a task's life, so a stale row can never replace a newer one. */
 const rank = (status: Task['status']) => (status === 'queued' ? 0 : status === 'running' ? 1 : 2)
 
-function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onDeleted: () => void }) {
+/** "workspaces root" or one of the project files. */
+function ProjectSelect({ value, onChange, projects, disabled }: { value: string; onChange: (slug: string) => void; projects: CatalogEntry[]; disabled?: boolean }) {
+    return <FilterSelect label="Project" all="no project (workspaces root)" value={value} onChange={onChange} options={projects.map((p) => p.name)} disabled={disabled} />
+}
+
+function Thread({ id, onSent, onDeleted, projects }: { id: string; onSent: () => void; onDeleted: () => void; projects: CatalogEntry[] }) {
     const [conversation, setConversation] = useState<Conversation | null>(null)
     const [tasks, setTasks] = useState<Map<string, Task>>(new Map())
     const [events, setEvents] = useState<TaskEvent[]>([])
@@ -99,6 +135,8 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
     const messages = useRef<HTMLDivElement>(null)
     const composer = useRef<HTMLTextAreaElement>(null)
     const lastEvent = useRef(0)
+    /** Newest event id the reader has been shown or told about; only an event beyond it is "new". */
+    const seen = useRef(0)
     const keepScroll = useRef<number | null>(null)
     const tasksRef = useRef(tasks)
     tasksRef.current = tasks
@@ -154,7 +192,8 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
     }
 
     // New output scrolls the view only while it sits at the bottom; prepended
-    // history keeps the viewport in place; otherwise a "new messages" button appears.
+    // history keeps the viewport in place; otherwise a "new messages" button
+    // appears — for new events only, not for a task row that merely changed.
     useLayoutEffect(() => {
         const el = messages.current
         if (!el) return
@@ -163,8 +202,11 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
             keepScroll.current = null
             return
         }
+        const newest = events.at(-1)?.id ?? 0
+        const grew = newest > seen.current
+        seen.current = Math.max(seen.current, newest)
         if (pinned) el.scrollTop = el.scrollHeight
-        else setUnseen(true)
+        else if (grew) setUnseen(true)
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [events, tasks])
 
@@ -206,6 +248,15 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
             setError((e as Error).message)
         } finally {
             setLoadingEarlier(false)
+        }
+    }
+
+    const rebind = async (slug: string) => {
+        try {
+            setConversation(await api.setConversationProject(id, slug || null))
+            setError(null)
+        } catch (e) {
+            setError((e as Error).message)
         }
     }
 
@@ -253,11 +304,12 @@ function Thread({ id, onSent, onDeleted }: { id: string; onSent: () => void; onD
                         ‹
                     </Button>
                     <div>
-                        <strong>{conversation?.title ?? '…'}</strong>
-                        <div className="dim small">
+                        <strong title={conversation?.title ?? undefined}>{conversation ? (conversation.title ?? 'New conversation') : '…'}</strong>
+                        <div className="dim small row" style={{ gap: 6 }}>
                             {conversation && <Channel channel={conversation.channel} />}
-                            {conversation?.project ? ` · ${conversation.project}` : ''} · session{' '}
-                            {conversation?.session_id ? <Link to={`/sessions/${conversation.session_id}`}>{conversation.session_id.slice(0, 8)}</Link> : 'none yet'}
+                            <span>·</span>
+                            <ProjectSelect value={conversation?.project ?? ''} onChange={rebind} projects={projects} disabled={!conversation || active} />
+                            <span>· session {conversation?.session_id ? <Link to={`/sessions/${conversation.session_id}`}>{conversation.session_id.slice(0, 8)}</Link> : 'none yet'}</span>
                         </div>
                     </div>
                 </div>
