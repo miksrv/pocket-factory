@@ -77,14 +77,28 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   is the one "unsaved edits" flag the editor sets and the sidebar checks
 - `templates/claude/` — seeded into `data/claude/` on **every** container start with `cp -n`: new
   files appear, edited files are never overwritten. On the host, copy by hand the same way.
+  Prose in agent / skill / project Markdown is not hard-wrapped (one line per paragraph or
+  list item): the UI editor wraps it, and the previews render files with `breaks: false`.
+  `node scripts/reflow-md.mjs <files>` unwraps a file that was written wrapped.
 - `presets/<name>/` — `preset.json` + `agents/` `skills/` `projects/`; installed from the UI
-- `docker/entrypoint.sh` — seeds `/data`, git identity + `safe.directory '*'`, `gh auth setup-git`,
-  links `/data/secrets/ssh` → `~/.ssh`
+- `docker/entrypoint.sh` — seeds `/data`, git identity + `safe.directory '*'`, the per-owner
+  credential helper for github.com, links `/data/secrets/ssh` → `~/.ssh`
 - Without `WEB_AUTH_PASSWORD` the API answers only to localhost `Host` names plus
-  `WEB_ALLOWED_HOSTS`, and refuses mutating requests with a foreign `Origin` (DNS-rebinding /
-  CSRF guard, `web/server.ts`). `CLAUDE_TASK_TIMEOUT_MIN` bounds a task's wall-clock time (0 =
-  none); a stop sends SIGTERM to the CLI's process group and SIGKILL 10 s later. A conversation
-  whose session cannot be resumed forgets the session id and the task runs once more from scratch
+  `WEB_ALLOWED_HOSTS` (DNS-rebinding guard); in both auth modes it refuses mutating requests with a
+  foreign `Origin` (CSRF: browsers send basic-auth credentials cross-site too) and bodies over
+  2 MB (`web/server.ts`). `CLAUDE_TASK_TIMEOUT_MIN` bounds a task's wall-clock time (0 = none); a
+  stop sends SIGTERM to the CLI's process group and SIGKILL 10 s later. A conversation whose
+  session cannot be resumed forgets the session id and the task runs once more from scratch. A
+  task interrupted by a supervisor restart (deploy, crash, SIGTERM) stays `running` in the store,
+  is re-queued at the next start (`tasks.restarts`, once) and resumes its session; the dispatcher
+  rules tell the agent a repeated prompt means "continue". Only the owner's stop cancels
+- The CLI's environment is `process.env` minus the supervisor's own secrets (`PRIVATE_ENV` in
+  `tasks/service.ts`: bot token, allowed ids, web auth, Groq key); GitHub tokens and MCP `${VAR}`
+  secrets stay because the agent needs them. The supervisor never calls the Claude API with the
+  OAuth token, and there is no model list endpoint: the agent editor offers the CLI's aliases
+  (`sonnet`, `opus`, `haiku`, `fable`, `inherit`), which the CLI resolves to the subscription's
+  current model, so files follow releases by themselves (decided 2026-09-29: no API call with the
+  token, no probe turns; a full id can still be typed into the file)
 - `data/` — runtime state, gitignored, bind-mounted; `WORKSPACES_DIR` in `.env` points the container
   (and `yarn dev`) at the owner's existing repositories
 
@@ -93,8 +107,33 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
 - Agent runtime = `claude` CLI subprocess, never the Agent SDK with a stored token (ToS, see SPEC §8).
 - Auth = `claude setup-token` on a laptop → `CLAUDE_CODE_OAUTH_TOKEN` in `.env`. Interactive `/login`
   inside the container is broken upstream (anthropics/claude-code#34917).
-- Agent works inside the owner's real checkouts on a branch (no worktrees, no re-cloning).
-- GitHub auth = fine-grained PAT (`GH_TOKEN`), never mounted SSH keys.
+- Agent works inside the owner's real checkouts on a branch (no worktrees, no re-cloning). A
+  conversation bound to a project (`conversations.project`, set via the Chat selector, Telegram
+  `/new <p>` / `/project <p>`, or detected from the first task) spawns `claude -p` with
+  cwd = the project's checkout, so the repository's `.mcp.json`, `.claude/agents`, `.claude/skills`
+  and `CLAUDE.md` load on top of `data/claude`; a project-less conversation runs from the
+  workspaces root. A session cannot follow a cwd change: `TaskService` compares the transcript's
+  directory slug with the cwd and starts a fresh session when they differ.
+- MCP in three layers: the repository's `.mcp.json` (loaded from the cwd; in `-p` mode project
+  servers load without approval, and a project file's `mcp:` list turns the others off via
+  `--settings disabledMcpjsonServers`, since an allowlist does not work in `-p`), the owner's
+  `data/config/mcp.json` passed with `--mcp-config` to every session, and `mcpServers:` in an
+  agent's frontmatter for role-owned tools only. Secrets only as `${VAR}` from `.env`. OAuth
+  servers: log in once **inside the container**, from the checkout, with
+  `docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser`
+  (prints the URL: open it on the laptop, paste the redirect URL back); the token lands in
+  `data/claude/.credentials.json`, shared by every task, and the CLI refreshes it. Logging in
+  from the laptop does not work on macOS: the CLI writes to the Keychain there, not to
+  `CLAUDE_CONFIG_DIR`. Same command over SSH on a VPS. `/api/mcp` reports servers and variable status, never values; the init event's
+  `mcp_servers` is kept in `meta` (`claude.mcp`). Sub-agents get data from the orchestrator, not
+  MCP access (their `tools:` allowlists stay MCP-free), except role-owned tools.
+- Token hygiene: `Explore` is overridden in `templates/claude/agents/Explore.md` with `model:
+  haiku`; agents carry `maxTurns`, read-only ones `effort: medium`, `host-inspector` also
+  `omitClaudeMd`. The dispatcher suggests `/new` after a finished task.
+- GitHub auth = fine-grained PATs, never mounted SSH keys. One per repository owner:
+  `GH_TOKEN_<OWNER>` (login upper-cased, `-` → `_`), `GH_TOKEN` as the fallback. In the image
+  `docker/gh` (a wrapper ahead of the real `gh` on PATH) and `docker/git-credential-owner`
+  resolve the owner from the checkout's `origin` / the URL and call `docker/gh-token`.
 - Default model `sonnet`; cheaper models only for mechanical sub-agents later.
 - Agents, skills and projects live only in `data/` (gitignored); `templates/` and `presets/` are the
   install-time seed. There is no config git history any more: what an agent did, including edits
@@ -126,46 +165,70 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   unfolded tool calls render an Edit as a diff, a Write as the file in its language, Bash as the
   command, the rest as JSON. Markdown / text files stay plain on purpose.
 - Telegram is optional (`TELEGRAM_BOT_TOKEN` empty = web-only).
-- Project files carry `hosts:` (SSH targets) for sub-agents; keys live in `data/secrets/ssh`, mounted
-  read-only. GitHub still goes through the PAT, never SSH.
+- Project files carry `hosts:` (SSH targets, optional `key` = file name in `data/secrets/ssh`) for
+  sub-agents; keys live in `data/secrets/ssh`, mounted read-only, and are never read by the API:
+  `/api/hosts/keys` lists names, `/api/hosts/test` runs `ssh -o BatchMode=yes`. Passwords are not
+  supported on purpose. Branches are `feature/…` / `fix/…` by task kind; `branch_prefix` is no
+  longer a form field (an existing value still overrides). GitHub still goes through the PAT, never SSH.
 - The owner decides when to commit — never commit unprompted. When asked to commit: no
   `Co-Authored-By` lines.
 
-## Status (2026-09-28, evening)
+## Status (2026-09-29, review pass)
 
-Phases 0–4 of the spec are implemented (see git log): Telegram text + voice, SQLite task queue /
-session manager, web UI with chat, transcripts, editors for agents / skills / projects, presets.
-The Docker image is built and the container runs with the web UI. Cost is gone from every screen:
-tasks report tokens and their share of the 5-hour window, Overview and the sidebar show the
-subscription windows (schema v2: `rate_limits` table, cache token columns). The History page and
-the config git repos are gone; the Audit log (schema v3: `agent` / `parent_tool_use_id` on events,
-`project` on tasks) lists every model call, tool call and sub-agent per agent and project.
-All lists page dynamically; Sessions shows the real cwd / project instead of Claude Code's
-`-Users-...` directory slug. Conversations can be deleted from Chat (schema v4 `deleted_at`,
-soft: tasks, events and transcripts stay for the audit log; refused while a task is active).
-Agents is a card grid (pixel mascots in `components/Sprite.tsx`, runs / tokens / status from
-`/api/activity/agents`) and Overview has a "Team agents" roster; both link into the Audit log
-with `?agent=` preset (Audit filters live in the URL). Built-in Claude Code agent types (Explore,
-Plan, …) appear in the roster once the audit log has seen them. The shared file editor
-(`components/Editor.tsx`, agents / skills / projects) fills the viewport: list and form scroll
-independently, header with Save stays; ⌘S saves, Tab indents, Edit / Preview for the body, unsaved
-changes guard list navigation. The agent Model select lists the CLI aliases plus the live models
-from `GET https://api.anthropic.com/v1/models` called with the same OAuth token (read-only
-metadata, `anthropic-beta: oauth-2025-04-20`, cached an hour in `web/routes/models.ts`); this is
-the one direct API call the supervisor makes and it never does inference — the ToS rule in §8
-stays. The Tools field is a chip picker: a fixed list of common tool names first (the CLI's own
-`init` list names harness internals and omits lazily loaded Grep / Glob), then everything the CLI
-reported at its last session start (schema v5 `meta` table, key `claude.tools`, refreshed by every
-task and probe), plus a text field for MCP tool names. Empty `tools:` = inherit all.
-`yarn dev` now runs from the repository root (same cwd as the container), so `.env`, `data/`,
-`web/dist` and `presets/` resolve identically.
+Phases 0–4 of the spec are implemented and the container runs with the web UI (see git log for
+the history up to the evening of 2026-09-28). Since then, uncommitted at the time of writing:
+
+- Review pass 2026-09-29 (three reviewers + landscape survey, `docs/LANDSCAPE.md`): orphaned /
+  interrupted tasks re-queued once and resumed (migration v6 `restarts`); Origin check in both auth
+  modes + body limit; supervisor secrets stripped from the CLI env; `/api/models` (a Claude API call with the
+  OAuth token) removed, the editor offers aliases; Telegram chunking kept code fences inverted from the third chunk
+  on (fixed) and fences with info strings were prose (fixed); `/api/mcp` blanks URL query values
+  and secret-looking args; invalid YAML frontmatter is reported (`frontmatter_error`) and the UI
+  save refuses (409) instead of wiping it; preset skills install their helper files; NaN guards in
+  `usage` / SSE `after`; body type validation → 400; `LOG_LEVEL` / `MAX_CONCURRENT_SESSIONS`
+  validated; fetch timeouts on Telegram download and Groq; compose `mem_limit` / `pids_limit`;
+  entrypoint no longer hides a failed template seed. Web: page remount per path fixed, `Button to`
+  forwards `onClick` (unsaved guard), Sessions "load earlier" scrolls `.main`, MCP editor keeps
+  drafts and sets the unsaved flag, poll merge compares `(ts, id)`, stale Audit summaries dropped,
+  `/chat/new` StrictMode double-create, task page polls only while open.
+
+- Code review pass: shared UI vocabulary in `components/ui.tsx`, keyset cursors `(ts, id)`,
+  SSE stream buffering, stop → process group + SIGKILL, host/origin guard, `CLAUDE_TASK_TIMEOUT_MIN`,
+  Telegram formatter / chunking fixes, list pages that fill the viewport, intro panes.
+- GitHub tokens per repository owner (`GH_TOKEN_<OWNER>`, `docker/gh`, `docker/git-credential-owner`);
+  the owner currently uses one classic `GH_TOKEN`, verified for push on personal and org repos.
+- Voice works (Groq, `.oga` → `.ogg` upload name fix). Health on Overview is fully green.
+- Preset `fullstack-ts-go` (go-developer, web-developer, host-inspector with a read-only hook,
+  fullstack-feature, conventions, host-check); `pr-review` and the core reviewer rewritten with a
+  verification pass and severity levels; every agent / skill description has a "Use when" trigger.
+- Projects: form reworked (no branch prefix, workflow select, collapsed tracker, host cards with
+  key selection and "Test connection"); `TenantManagement` onboarded from Telegram.
+- Conversations bound to a project run from its checkout (repository `.mcp.json`, `.claude/agents`,
+  skills and `CLAUDE.md` apply); `/new <p>`, `/project <p>`, Chat selector; MCP in three layers with
+  Settings → MCP editor for `data/config/mcp.json`; project `mcp:` allowlist; `Explore` on haiku,
+  `maxTurns` / `effort` on agents.
+- Markdown prose in agents / skills is unwrapped (`scripts/reflow-md.mjs`); previews render files
+  with `breaks: false`.
 
 Not done / next:
 
-1. Verify `git push` + `gh pr create` from the container with `GH_TOKEN`.
-2. First real project file (let `onboard-project` draft it) and a real feature-to-pr run.
-3. Phase 5: schedules + prefilters (TRAC poller, GitHub review requests) — `source: cron` is
-   already in the tasks table.
-4. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram.
-5. Nice-to-haves: project selector in Chat (conversations already carry `project`), CodeMirror in
-   editors, audit log export.
+1. Commit the batch above (the owner sets the commit budget).
+2. First real feature-to-pr / fullstack-feature run on a real repository, end to end from
+   Telegram: branch → developer → reviewer → checks → PR link.
+3. ClickUp MCP login for `TenantManagement` (`docker compose run --rm -it -w
+   /data/workspaces/TenantManagement supervisor claude mcp login clickup --no-browser`),
+   onboarding of the other three work repos.
+4. Deferred to the next session (details in the assistant's memory): "Extra MCP servers" in the
+   project form and "MCP servers of this role" in the agent form (same editor as Settings), then
+   the `email-assistant` preset (Gmail MCP, drafts only).
+5. Phase 5: schedules + prefilters (TRAC poller, GitHub review requests) — `source: cron` is
+   already in the tasks table; UC-4 staging access (SPEC open question 8) must be settled first.
+6. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram;
+   README for forkers.
+7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
+   audit log export.
+8. From the landscape survey (`docs/LANDSCAPE.md`), in priority order: permission prompts /
+   `AskUserQuestion` from Telegram and the web via `--permission-prompt-tool`; photos and files in
+   (`data/inbox/<task>/`, `@path` in the prompt); auto-continue after a window reset; a diff panel
+   with "Create PR" on the task page; "continue in chat" for an indexed laptop session; per-agent /
+   project token budgets; audit export.

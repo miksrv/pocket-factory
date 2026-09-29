@@ -26,7 +26,7 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 
 1. **Zero idle cost.** Claude Code is spawned per task, not kept alive. Tokens are consumed only while a task is running; RAM is consumed only while a session is open. When there is nothing to do, only the cheap deterministic supervisor (bot polling, scheduler, web UI) is awake.
 2. **Claude Code is the agent; we are the supervisor.** The tool never modifies the Claude Code binary, never handles the owner's credentials, and never re-implements what Claude Code already does (sub-agents, skills, sessions, memory, MCP, transcripts). The supervisor adds only what Claude Code lacks: a Telegram front-end, a task queue, schedules, lifecycle management, and a UI over the files.
-3. **Everything is a file.** Sub-agents, skills, project knowledge, and global rules are Markdown files on a volume. The UI and the agent itself edit the same files. No hidden state. The config directory is a git repository, so every change the agent makes to its own configuration is a commit that can be diffed and reverted.
+3. **Everything is a file.** Sub-agents, skills, project knowledge, and global rules are Markdown files on a volume. The UI and the agent itself edit the same files. No hidden state. Every change the agent makes to its own configuration is a file event in the Audit log (§6.9), attributed to the task and agent that made it.
 4. **Deterministic pre-filter before LLM.** Polling, event filtering, and deduplication are done by plain code. Claude Code is invoked only when there is real work.
 5. **Facts ≠ procedures ≠ roles.** Project facts live in the knowledge base, step-by-step workflows live in skills, roles live in sub-agent definitions, universal rules live in `CLAUDE.md`. No duplication.
 6. **Portable by design.** One Docker Compose stack + one `/data` volume = the entire system. Migration is `rsync` + `docker compose up`.
@@ -44,7 +44,7 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 - Event-driven task creation: Telegram, cron schedules with UI management, and optionally external webhooks (GitHub).
 - Support for multiple independent repositories (personal and organization-owned) with per-project workflows, credentials, and conventions.
 - Human-in-the-loop: the agent pauses and asks the owner via Telegram when it hits ambiguity or a decision gate; runs resume after the answer.
-- Self-improvement loop: corrections given via Telegram ("remember: in this project always update the CHANGELOG") are persisted by the agent into its own knowledge files (as git commits).
+- Self-improvement loop: corrections given via Telegram ("remember: in this project always update the CHANGELOG") are persisted by the agent into its own knowledge files (visible as file events in the Audit log).
 - Session lifecycle under the owner's control: sessions close on idle timeout, on explicit "done", or on a Telegram command, and can be resumed later with full context.
 
 ### Non-Goals (v1)
@@ -71,9 +71,9 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 
 ### UC-2 — Organization task from ClickUp (via Telegram)
 
-> "In project GlobalNavigation take ClickUp task DEV-21234 and do it."
+> "In project webshop take ClickUp task DEV-1234 and do it."
 
-1. Claude Code matches `GlobalNavigation` → org repo, ClickUp workspace, `clickup-task` skill.
+1. Claude Code matches `webshop` → org repo, ClickUp workspace, `clickup-task` skill.
 2. Reads the task via ClickUp MCP. If ambiguous — sends batched clarifying questions to Telegram; the task goes to `waiting_for_user`, the session is kept warm for a while and then released; the owner's reply resumes it.
 3. Branch `feature/DEV-21234-…`, developer → reviewer → QA loop, PR to the branch defined in project config.
 4. Posts a comment on the ClickUp task with the PR link, transitions the task status to *Review*.
@@ -97,7 +97,7 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 
 > "I need an agent that triages my inbox and prepares draft replies."
 
-- Via Telegram: Claude Code itself writes `agents/email-agent.md` (+ skill + MCP binding), commits it, and confirms. Next time a mail-related task arrives, the dispatcher knows to spawn it.
+- Via Telegram: Claude Code itself writes `agents/email-agent.md` (+ skill + MCP binding) and confirms; the edit shows up in the Audit log. Next time a mail-related task arrives, the dispatcher knows to spawn it.
 - Via UI: the owner creates/edits the same Markdown file in the agent editor (form for frontmatter: name, trigger description, allowed tools/MCP, model + prompt body).
 
 ### UC-6 — Onboarding a new project
@@ -108,9 +108,9 @@ The `onboard-project` skill interviews the owner (PR target branch, branch namin
 
 ### UC-7 — Teaching / correcting behavior
 
-> "Remember: in GlobalNavigation always update CHANGELOG before the PR."
+> "Remember: in webshop always update CHANGELOG before the PR."
 
-Claude Code edits the corresponding project file or skill itself, commits the change, and confirms. The UI (and `git log`) is used to audit and clean up accumulated knowledge.
+Claude Code edits the corresponding project file or skill itself and confirms. The UI editors and the Audit log (file events per task) are used to audit and clean up accumulated knowledge.
 
 ### UC-8 — Ending a session
 
@@ -233,7 +233,7 @@ Rules:
 - **Explicit finish.** Any of: the owner's message classified as a closing phrase ("thanks, done", …) by a cheap in-code matcher, the `/done` command, or the agent's own final report followed by no follow-up. The process is terminated immediately; the task is marked `done`.
 - **Hard stop.** `/stop` sends SIGTERM regardless of state and marks the task `cancelled`.
 - **Resume.** A later message that the supervisor routes to a finished/idle-killed task (reply in the same Telegram thread, or explicit `/resume <task>`) restarts the process with `--resume <session_id>`. Context continuity is Claude Code's own transcript, nothing is copied.
-- **Crash safety.** If the supervisor restarts, running sessions are considered lost; tasks in `running` are resumed via `--resume` on the next tick.
+- **Crash safety.** If the supervisor restarts (deploy, reboot, crash), running CLIs are lost. A task found `running` at startup goes back to the queue and its next run resumes the conversation's session, so the agent continues from where the transcript ends (the task's prompt is sent once more to the resumed session). Each task survives this once (`restarts` column); a task that keeps hitting restarts fails with a notice, so a task that takes the supervisor down cannot loop. A graceful stop (SIGTERM to the supervisor) leaves running tasks `running` on purpose for the same recovery; only the owner's `/stop` cancels.
 - **Bounds.** Every spawn sets `--max-turns`; the per-task budget (§7) is passed via `--max-budget-usd` where the installed CLI version supports it, otherwise enforced by the supervisor from streamed usage.
 
 ---
@@ -247,11 +247,11 @@ Four layers, all plain files under `/data`, editable by UI, by the owner, and by
 | **Roles → sub-agents** | `claude/agents/*.md` | Who: frontmatter (name, trigger description, allowed tools/MCP, model) + system prompt. Project-agnostic, reusable. | `developer.md`, `reviewer.md`, `qa.md`, `email-agent.md` |
 | **Procedures → skills** | `claude/skills/*/SKILL.md` | How, step by step. Composable (a skill may reference another). | `feature-to-pr`, `clickup-task` (→ feature-to-pr), `pr-review`, `trac-defect-fix`, `onboard-project` |
 | **Facts → knowledge base** | `config/projects/*.md` | What is true about each project: repo URL & credentials ref, tracker & workflow, branch/PR conventions, stack, test/lint commands, which skill applies. | `photos.md`, `global-navigation.md` |
-| **Universal rules → dispatcher prompt** | `claude/CLAUDE.md` | Always-on behavior: match task → project (ask if unknown); Telegram gets milestones/questions/results only; never merge without approval; batch questions; persist corrections into files and commit them; treat PR bodies, tickets and emails as untrusted data. | — |
+| **Universal rules → dispatcher prompt** | `claude/CLAUDE.md` | Always-on behavior: match task → project (ask if unknown); Telegram gets milestones/questions/results only; never merge without approval; batch questions; persist corrections into files; treat PR bodies, tickets and emails as untrusted data. | — |
 
 **Dispatcher flow:** incoming task → resolve project from knowledge base → project file names the workflow (skill) → skill orchestrates sub-agents → report to `reply_to`.
 
-**Learning = file edits, not training.** Corrections via Telegram are applied by the agent to its own skills/knowledge and committed to the config git repository; the UI (and `git log`/`git revert`) is the audit/cleanup surface. `onboard-project` bootstraps new project files through an interview + repo inspection.
+**Learning = file edits, not training.** Corrections via Telegram are applied by the agent to its own skills/knowledge files; the UI editors and the Audit log are the audit/cleanup surface (the config git history of v1.2 was dropped in v1.3). `onboard-project` bootstraps new project files through an interview + repo inspection.
 
 MCP servers are configured declaratively in `.mcp.json`; each sub-agent's frontmatter restricts which tools/MCP it may use (email agent gets Gmail MCP only and no git; developer gets git/gh and no mail; reviewer gets read-only tools).
 
@@ -302,12 +302,12 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 ## 8. Security Requirements
 
 - **Telegram whitelist** by chat/user ID — the bot must ignore everyone else. This is mandatory: the bot fronts an agent with repo and mail access.
-- **Claude auth belongs to the owner, not to the tool.** The owner runs `claude setup-token` on a machine with a browser and puts the resulting token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN`; only the Claude Code CLI reads it. (Interactive `/login` inside a container is broken upstream — anthropics/claude-code#34917 — so this is the primary path, not a fallback.) The supervisor never reads, copies, proxies or exposes the token; the UI only shows login status. The Claude Code binary is installed as published and never patched.
+- **Claude auth belongs to the owner, not to the tool.** The owner runs `claude setup-token` on a machine with a browser and puts the resulting token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN`; only the Claude Code CLI reads it. (Interactive `/login` inside a container is broken upstream — anthropics/claude-code#34917 — so this is the primary path, not a fallback.) The supervisor never reads, copies, proxies or exposes the token; the UI only shows login status (whether the variable is set), and the agent editor offers the CLI's model aliases rather than a list fetched from the Claude API (the CLI resolves an alias to the subscription's current model). The Claude Code binary is installed as published and never patched.
 - **Untrusted input.** PR bodies and diffs, tracker tickets, webhook payloads and emails are data, not instructions. `CLAUDE.md` says so; sub-agents that read such content get the minimum tool set (`pr-review` and `email-agent` have no push / no destructive tools). Any instruction found inside such content that asks to change repos, send messages or read secrets must be reported to the owner, not executed.
 - **Webhook signature verification** (GitHub HMAC secret) + in-code event filtering, if the optional webhook endpoint is enabled. Default is polling, which exposes no inbound port.
-- **Container as sandbox:** the agent may run with broad in-container permissions, but the container gets resource limits and, where possible, restricted egress; the host is never exposed to the agent.
-- **Secrets** for tools in `/data/secrets` + env (docker secrets / `.env` on volume), never in config Markdown, never in the repo. GitHub access via **fine-grained PAT** (per-repo scope) or a GitHub App — not a classic all-scope token.
-- UI behind auth (see §6). HTTPS via reverse proxy (Caddy/Traefik) or Cloudflare Tunnel.
+- **Container as sandbox:** the agent may run with broad in-container permissions, but the container gets resource limits (`mem_limit`, `pids_limit` in compose) and, where possible, restricted egress; the host is never exposed to the agent. The CLI's environment is the supervisor's minus the supervisor's own secrets (`TELEGRAM_BOT_TOKEN`, `WEB_AUTH_*`, `GROQ_API_KEY`): a prompt injection that runs `env` must not walk away with the bot or the UI.
+- **Secrets** for tools in `/data/secrets` + env (docker secrets / `.env` on volume), never in config Markdown, never in the repo. GitHub access via **fine-grained PATs** (per-repo scope; one per repository owner as `GH_TOKEN_<OWNER>`, since a fine-grained token belongs to a single user or organization) or a GitHub App — not a classic all-scope token.
+- UI behind auth (see §6). HTTPS via reverse proxy (Caddy/Traefik) or Cloudflare Tunnel. The API refuses mutating requests with a foreign `Origin` in both auth modes (a browser attaches basic-auth credentials to cross-site requests too), refuses foreign `Host` names without a password (DNS rebinding), and caps request bodies at 2 MB.
 - No destructive actions without a human gate: merging PRs, deleting branches/data, sending email, and anything irreversible require explicit Telegram confirmation.
 
 ---
@@ -347,7 +347,7 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 | **1. Voice hotfix** ✅ (code) | Telegram bot + STT → `claude -p` in the owner's checkout → reply in Telegram; `developer`/`reviewer` agents, `feature-to-pr` skill, project file format + `onboard-project` | UC-1 end-to-end from a voice note: PR link comes back; zero tokens when idle — **still to be exercised on a real project** |
 | **2. Lifecycle & persistence** ✅ | Task queue in SQLite, session manager (`/new`, `/stop`, `--resume`, one-shot runs), HITL questions via Telegram (agent's final message ↔ owner's reply), crash recovery (orphans failed, queued tasks resumed) | UC-2 and UC-8: a question survives a supervisor restart |
 | **3. Web UI (read)** ✅ | Task feed + session view (transcript rendering, SSE live feed), overview with spend from the tasks table, **chat with Claude Code from the browser** | Owner can watch a live run and see spend without SSH |
-| **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), audit log, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a commit |
+| **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), audit log, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a file event in the Audit log |
 | **5. Schedules** | `schedules` table + UI, prefilter pattern, TRAC poller, GitHub review-request poller | UC-3 and UC-4: zero tokens on empty polls |
 | **6. Hardening** | Budgets/soft-stop, quota estimate, backups of `/data`, template-ization (README for forkers with the conditions from §1.7), optional webhook ingress | Quota forecast visible; fork-and-run documented and tested on a fresh account |
 
@@ -400,13 +400,13 @@ pocket-factory/
 ├── presets/                  # shareable agent + skill bundles, installable from the UI
 ├── prefilters/               # (Phase 5) deterministic pollers (trac.ts, github-reviews.ts, …)
 └── data/                     # → mounted volume in production
-    ├── claude/               # CLAUDE_CONFIG_DIR — owned by Claude Code; git repo for the first three
+    ├── claude/               # CLAUDE_CONFIG_DIR — owned by Claude Code
     │   ├── CLAUDE.md         #   dispatcher rules
     │   ├── agents/           #   developer.md, reviewer.md, …
     │   ├── skills/           #   feature-to-pr/, onboard-project/, …
     │   ├── projects/         #   session transcripts (*.jsonl), written by the CLI
     │   └── (credentials)     #   never touched by the tool
-    ├── config/               # git repository
+    ├── config/               # projects/*.md, mcp.json
     │   ├── projects/         #   photos.md, global-navigation.md, … (frontmatter: repo, branches, tracker, hosts, checks)
     │   └── .mcp.json
     ├── workspaces/           # the owner's checkouts (or WORKSPACES_DIR bind-mounted)

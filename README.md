@@ -24,13 +24,22 @@ Single-owner by design. You log in to Claude Code with **your own subscription**
 Telegram bot, use **your own** GitHub token, point it at **your own** repositories. Nothing is shared,
 proxied or stored by anyone else. See [docs/SPEC.md](docs/SPEC.md) for the concept and roadmap.
 
+How this differs from Claude Code's own Remote Control and cloud sessions: those need a live
+`claude` process (or Anthropic's VM) and keep the transcript with Anthropic; Pocket Factory keeps a
+queue that survives restarts, an audit log of every tool call, and your agents, skills and MCP
+servers as files on your server, and works in your real checkouts with their own `.mcp.json`,
+`CLAUDE.md` and `.claude/` folders. What it does not do yet is answer permission prompts from the
+phone and accept photos; see [docs/LANDSCAPE.md](docs/LANDSCAPE.md) for the comparison with
+similar projects and the ideas taken from it.
+
 ## What it does today
 
 - **Telegram** — text and voice (Whisper on Groq) → `claude -p` in your workspaces → reply with
   turns / tokens / share of the 5-hour window / time, plus how full the subscription windows are.
   Replies continue the same Claude Code session; `/new`, `/stop`, `/status`, `/usage`.
 - **Task queue** — every channel goes through one SQLite queue; one running task per conversation,
-  a configurable number overall; tasks survive supervisor restarts.
+  a configurable number overall; tasks survive supervisor restarts (a task interrupted mid-run is
+  re-queued once and resumes its session).
 - **Web UI** — Overview (queue, subscription limits, tokens, health), Tasks, Chat with Claude Code from the browser with
   live output, Sessions (rendered Claude Code transcripts), editors for **Agents**, **Skills** and
   **Projects**, **Presets**, an **Audit log** (every model call, tool call and sub-agent, per agent
@@ -47,12 +56,13 @@ proxied or stored by anyone else. See [docs/SPEC.md](docs/SPEC.md) for the conce
 Requirements: Docker, a Claude subscription, a Telegram bot token from
 [@BotFather](https://t.me/BotFather), your Telegram user id (ask
 [@userinfobot](https://t.me/userinfobot)), a GitHub fine-grained PAT for the repositories the
-factory may touch.
+factory may touch (one per repository owner, since such a token belongs to a single user or
+organization: `GH_TOKEN_<OWNER>`, with `GH_TOKEN` as the fallback).
 
 ```bash
 git clone https://github.com/miksrv/pocket-factory.git
 cd pocket-factory
-cp .env.example .env          # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, WORKSPACES_DIR, GH_TOKEN, WEB_AUTH_PASSWORD
+cp .env.example .env          # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, WORKSPACES_DIR, GH_TOKEN[_<OWNER>], WEB_AUTH_PASSWORD
 claude setup-token            # on your laptop: prints a token — put it into .env as CLAUDE_CODE_OAUTH_TOKEN
 docker compose up -d --build
 docker compose logs -f supervisor
@@ -74,8 +84,8 @@ Then:
 
 ```
 data/                    runtime state — everything the factory owns, all bind-mounted, gitignored
-├── claude/              Claude Code home: CLAUDE.md, agents/, skills/, transcripts (git repo for the first three)
-├── config/projects/     one Markdown file per connected project (git repo)
+├── claude/              Claude Code home: CLAUDE.md, agents/, skills/, transcripts, MCP credentials
+├── config/              projects/*.md (one per connected project), mcp.json (your own MCP servers)
 ├── workspaces/          repositories (or WORKSPACES_DIR → a folder you already have)
 ├── secrets/ssh/         keys for project hosts, linked to ~/.ssh in the container
 ├── db/                  SQLite: conversations, tasks, task events
@@ -102,6 +112,34 @@ Telegram / web ──► tasks queue (SQLite) ──► claude -p --resume <sess
 
 Sub-agents may reach the servers listed under `hosts:` in a project file over SSH with the keys in
 `data/secrets/ssh/`; read-only inspection is allowed, changes need an explicit "yes" from you.
+Keys only, no passwords, by design: generate a pair for the factory (`ssh-keygen -t ed25519 -f
+data/secrets/ssh/id_ed25519 -C pocket-factory`), add the `.pub` to a dedicated user on each host,
+`ssh-keyscan <host> >> data/secrets/ssh/known_hosts`, `chmod 700 data/secrets`. The directory is
+mounted read-only; the project form lists the key names, never their contents, and has a "Test
+connection" button. Inside the container the CLI runs as uid 1000 (`node`): on a Linux server make
+the keys readable by that uid and keep private keys at mode 0600, or ssh refuses them
+("UNPROTECTED PRIVATE KEY FILE"); the read-only mount means the entrypoint cannot fix this for you.
+
+## MCP servers
+
+Three layers, all optional. A repository's own `.mcp.json` applies when a conversation is bound
+to that project (`/new <project>`, `/project <project>`, the selector in Chat, or the first task
+naming it): tasks then run from the checkout, and its agents, skills and `CLAUDE.md` apply too.
+Your own servers go into `data/config/mcp.json` (same format as `.mcp.json`, passed to every
+session); secrets only as `${VAR}` with the value in `.env`:
+
+```json
+{ "mcpServers": { "trac": { "type": "http", "url": "https://trac.example.com/mcp", "headers": { "Authorization": "Bearer ${TRAC_MCP_TOKEN}" } } } }
+```
+
+OAuth servers are logged in once inside the container, from the repository's checkout:
+`docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser`
+prints the authorization URL; open it in any browser and paste the redirect URL back. The token
+is stored in `data/claude/.credentials.json` and refreshed by the CLI. This works the same over
+SSH on a server (no port forwarding needed). Logging in from a macOS laptop does not help: there
+the CLI keeps tokens in the Keychain, which the container cannot read. Settings → MCP
+shows every server and whether its variables are set. A project file's `mcp:` list limits which
+of the repository's servers a session loads.
 
 ## Voice
 
