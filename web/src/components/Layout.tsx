@@ -2,7 +2,7 @@ import { Component, type ErrorInfo, type ReactNode, useEffect, useRef, useState 
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { api } from '../lib/api'
-import { confirmLeave } from '../lib/unsaved'
+import { useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { Icon, type IconName } from './Icon'
 import { LimitsInline } from './Limits'
@@ -41,6 +41,7 @@ export function Layout() {
     const [collapsed, setCollapsed] = useState(readCollapsed)
     const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === 'open') // mobile drawer
     const location = useLocation()
+    const { guard } = useLeaveGuard()
 
     useEffect(() => {
         try {
@@ -93,7 +94,7 @@ export function Layout() {
                     {NAV.map((item) => (
                         <div key={item.to}>
                             {item.section && <div className="section">{collapsed ? '·' : item.section}</div>}
-                            <NavLink to={item.to} end={item.to === '/'} title={item.label} onClick={(e) => !confirmLeave() && e.preventDefault()}>
+                            <NavLink to={item.to} end={item.to === '/'} title={item.label} onClick={guard(item.to)}>
                                 <span className="icon">
                                     <Icon name={item.icon} />
                                 </span>

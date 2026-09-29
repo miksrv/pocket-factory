@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { useConfirm } from '../components/Modal'
 import { Button, Empty, ErrorBox, Markdown, PageHead, useToast } from '../components/ui'
 import { api, fmt, type Preset } from '../lib/api'
 import { Tile } from '../components/Tile'
@@ -12,20 +13,48 @@ export function PresetsPage() {
     const [toast, showToast] = useToast()
     const [busy, setBusy] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const confirm = useConfirm()
 
-    const install = async (preset: Preset, overwrite = false) => {
-        if (overwrite && !window.confirm(`Overwrite existing ${preset.files.map((f) => `${f.kind}/${f.name}`).join(', ')} with the preset versions?`)) return
+    const run = async (preset: Preset, overwrite: boolean) => {
         setBusy(preset.name)
-        setError(null)
         try {
             const { installed } = await api.installPreset(preset.name, overwrite)
             showToast(installed.length ? `Installed ${fmt.plural(installed.length, 'file')}` : 'Nothing to install — already present')
             presets.reload()
-        } catch (e) {
-            setError((e as Error).message)
         } finally {
             setBusy(null)
         }
+    }
+    const install = async (preset: Preset) => {
+        setError(null)
+        try {
+            await run(preset, false)
+        } catch (e) {
+            setError((e as Error).message)
+        }
+    }
+    // Reinstall replaces the owner's copies: the question lists them, and a failure shows in the window.
+    const reinstall = (preset: Preset) => {
+        const files = preset.files.map((f) => `${f.kind}/${f.name}`)
+        void confirm({
+            title: `Reinstall “${preset.title}”?`,
+            message: (
+                <>
+                    Your copies of {files.map((f, i) => (
+                        <span key={f}>
+                            {i > 0 && ', '}
+                            <code>{f}</code>
+                        </span>
+                    ))}{' '}
+                    are replaced with the preset versions. Edits made to them are lost.
+                </>
+            ),
+            action: 'Overwrite',
+            pending: 'Installing…',
+            danger: true,
+            icon: 'warning',
+            onConfirm: () => run(preset, true)
+        })
     }
 
     return (
@@ -68,7 +97,7 @@ export function PresetsPage() {
                                 </Button>
                             )}
                             {preset.installed ? (
-                                <Button size="sm" onClick={() => install(preset, true)} disabled={busy === preset.name}>
+                                <Button size="sm" onClick={() => reinstall(preset)} disabled={busy === preset.name}>
                                     {busy === preset.name ? 'Installing…' : 'Reinstall'}
                                 </Button>
                             ) : (

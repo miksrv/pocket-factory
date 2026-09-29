@@ -1,9 +1,10 @@
-import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 
 import { api, type CatalogEntry, fmt, type Kind } from '../lib/api'
-import { confirmLeave, setUnsaved } from '../lib/unsaved'
+import { setUnsaved, useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
+import { useConfirm } from './Modal'
 import { Tile } from './Tile'
 import { Button, Empty, ErrorBox, Intro, Markdown, PageHead, Tabs, useToast } from './ui'
 
@@ -44,6 +45,7 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
     const [toast, showToast] = useToast()
     const [filter, setFilter] = useState('')
     const [dirty, setDirty] = useState(false)
+    const { leave, guard } = useLeaveGuard()
     useEffect(() => {
         setUnsaved(dirty)
         return () => setUnsaved(false)
@@ -57,20 +59,14 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
     )
 
     // Leaving an edited form through the list or the New button asks first.
-    const guard = (e: MouseEvent) => {
-        if (!confirmLeave()) e.preventDefault()
-    }
-    const startNew = () => {
-        if (!confirmLeave()) return
-        navigate(`/${kind}/new`)
-    }
+    const startNew = () => leave(() => navigate(`/${kind}/new`))
     const names = new Set((list.data ?? []).map((e) => e.name))
 
     return (
         <div className="page editor-page">
             <PageHead title={title} sub={sub}>
                 {backTo && (
-                    <Button to={backTo.to} onClick={guard}>
+                    <Button to={backTo.to} onClick={guard(backTo.to)}>
                         ‹ {backTo.label}
                     </Button>
                 )}
@@ -86,7 +82,7 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                     </div>
                     <div className="list">
                         {entries.map((entry) => (
-                            <NavLink key={entry.name} to={`/${kind}/${entry.name}`} onClick={guard}>
+                            <NavLink key={entry.name} to={`/${kind}/${entry.name}`} onClick={guard(`/${kind}/${entry.name}`)}>
                                 <Tile name={entry.name} kind={kind} />
                                 <div className="grow">
                                     <div className="title">{entry.name}</div>
@@ -167,6 +163,7 @@ function Form({
     const [mode, setMode] = useState<'edit' | 'preview'>('edit')
     const [error, setError] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
+    const confirm = useConfirm()
     const textarea = useRef<HTMLTextAreaElement>(null)
     // Empty fields are dropped on save, so compare what would be saved with
     // what is on disk; a fresh form is clean until something is typed.
@@ -228,14 +225,25 @@ function Form({
         return () => window.removeEventListener('keydown', onKey)
     })
 
-    const remove = async () => {
-        if (!entry || !window.confirm(`Delete ${kind}/${entry.name}? This removes the file from the volume.`)) return
-        try {
-            await api.remove(kind, entry.name)
-            onDeleted()
-        } catch (e) {
-            setError((e as Error).message)
-        }
+    // The question names the file; a failure shows in the window, where Delete can be tried again.
+    const remove = () => {
+        if (!entry) return
+        void confirm({
+            title: `Delete ${kind.slice(0, -1)} “${entry.name}”?`,
+            message: (
+                <>
+                    This removes <code>{entry.path.split('/').slice(-2).join('/')}</code> from the volume. There is no undo: the factory keeps no history of its files.
+                </>
+            ),
+            action: 'Delete',
+            pending: 'Deleting…',
+            danger: true,
+            icon: 'delete',
+            onConfirm: async () => {
+                await api.remove(kind, entry.name)
+                onDeleted()
+            }
+        })
     }
 
     // Tab indents instead of leaving the field; Escape then Tab still moves focus.

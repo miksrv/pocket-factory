@@ -12,6 +12,8 @@ import {
     Package,
     Send,
     Settings,
+    Trash2,
+    TriangleAlert,
     Zap
 } from 'lucide-react'
 
@@ -37,7 +39,10 @@ export const ICONS = {
     limits: Gauge,
     /** Channels a conversation comes from: a paper plane for Telegram, the chat bubble for the web. */
     telegram: Send,
-    web: MessageSquare
+    web: MessageSquare,
+    /** Tiles of a confirmation window: a bin for a delete, a triangle for anything else destructive. */
+    delete: Trash2,
+    warning: TriangleAlert
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

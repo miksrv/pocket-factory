@@ -70,7 +70,14 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   (every button and button-styled link, `variant` / `size` / `to`), `Stat`, `Tabs`,
   `FilterSelect`, `Intro` (empty pane with one action), `Markdown`, `StopButton`, `Empty`,
   `ErrorBox`, `PageHead`; `LoadMore` / `LoadEarlier` in `components/LoadMore.tsx`. Pages compose
-  these, never repeat their markup. Every list is keyset-paged (`lib/usePaged.ts` +
+  these, never repeat their markup. Modal windows are
+  `components/Modal.tsx`: `Modal` on a native `<dialog>` (top layer, focus trap, Escape, focus
+  return), `ConfirmDialog` on it, and `ConfirmProvider` / `useConfirm()` (mounted in `App`) so a
+  handler asks with one `await confirm({ title, action, danger, onConfirm })`; every destructive
+  button (Delete, Reinstall, leaving unsaved edits via `lib/unsaved.ts` `useLeaveGuard`) goes
+  through it, never `window.confirm`. A destructive question focuses Cancel, fills the action
+  red, keeps the window open with the action busy while `onConfirm` runs and shows its error
+  inline; on a phone it is a bottom sheet. Every list is keyset-paged (`lib/usePaged.ts` +
   `LoadMore` sentinel) with a `(timestamp, id)` cursor sent as `before` + `before_id`, so equal
   timestamps neither skip nor repeat rows; the audit log pages by event id and the server says
   `has_more`. Polling refreshes only the first page and drops rows that left it. `lib/unsaved.ts`

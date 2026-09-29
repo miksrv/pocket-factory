@@ -5,6 +5,7 @@ import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-ro
 import { AssistantTurn } from '../components/AssistantTurn'
 import { Channel } from '../components/Icon'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
+import { useConfirm } from '../components/Modal'
 import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
 import { api, type CatalogEntry, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
@@ -131,6 +132,7 @@ function Thread({ id, onSent, onDeleted, projects }: { id: string; onSent: () =>
     const [prompt, setPrompt] = useState('')
     const [error, setError] = useState<string | null>(null)
     const [pinned, setPinned] = useState(true) // the view follows new output while the reader is at the bottom
+    const confirm = useConfirm()
     const [unseen, setUnseen] = useState(false)
     const messages = useRef<HTMLDivElement>(null)
     const composer = useRef<HTMLTextAreaElement>(null)
@@ -260,15 +262,19 @@ function Thread({ id, onSent, onDeleted, projects }: { id: string; onSent: () =>
         }
     }
 
-    const remove = async () => {
-        if (!window.confirm('Remove this conversation from the list? Its tasks stay in Tasks and the Audit log.')) return
-        try {
-            await api.deleteConversation(id)
-            onDeleted()
-        } catch (e) {
-            setError((e as Error).message)
-        }
-    }
+    const remove = () =>
+        void confirm({
+            title: 'Delete this conversation?',
+            message: 'It leaves the list. Its tasks stay in Tasks and the Audit log.',
+            action: 'Delete',
+            pending: 'Deleting…',
+            danger: true,
+            icon: 'delete',
+            onConfirm: async () => {
+                await api.deleteConversation(id)
+                onDeleted()
+            }
+        })
 
     const [sending, setSending] = useState(false)
     const send = async (e?: FormEvent) => {
