@@ -20,6 +20,12 @@
     --purple-bg: #efe9f8; --purple: #6b46b8;
     --teal-bg: #e3f2f2; --teal: #1f7a78;
     --gray-bg: #efede8; --gray: #6b6963;
+    /* Five more tones for name tiles, so a dozen entries in a list rarely share one. */
+    --rose-bg: #fbe6ee; --rose: #b12a5e;
+    --lime-bg: #eef2dc; --lime: #5c7714;
+    --sky-bg: #e3f0f9; --sky: #1d6d9c;
+    --gold-bg: #f8f0d2; --gold: #8a6a0a;
+    --brown-bg: #f3e9e1; --brown: #7a4b2a;
     --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a877f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     --radius: 10px;
@@ -222,6 +228,11 @@ tr.click:hover td, tr.selected td { background: var(--surface-2); }
 .badge.purple { background: var(--purple-bg); color: var(--purple); }
 .badge.teal { background: var(--teal-bg); color: var(--teal); }
 .badge.gray { background: var(--gray-bg); color: var(--gray); }
+.badge.rose { background: var(--rose-bg); color: var(--rose); }
+.badge.lime { background: var(--lime-bg); color: var(--lime); }
+.badge.sky { background: var(--sky-bg); color: var(--sky); }
+.badge.gold { background: var(--gold-bg); color: var(--gold); }
+.badge.brown { background: var(--brown-bg); color: var(--brown); }
 @keyframes pulse { 50% { opacity: .35; } }
 
 /* icon tiles (agents, skills, projects, presets) */
@@ -235,6 +246,11 @@ tr.click:hover td, tr.selected td { background: var(--surface-2); }
 .tile.teal { background: var(--teal-bg); color: var(--teal); }
 .tile.gray { background: var(--gray-bg); color: var(--gray); }
 .tile.red { background: var(--red-bg); color: var(--red); }
+.tile.rose { background: var(--rose-bg); color: var(--rose); }
+.tile.lime { background: var(--lime-bg); color: var(--lime); }
+.tile.sky { background: var(--sky-bg); color: var(--sky); }
+.tile.gold { background: var(--gold-bg); color: var(--gold); }
+.tile.brown { background: var(--brown-bg); color: var(--brown); }
 .tile.sm { width: 26px; height: 26px; border-radius: 7px; font-size: 12px; }
 .tile.lg { width: 44px; height: 44px; border-radius: 11px; font-size: 22px; }
 .tile > .sprite { width: 60%; height: 60%; }
