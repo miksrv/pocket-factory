@@ -1,0 +1,30 @@
+#!/bin/sh
+# The GitHub token for one repository owner (a user or an organization).
+#
+# A fine-grained PAT has exactly one resource owner, so the owner's own
+# repositories and an organization's need two tokens. They live in the
+# environment as GH_TOKEN_<OWNER>: the owner's login upper-cased, with every
+# character outside A-Z 0-9 turned into "_" (my-org → GH_TOKEN_MY_ORG).
+# GH_TOKEN is the fallback for owners without a token of their own.
+#
+#   gh-token <owner>      prints the token, or nothing when there is none
+#   gh-token --owners     lists the owners that have a token (env suffixes, lower-cased)
+#
+# Both `gh` (through the wrapper in this directory) and `git` (through
+# git-credential-owner) resolve the owner from the repository and call this.
+
+if [ "$1" = "--owners" ]; then
+    env | sed -n 's/^GH_TOKEN_\([A-Z0-9_]*\)=..*/\1/p' | tr 'A-Z' 'a-z' | sort
+    exit 0
+fi
+
+owner=$(printf '%s' "$1" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9\n' '_')
+if [ -n "$owner" ]; then
+    eval "token=\${GH_TOKEN_${owner}:-}"
+    if [ -n "$token" ]; then
+        printf '%s\n' "$token"
+        exit 0
+    fi
+fi
+[ -n "${GH_TOKEN:-}" ] && printf '%s\n' "$GH_TOKEN"
+exit 0

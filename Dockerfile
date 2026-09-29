@@ -56,9 +56,9 @@ COPY supervisor/package.json ./supervisor/
 COPY package.json ./
 COPY templates/ ./templates/
 COPY presets/ ./presets/
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/entrypoint.sh docker/gh docker/gh-token docker/git-credential-owner /usr/local/bin/
 
-RUN chmod +x /usr/local/bin/entrypoint.sh \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/gh /usr/local/bin/gh-token /usr/local/bin/git-credential-owner \
     && mkdir -p /data /home/node \
     && chown -R node:node /data /home/node
 

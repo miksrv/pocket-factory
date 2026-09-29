@@ -1,0 +1,34 @@
+#!/bin/sh
+# `gh` with a token per repository owner. Installed ahead of the real gh on
+# PATH; picks the owner from --repo / -R when given, else from the `origin`
+# of the current checkout, and runs gh with that owner's token as GH_TOKEN
+# (gh prefers the environment over its stored login). Without a matching
+# token the environment is left as it is, so GH_TOKEN still applies.
+#
+# PF_GH_TRACE=1 prints the chosen owner to stderr.
+
+real=/usr/bin/gh
+
+repo=""
+prev=""
+for arg in "$@"; do
+    case "$prev" in
+        -R | --repo) repo=$arg ;;
+    esac
+    case "$arg" in
+        --repo=*) repo=${arg#--repo=} ;;
+    esac
+    prev=$arg
+done
+[ -n "$repo" ] || repo=$(git remote get-url origin 2>/dev/null || true)
+
+# OWNER/REPO, HOST/OWNER/REPO, https://host/OWNER/REPO(.git), git@host:OWNER/REPO → OWNER
+owner=$(printf '%s' "$repo" | sed -E 's#^[a-z]+://[^/]+/##; s#^[^/@]+@[^:]+:##; s#^github\.com/##; s#^/##; s#/.*$##')
+token=$(gh-token "$owner")
+
+[ -n "${PF_GH_TRACE:-}" ] && echo "[gh] owner: ${owner:-none}, token: $([ -n "$token" ] && echo yes || echo no)" >&2
+
+if [ -n "$token" ]; then
+    GH_TOKEN=$token exec "$real" "$@"
+fi
+exec "$real" "$@"

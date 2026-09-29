@@ -5,6 +5,11 @@ services:
         container_name: pocket-factory
         restart: unless-stopped
         env_file: .env
+        # The container is the sandbox (SPEC §8): bound memory and process
+        # count so a runaway build or fork bomb cannot take the host down.
+        # ≈1 GiB per claude -p session plus whatever the project's tooling needs.
+        mem_limit: ${CONTAINER_MEMORY:-6g}
+        pids_limit: 1024
         environment:
             # The container is the sandbox; inside it Claude Code runs unattended.
             CLAUDE_PERMISSION_MODE: bypassPermissions
@@ -16,7 +21,7 @@ services:
         volumes:
             # Claude Code's own home: login, CLAUDE.md, agents/, skills/, transcripts.
             - ./data/claude:/data/claude
-            # Factory config: projects/*.md, .mcp.json (becomes a git repo later).
+            # Factory config: projects/*.md, mcp.json (your own MCP servers).
             - ./data/config:/data/config
             # Your repositories. Point WORKSPACES_DIR at an existing folder on
             # your machine to work on the projects you already have checked out.
@@ -25,7 +30,7 @@ services:
             - ./data/logs:/data/logs
             # SSH keys for project hosts (linked to ~/.ssh by the entrypoint).
             - ./data/secrets:/data/secrets:ro
-        # Needed for the one-time interactive `claude` login:
-        #   docker compose run --rm supervisor claude
+        # For one-off interactive runs in the container, e.g. an MCP OAuth login:
+        #   docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser
         stdin_open: true
         tty: true
