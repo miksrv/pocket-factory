@@ -1,0 +1,5 @@
+{
+    "title": "Full-stack TypeScript + PHP",
+    "description": "Feature work in repositories with a TypeScript client and a PHP server: a developer per stack, review with a fix loop, checks, a PR with a structured description, then CI.",
+    "tags": ["typescript", "php", "pipeline", "review"]
+}

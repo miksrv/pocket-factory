@@ -231,8 +231,9 @@ export interface Preset {
     title: string
     description: string
     tags: string[]
-    files: Array<{ kind: Kind; name: string; description: string | null }>
+    files: Array<{ kind: Kind; name: string; description: string | null; installed: boolean }>
     readme: string | null
+    /** Every file is on the volume. */
     installed: boolean
 }
 

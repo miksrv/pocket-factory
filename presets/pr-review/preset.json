@@ -1,5 +1,5 @@
 {
-    "title": "Pull request review",
+    "title": "Pull Request Review",
     "description": "Review a pull request on GitHub with a read-only agent and post the findings as review comments. Safe against prompt injection in PR bodies: no write tools, no push.",
     "tags": ["review", "github", "read-only"]
 }

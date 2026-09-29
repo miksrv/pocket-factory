@@ -1,0 +1,5 @@
+{
+    "title": "DevOps Engineer",
+    "description": "Look at the servers a project runs on over SSH — service and container status, logs, disk, memory, config — and report. Read-only by contract and by a hook; any change is proposed to the owner, never made.",
+    "tags": ["ops", "ssh", "docker", "read-only"]
+}

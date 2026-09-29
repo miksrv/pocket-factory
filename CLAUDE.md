@@ -135,7 +135,7 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   `mcp_servers` is kept in `meta` (`claude.mcp`). Sub-agents get data from the orchestrator, not
   MCP access (their `tools:` allowlists stay MCP-free), except role-owned tools.
 - Token hygiene: `Explore` is overridden in `templates/claude/agents/Explore.md` with `model:
-  haiku`; agents carry `maxTurns`, read-only ones `effort: medium`, `host-inspector` also
+  haiku`; agents carry `maxTurns`, read-only ones `effort: medium`, `devops-engineer` also
   `omitClaudeMd`. The dispatcher suggests `/new` after a finished task.
 - GitHub auth = fine-grained PATs, never mounted SSH keys. One per repository owner:
   `GH_TOKEN_<OWNER>` (login upper-cased, `-` → `_`), `GH_TOKEN` as the fallback. In the image
@@ -205,9 +205,16 @@ the history up to the evening of 2026-09-28). Since then, uncommitted at the tim
 - GitHub tokens per repository owner (`GH_TOKEN_<OWNER>`, `docker/gh`, `docker/git-credential-owner`);
   the owner currently uses one classic `GH_TOKEN`, verified for push on personal and org repos.
 - Voice works (Groq, `.oga` → `.ogg` upload name fix). Health on Overview is fully green.
-- Preset `fullstack-ts-go` (go-developer, web-developer, host-inspector with a read-only hook,
-  fullstack-feature, conventions, host-check); `pr-review` and the core reviewer rewritten with a
-  verification pass and severity levels; every agent / skill description has a "Use when" trigger.
+- Presets (2026-09-29): `fullstack-ts-go` (go-developer, web-developer, go/typescript
+  conventions), `fullstack-ts-php` (php-developer, php-conventions, the same web-developer),
+  `devops` (devops-engineer with a read-only hook, devops-check), `pr-review`. The two full-stack
+  presets share `fullstack-feature` and `web-developer` byte for byte: the skill picks the server
+  developer from the checkout (`go.mod` → go-developer, `composer.json` → php-developer), so both
+  can be installed and reinstalled in any order. Keep shared files identical across presets, since
+  installed files are one flat namespace. `bug-tracker-fixer` was dropped from `presets/` (its
+  `triager` / `tracker-defect-fix` stay installed in `data/`). `pr-review` and the core reviewer
+  have a verification pass and severity levels; every agent / skill description has a "Use when"
+  trigger.
 - Projects: form reworked (no branch prefix, workflow select, collapsed tracker, host cards with
   key selection and "Test connection"); `TenantManagement` onboarded from Telegram.
 - Conversations bound to a project run from its checkout (repository `.mcp.json`, `.claude/agents`,

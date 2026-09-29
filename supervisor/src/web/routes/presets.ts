@@ -9,10 +9,11 @@ export function presetRoutes(): Hono<Env> {
     app.get('/', (c) => {
         const { presets, catalog } = c.get('app')
         return c.json(
-            presets.list().map((preset) => ({
-                ...preset,
-                installed: preset.files.every((file) => catalog.exists(file.kind, file.name))
-            }))
+            presets.list().map((preset) => {
+                // Per file, since presets share files: a file another preset already put on the volume is installed too.
+                const files = preset.files.map((file) => ({ ...file, installed: catalog.exists(file.kind, file.name) }))
+                return { ...preset, files, installed: files.every((file) => file.installed) }
+            })
         )
     })
 

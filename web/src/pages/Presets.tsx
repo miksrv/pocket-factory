@@ -7,6 +7,25 @@ import { api, fmt, type Preset } from '../lib/api'
 import { Tile } from '../components/Tile'
 import { useAsync } from '../lib/useAsync'
 
+/** "installed · 5 files", "not installed · 5 files" or "2 of 5 files installed" when another preset already brought some. */
+function PresetStatus({ preset }: { preset: Preset }) {
+    const total = preset.files.length
+    const present = preset.files.filter((f) => f.installed).length
+    if (preset.installed) {
+        return (
+            <>
+                <span style={{ color: 'var(--green)' }}>installed</span> · {fmt.plural(total, 'file')}
+            </>
+        )
+    }
+    if (present === 0) return <>not installed · {fmt.plural(total, 'file')}</>
+    return (
+        <>
+            {present} of {total} files installed
+        </>
+    )
+}
+
 export function PresetsPage() {
     const presets = useAsync(() => api.presets(), [])
     const [open, setOpen] = useState<Preset | null>(null)
@@ -64,17 +83,17 @@ export function PresetsPage() {
             {presets.data?.length === 0 && <Empty>No presets found in presets/.</Empty>}
             <div className="cards" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
                 {presets.data?.map((preset) => (
-                    <div key={preset.name} className="card stack">
-                        <div className="row between top">
-                            <div className="row top">
-                                <Tile name={preset.name} kind="presets" />
-                                <div>
-                                    <div style={{ fontWeight: 600 }}>{preset.title}</div>
-                                    <div className="dim small">{preset.description}</div>
+                    <div key={preset.name} className="card preset-card">
+                        <div className="preset-card-head">
+                            <Tile name={preset.name} kind="presets" large />
+                            <div className="grow">
+                                <div className="agent-name">{preset.title}</div>
+                                <div className="dim small">
+                                    <PresetStatus preset={preset} />
                                 </div>
                             </div>
-                            {preset.installed && <span className="badge done">installed</span>}
                         </div>
+                        <p className="preset-desc">{preset.description}</p>
                         <div className="row wrap">
                             {preset.tags.map((t) => (
                                 <span key={t} className="badge plain">
@@ -82,29 +101,31 @@ export function PresetsPage() {
                                 </span>
                             ))}
                         </div>
-                        <div className="small">
+                        <div className="preset-files small">
                             {preset.files.map((f) => (
-                                <div key={`${f.kind}/${f.name}`}>
+                                <span key={`${f.kind}/${f.name}`}>
                                     <span className="dim">{f.kind}/</span>
-                                    {preset.installed ? <Link to={`/${f.kind}/${f.name}`}>{f.name}</Link> : f.name}
-                                </div>
+                                    {f.installed ? <Link to={`/${f.kind}/${f.name}`}>{f.name}</Link> : f.name}
+                                </span>
                             ))}
                         </div>
-                        <div className="toolbar">
-                            {preset.readme && (
-                                <Button size="sm" onClick={() => setOpen(preset)}>
-                                    Details
-                                </Button>
-                            )}
-                            {preset.installed ? (
-                                <Button size="sm" onClick={() => reinstall(preset)} disabled={busy === preset.name}>
-                                    {busy === preset.name ? 'Installing…' : 'Reinstall'}
-                                </Button>
-                            ) : (
-                                <Button size="sm" variant="primary" onClick={() => install(preset)} disabled={busy === preset.name}>
-                                    {busy === preset.name ? 'Installing…' : 'Install'}
-                                </Button>
-                            )}
+                        <div className="preset-card-foot">
+                            <div className="toolbar">
+                                {preset.readme && (
+                                    <Button size="sm" onClick={() => setOpen(preset)}>
+                                        Details
+                                    </Button>
+                                )}
+                                {preset.installed ? (
+                                    <Button size="sm" onClick={() => reinstall(preset)} disabled={busy === preset.name}>
+                                        {busy === preset.name ? 'Installing…' : 'Reinstall'}
+                                    </Button>
+                                ) : (
+                                    <Button size="sm" variant="primary" onClick={() => install(preset)} disabled={busy === preset.name}>
+                                        {busy === preset.name ? 'Installing…' : 'Install'}
+                                    </Button>
+                                )}
+                            </div>
                         </div>
                     </div>
                 ))}

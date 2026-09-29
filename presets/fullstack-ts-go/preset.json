@@ -1,5 +1,5 @@
 {
     "title": "Full-stack TypeScript + Go",
-    "description": "Feature work in repositories with a TypeScript client and a Go server: a developer per stack, review with a fix loop, checks, a PR with a structured description — plus read-only host inspection over SSH.",
-    "tags": ["typescript", "go", "pipeline", "review", "ops"]
+    "description": "Feature work in repositories with a TypeScript client and a Go server: a developer per stack, review with a fix loop, checks, a PR with a structured description, then CI.",
+    "tags": ["typescript", "go", "pipeline", "review"]
 }
