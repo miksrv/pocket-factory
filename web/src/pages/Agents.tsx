@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { AgentStatus, auditLink, rosterOf } from '../components/AgentsPanel'
 import { Editor, Field, str } from '../components/Editor'
 import { Tile } from '../components/Tile'
 import { Button, Empty, ErrorBox, GrowingTextarea, PageHead } from '../components/ui'
-import { api, fmt } from '../lib/api'
+import { api, fmt, type ToolList } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 /**
@@ -43,6 +43,20 @@ Report back in a few lines. No tool logs.
 `
 
 /** The roster as cards; editing opens the shared file editor. */
+/** The MCP servers an allowlist reaches: one entry per server, with how many of its tools are on the list (partial when not all). */
+function mcpServersOf(allowed: string[], known: ToolList['mcp']): Array<{ key: string; label: string; selected: number; total: number; partial: boolean }> {
+    const byServer = new Map<string, number>()
+    for (const tool of allowed) {
+        const match = /^mcp__(.+?)__/.exec(tool)
+        if (match) byServer.set(match[1], (byServer.get(match[1]) ?? 0) + 1)
+    }
+    return [...byServer].map(([key, selected]) => {
+        const server = known.find((m) => m.server === key)
+        const total = server?.tools.length ?? selected
+        return { key, label: server?.label ?? key.replace(/^claude_ai_/, 'claude.ai ').replace(/_/g, ' '), selected, total, partial: selected < total }
+    })
+}
+
 export function AgentsPage() {
     const { name } = useParams()
     if (name) return <AgentEditor />
@@ -53,7 +67,10 @@ function AgentGrid() {
     const navigate = useNavigate()
     const entries = useAsync(() => api.list('agents'), [], 30_000)
     const activity = useAsync(() => api.agentActivity('7d'), [], 5_000)
-    const rows = rosterOf(entries.data, activity.data).filter((r) => r.name !== 'orchestrator')
+    const known = useAsync(() => api.tools(), [])
+    const rows = rosterOf(entries.data, activity.data)
+        .filter((r) => r.name !== 'orchestrator')
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 
     return (
         <div className="page">
@@ -70,7 +87,9 @@ function AgentGrid() {
             )}
             <div className="agent-grid">
                 {rows.map((r) => {
-                    const tools = splitTools(str(r.entry?.frontmatter.tools))
+                    const allowed = splitTools(str(r.entry?.frontmatter.tools))
+                    const tools = allowed.filter((t) => !t.startsWith('mcp__'))
+                    const servers = mcpServersOf(allowed, known.data?.mcp ?? [])
                     const model = str(r.entry?.frontmatter.model)
                     return (
                         <div key={r.name} className="card agent-card">
@@ -95,8 +114,8 @@ function AgentGrid() {
                                 )}
                             </div>
                             <div className="agent-card-foot">
-                                <div className="row wrap" title={tools.join(', ')}>
-                                    {tools.length > 0 ? (
+                                <div className="row wrap" title={allowed.join(', ')}>
+                                    {allowed.length > 0 ? (
                                         <>
                                             {tools.slice(0, 4).map((t) => (
                                                 <span key={t} className="badge plain">
@@ -104,6 +123,12 @@ function AgentGrid() {
                                                 </span>
                                             ))}
                                             {tools.length > 4 && <span className="badge plain">+{tools.length - 4}</span>}
+                                            {servers.map((m) => (
+                                                <span key={m.key} className="badge plain sky" title={m.partial ? `${m.selected} of ${m.total} tools of ${m.label}` : `every tool of ${m.label}`}>
+                                                    {m.label}
+                                                    {m.partial ? ` ${m.selected}/${m.total}` : ''}
+                                                </span>
+                                            ))}
                                         </>
                                     ) : (
                                         <span className="badge plain">{r.builtin ? 'built-in tools' : 'all tools'}</span>
@@ -130,24 +155,17 @@ function AgentGrid() {
 
 /**
  * `tools:` is an allowlist of Claude Code tool names, not free text. Known
- * tools are toggles; anything else (MCP tools like mcp__github__get_issue)
- * goes in the extra field. Nothing selected = inherit every tool.
+ * tools are toggles; MCP tools come grouped by server — the servers the
+ * sessions have seen: claude.ai connectors, project servers, the owner's own —
+ * with a whole-server box or single tools; anything else goes in the extra
+ * field. Nothing selected = inherit every tool.
  */
-function ToolPicker({
-    value,
-    common,
-    reported,
-    source,
-    onChange
-}: {
-    value: string
-    common: string[]
-    reported: string[]
-    source: 'cli' | 'default'
-    onChange: (next: string) => void
-}) {
+function ToolPicker({ value, tools, onChange }: { value: string; tools: ToolList | undefined; onChange: (next: string) => void }) {
+    const common = tools?.common ?? []
+    const reported = tools?.reported ?? []
+    const mcp = tools?.mcp ?? []
     const selected = splitTools(value)
-    const known = [...common, ...reported]
+    const known = [...common, ...reported, ...mcp.flatMap((m) => m.tools)]
     const extra = selected.filter((t) => !known.includes(t))
     // The field keeps what was typed (", " included) until it parses to something else.
     const [extraText, setExtraText] = useState(extra.join(', '))
@@ -156,15 +174,19 @@ function ToolPicker({
         const next = selected.includes(tool) ? selected.filter((t) => t !== tool) : [...selected, tool]
         onChange(next.join(', '))
     }
-    const chip = (tool: string) => (
-        <Button key={tool} className={`chip${selected.includes(tool) ? ' on' : ''}`} onClick={() => toggle(tool)} aria-pressed={selected.includes(tool)}>
-            {tool}
+    const setMany = (names: string[], on: boolean) => {
+        const next = on ? [...selected, ...names.filter((n) => !selected.includes(n))] : selected.filter((t) => !names.includes(t))
+        onChange(next.join(', '))
+    }
+    const chip = (tool: string, text = tool) => (
+        <Button key={tool} className={`chip${selected.includes(tool) ? ' on' : ''}`} onClick={() => toggle(tool)} aria-pressed={selected.includes(tool)} title={tool}>
+            {text}
         </Button>
     )
     return (
         <div className="tool-picker">
             <div className="row wrap" style={{ gap: 6 }}>
-                {common.map(chip)}
+                {common.map((t) => chip(t))}
             </div>
             {reported.length > 0 && (
                 <details className="tool-more">
@@ -174,14 +196,22 @@ function ToolPicker({
                             : `More tools the CLI reports (${reported.length})`}
                     </summary>
                     <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
-                        {reported.map(chip)}
+                        {reported.map((t) => chip(t))}
                     </div>
                 </details>
+            )}
+            {mcp.length > 0 && (
+                <div className="mcp-servers">
+                    <div className="dim">MCP servers the sessions have seen — a whole server, or single tools:</div>
+                    {mcp.map((m) => (
+                        <McpServerRow key={m.server} server={m} selected={selected} onAll={(on) => setMany(m.tools, on)} chip={chip} />
+                    ))}
+                </div>
             )}
             <input
                 className="mono"
                 value={shownExtra}
-                placeholder="MCP tools, comma separated — e.g. mcp__github__get_issue"
+                placeholder="Other tools, comma separated — e.g. mcp__github__get_issue for a server not seen yet"
                 onChange={(e) => {
                     setExtraText(e.target.value)
                     onChange([...selected.filter((t) => known.includes(t)), ...splitTools(e.target.value)].join(', '))
@@ -189,9 +219,39 @@ function ToolPicker({
             />
             <span className="dim">
                 {selected.length ? `${selected.length} allowed: ${selected.join(', ')}` : 'None selected — the agent inherits every tool.'}
-                {source === 'default' ? ' · The CLI reports its full list after the first task.' : ''}
+                {tools?.source === 'default' ? ' · The CLI reports its full list after the first task.' : ''}
             </span>
         </div>
+    )
+}
+
+/** One MCP server: a box for all of its tools (indeterminate when some are on) and the tools themselves behind a fold. */
+function McpServerRow({ server, selected, onAll, chip }: { server: ToolList['mcp'][number]; selected: string[]; onAll: (on: boolean) => void; chip: (tool: string, text?: string) => ReactNode }) {
+    const on = server.tools.filter((t) => selected.includes(t)).length
+    const all = on === server.tools.length
+    const box = useRef<HTMLInputElement>(null)
+    useEffect(() => {
+        if (box.current) box.current.indeterminate = on > 0 && !all
+    }, [on, all])
+    const short = (tool: string) => tool.slice(`mcp__${server.server}__`.length)
+    const usable = server.tools.length > 0
+    const tone = server.status === 'connected' ? 'done' : server.status === 'needs-auth' ? 'queued' : server.status === 'failed' ? 'failed' : 'cancelled'
+    return (
+        <details className="mcp-server" open={on > 0 && !all}>
+            <summary>
+                <label className="row" onClick={(e) => e.stopPropagation()}>
+                    <input ref={box} type="checkbox" checked={all && usable} disabled={!usable} onChange={(e) => onAll(e.target.checked)} />
+                    <span className="grow">
+                        <strong>{server.label}</strong>{' '}
+                        <span className="dim">· {!usable ? 'no tools until it is authorized' : all ? `all ${server.tools.length} tools` : on ? `${on} of ${server.tools.length} tools` : `${server.tools.length} tools`}</span>
+                    </span>
+                    <span className={`badge ${tone}`}>{server.status === 'needs-auth' ? 'needs authentication' : server.status}</span>
+                </label>
+            </summary>
+            <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
+                {server.tools.map((t) => chip(t, short(t)))}
+            </div>
+        </details>
     )
 }
 
@@ -224,8 +284,8 @@ function AgentEditor() {
                         <Field label="Description — when the dispatcher should use this agent" hint="Claude Code matches tasks to agents by this text. Be specific." wide>
                             <GrowingTextarea value={str(fm.description)} onChange={(e) => set({ description: e.target.value })} />
                         </Field>
-                        <Field label="Tools the agent may use" hint="An allowlist of Claude Code tool names. Read-only agents: Read, Bash, Grep, Glob." wide>
-                            <ToolPicker value={str(fm.tools)} common={tools.data?.common ?? []} reported={tools.data?.reported ?? []} source={tools.data?.source ?? 'default'} onChange={(next) => set({ tools: next })} />
+                        <Field label="Tools the agent may use" hint="An allowlist of Claude Code tool names. Read-only agents: Read, Bash, Grep, Glob. MCP servers are the ones the factory is connected to (claude.ai connectors, the project's .mcp.json, Settings → MCP); pick a server to make this a role for it, or only some of its tools (the email assistant has Gmail without send)." wide>
+                            <ToolPicker value={str(fm.tools)} tools={tools.data} onChange={(next) => set({ tools: next })} />
                         </Field>
                     </>
                 )
