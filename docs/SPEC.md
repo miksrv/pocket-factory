@@ -2,7 +2,9 @@
 
 > **Tagline:** *"An agent becomes truly autonomous the moment you close your laptop lid."*
 >
-> Status: Draft v1.3 · Date: 2026-09-28 · Author: Misha Topchilo (with Claude)
+> Status: Draft v1.4 · Date: 2026-09-30 · Author: Misha Topchilo (with Claude)
+>
+> **v1.4 changes:** decisions recorded 2026-09-29/30. Claude auth is a full claude.ai login **inside the container** (`claude auth login`, URL + code), which brings the account's connectors and plugins into every session; the setup-token is the fallback. Questions and permissions reach the owner over stream-json on stdin (`AskUserQuestion`, `--permission-prompt-tool stdio`) and are answered from the web or Telegram inside the same run; the idle-timeout model is gone for good. MCP is three layers (repository `.mcp.json`, owner `config/mcp.json`, role-owned servers in agent frontmatter) with a registry, status refresh and browser-driven sign-in in Settings. SSH hosts are a shared registry (`config/hosts.yaml`) referenced from project files; host keys are trusted from the UI. Unread replies and drafts in the chat.
 >
 > **v1.3 changes:** the concept is stated as a self-hosted layer over Claude Code for developers with four pillars — autonomy, control over what agents do, management of agents / skills / projects, pipelines. Money is gone from the product (tokens and subscription windows instead); the config git history is replaced by the Audit log built live from stream-json; every list pages dynamically; agents are a card roster with live activity; models and tools come from the subscription and the CLI.
 >
@@ -45,7 +47,7 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 - Support for multiple independent repositories (personal and organization-owned) with per-project workflows, credentials, and conventions.
 - Human-in-the-loop: the agent pauses and asks the owner via Telegram when it hits ambiguity or a decision gate; runs resume after the answer.
 - Self-improvement loop: corrections given via Telegram ("remember: in this project always update the CHANGELOG") are persisted by the agent into its own knowledge files (visible as file events in the Audit log).
-- Session lifecycle under the owner's control: sessions close on idle timeout, on explicit "done", or on a Telegram command, and can be resumed later with full context.
+- Session lifecycle under the owner's control: every task is a one-shot run that ends with the agent's report; the next message in the same conversation resumes the session with full context, `/new` starts a fresh one, `/stop` cancels a run.
 
 ### Non-Goals (v1)
 
@@ -67,14 +69,14 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 2. Voice is transcribed (STT); the supervisor creates a task and spawns a Claude Code session.
 3. Claude Code matches the message to the `photos` project via the knowledge base, applies the `feature-to-pr` skill.
 4. Spawns *developer* sub-agent (branch, implementation, tests) → *reviewer* sub-agent (diff review, fresh context) → fix loop until review passes → runs the project's checks.
-5. Opens a PR via `gh`, sends a Telegram report: "PR ready: <link>. Summary of changes…". Session is closed after the idle timeout or when the owner replies "done".
+5. Opens a PR via `gh`, sends a Telegram report: "PR ready: <link>. Summary of changes…". The run ends with the report; a follow-up in the same conversation resumes the session, `/new` closes the topic.
 
 ### UC-2 — Organization task from ClickUp (via Telegram)
 
 > "In project webshop take ClickUp task DEV-1234 and do it."
 
 1. Claude Code matches `webshop` → org repo, ClickUp workspace, `clickup-task` skill.
-2. Reads the task via ClickUp MCP. If ambiguous — sends batched clarifying questions to Telegram; the task goes to `waiting_for_user`, the session is kept warm for a while and then released; the owner's reply resumes it.
+2. Reads the task via the ClickUp connector. If ambiguous — asks with `AskUserQuestion` (one Telegram message per question with inline buttons, a form in the web thread); the run waits with its process alive and the wall-clock timeout paused, and the owner's answer — buttons or free text, from either channel — continues the same run.
 3. Branch `feature/DEV-21234-…`, developer → reviewer → QA loop, PR to the branch defined in project config.
 4. Posts a comment on the ClickUp task with the PR link, transitions the task status to *Review*.
 5. Telegram report: "DEV-21234 done, PR ready, task moved to Review."
@@ -114,7 +116,7 @@ Claude Code edits the corresponding project file or skill itself and confirms. T
 
 ### UC-8 — Ending a session
 
-The owner writes "thanks, we're done", sends `/done`, or simply stops replying. The supervisor terminates the Claude Code process (immediately on explicit finish; after the idle timeout otherwise). The transcript stays on disk; a later message on the same topic resumes the session with full context.
+There is nothing to end: a run finishes with the agent's report and the process exits. The transcript stays on disk; a later message in the same conversation resumes the session with full context, `/new` (optionally `/new <project>`) starts a fresh conversation, `/stop` cancels a running task. The dispatcher suggests `/new` after a finished task so a long-lived conversation does not drag its whole history into every run.
 
 ---
 
@@ -124,21 +126,21 @@ The owner writes "thanks, we're done", sends `/done`, or simply stops replying. 
                      ┌──────────────────────── VPS · docker compose ────────────────────────┐
  Telegram ◄─────────►│  supervisor (always on, no LLM)                    web              │
  (text / voice)      │  ┌──────────────────────────────────────────┐     ┌──────────────┐  │
- GitHub (polling ───►│  │ telegram bot (long polling) + STT        │     │ Next.js UI   │  │
-  or webhook)        │  │ task queue · scheduler · prefilters      │◄────│ agents/skills│  │
-                     │  │ session manager: spawn / feed / resume / │     │ projects     │  │
-                     │  │   idle-timeout / kill                    │     │ schedules    │  │
-                     │  └───────────────┬──────────────────────────┘     │ tasks/       │  │
-                     │                  │ stdio (stream-json)            │  transcripts │  │
-                     │                  ▼                                │ cost dash    │  │
-                     │  claude -p  (unmodified Claude Code CLI,          └──────────────┘  │
-                     │              owner's own login, 0..N processes)                     │
-                     │              └─ sub-agents · skills · MCP                           │
+ GitHub (polling ───►│  │ telegram bot (long polling) + STT        │     │ Vite/React   │  │
+  or webhook)        │  │ task queue · scheduler · prefilters      │◄────│ SPA: chat    │  │
+                     │  │ session manager: spawn / resume / ask /  │     │ agents/skills│  │
+                     │  │   answer / stop / restart recovery       │     │ projects     │  │
+                     │  └───────────────┬──────────────────────────┘     │ audit · tasks│  │
+                     │                  │ stdio (stream-json both ways)  │ transcripts  │  │
+                     │                  ▼                                │ limits       │  │
+                     │  claude -p  (unmodified Claude Code CLI,          │ settings     │  │
+                     │              owner's claude.ai login, 0..N)       └──────────────┘  │
+                     │              └─ sub-agents · skills · MCP · connectors              │
                      │                                 │                                    │
                      │                                 ▼                                    │
                      │  /data volume: claude/ (CLAUDE_CONFIG_DIR: credentials, agents,     │
-                     │  skills, transcripts) · config/ (projects, git) · workspaces ·      │
-                     │  db (SQLite) · secrets (PATs, MCP)                                  │
+                     │  skills, transcripts) · config/ (projects, hosts.yaml, mcp.json,    │
+                     │  known_hosts) · workspaces · db (SQLite) · secrets (ssh, read-only) │
                      └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -146,7 +148,7 @@ The owner writes "thanks, we're done", sends `/done`, or simply stops replying. 
 
 | Component | Responsibility | Tech |
 |---|---|---|
-| **supervisor** | Telegram bot (long polling — no public IP required), voice → text (STT), task queue + worker, scheduler + prefilters, optional webhook endpoint, **session manager** (spawn Claude Code, stream messages in/out, resume, idle timeout, kill), delivery of reports/questions back to Telegram, transcript indexing and cost accounting | Node.js/TypeScript, grammY, node-cron, `child_process` around `claude -p` |
+| **supervisor** | Telegram bot (long polling — no public IP required), voice → text (STT), task queue + worker, scheduler + prefilters, optional webhook endpoint, **session manager** (spawn Claude Code, stream-json in and out, resume by session id, questions and permission prompts relayed to the owner and answered back on stdin, stop, re-queue after a supervisor restart), delivery of reports/questions back to Telegram, transcript indexing and token accounting | Node.js/TypeScript, grammY, node-cron, `child_process` around `claude -p` |
 | **claude** | The agent itself: dispatcher prompt, sub-agents, skills, MCP, sessions, memory. Unmodified Claude Code CLI, logged in by the owner. Not a long-running service — spawned per task, 0..N processes at a time | `@anthropic-ai/claude-code` (pinned version), `git`, `gh`, project runtimes |
 | **web** | Admin & observability UI (see §6) | Vite + React SPA, built into the image and served by the supervisor; SSE for live output |
 | **db** | Tasks, schedules, seen-items, session index, usage aggregates | SQLite on the volume (WAL mode) |
@@ -163,11 +165,13 @@ tasks (
   idempotency_key,       -- dedup: webhook retries, overlapping cron runs
   project,               -- resolved project slug (nullable until dispatched)
   prompt, payload_json,  -- user text / webhook payload / schedule prompt
-  status,                -- queued | running | waiting_for_user | done | failed | cancelled
-  session_id,            -- Claude Code session id (for --resume)
+  status,                -- queued | running | done | failed | cancelled
+  ask,                   -- what a running task waits for (question / permission, answers so far); null otherwise
+  restarts,              -- how many supervisor restarts the task has survived (re-queued once)
+  conversation_id,       -- the thread the task belongs to; the conversation holds the session id
   reply_to,              -- where to report: telegram chat, PR, clickup task…
   created_at, started_at, finished_at,
-  tokens_in, tokens_out, cost_usd
+  tokens_in, tokens_out, cost_usd   -- cost kept for the record, never shown
 )
 ```
 
@@ -176,8 +180,8 @@ Rules:
 - **Idle = free.** The worker spawns Claude Code only for queued tasks.
 - **Dedup** via `idempotency_key` (e.g. webhook delivery ID, `schedule_id + fire_time`).
 - **Workspace:** the agent works inside the owner's real checkout on a branch — no worktrees, no re-cloning (decided during Phase 0; the owner's repositories are bind-mounted and expected to stay in the state the owner left them). One running task per conversation; tasks touching the same repository are the owner's responsibility to sequence for now.
-- **Pause/resume:** clarifying questions flip the task to `waiting_for_user`; the Telegram reply resumes the stored session.
-- **Cancellation & steering:** the owner can stop a running task or inject a mid-run instruction from Telegram/UI (`/stop`, `/done`, free text while a task runs).
+- **Questions:** a question or an unsettled permission prompt is stored on the running task (`ask`); the task keeps its slot, the timeout is paused, and the answer from any channel continues the same run (§4.4). A message typed while a question is open is the answer.
+- **Cancellation & steering:** the owner can stop a running task (`/stop`, the Stop button); free text sent while a task runs is queued as the next task of the conversation and resumes the same session once the current run ends.
 
 ### 4.3 Schedules
 
@@ -196,44 +200,43 @@ schedules (id, name, cron_expr, active_window,   -- e.g. Mon–Fri 09:00–18:00
 
 The session manager is the piece Claude Code does not provide and the core of the "zero idle cost" promise.
 
-> **As implemented (v1.3):** every task is a one-shot `claude -p` run; the conversation remembers the session id and the next task in the same conversation resumes it with `--resume`. There is no process to keep warm, so the idle timer below is a no-op and "explicit finish" is simply the owner opening a new conversation (`/new`). stdin *is* stream-json (since 2026-09-30): after an `initialize` control request the prompt goes out as a user message and stdin stays open until the result, with `--permission-prompt-tool stdio`. That is what makes the CLI offer `AskUserQuestion` in print mode and route it — like any permission prompt the mode leaves open — to the supervisor as a `can_use_tool` control request. The task then waits (`tasks.ask`, state `waiting_for_user` below) with the wall-clock timeout paused; the owner answers from the web or Telegram (buttons or free text) and the answer returns as a `control_response`, so the same run continues. Without a host the tool does not exist in `-p` and the agent can only ask in prose, which ends the run.
+Every task is a **one-shot** `claude -p` run: the process starts for the task and exits with the result. Continuity lives in the conversation, which remembers the session id and resumes it with `--resume` for the next task. Nothing is kept warm between tasks, so there is no idle timer and nothing to "close" — the v1.1 idle-timeout model was dropped in v1.2 and is not coming back.
+
+stdin is stream-json too (since 2026-09-30): after an `initialize` control request the prompt goes out as a user message and stdin stays open until the result, with `--permission-prompt-tool stdio`. That is what makes the CLI offer `AskUserQuestion` in print mode and route it — like any permission prompt the mode leaves open — to the supervisor as a `can_use_tool` control request. Without such a host the tool does not exist in `-p` and the agent can only ask in prose, which ends the run.
 
 ```
-                 task queued / owner message
+                 task queued (owner message, cron, restart recovery)
                             │
               ┌─────────────▼─────────────┐
-   no session │  spawn                    │ session on disk
+   no session │  spawn                    │ conversation has a session
    ───────────►  claude -p                ◄──────────────── --resume <session_id>
-              │   --input-format  stream-json
-              │   --output-format stream-json
+              │   --input-format  stream-json      (cwd = project checkout or workspaces root;
+              │   --output-format stream-json       a cwd change starts a fresh session)
+              │   --permission-prompt-tool stdio
               │   --max-turns N [--max-budget-usd X]
               └─────────────┬─────────────┘
-                            │ stdin: owner messages, tool answers
-                            │ stdout: assistant text, tool events, result (usage, cost)
+                            │ stdin:  initialize, the prompt, control responses (answers)
+                            │ stdout: text, tool events, sub-agent events, rate limits, result
                             ▼
                      ┌── running ──┐
+                     │             │  can_use_tool (question / permission)
+                     │             ├────────────────► task.ask set, timeout paused,
+                     │             │                  owner asked on web + Telegram
+                     │             ◄──────────────── control_response (answer / allow / deny)
                      │             │
-        result msg   │             │  question to owner
-        received     │             │  → waiting_for_user (process kept warm)
+        result       │             │  /stop  ·  wall-clock timeout  ·  budget
                      ▼             ▼
-               ┌─────────── idle ───────────┐
-               │  timer: IDLE_TIMEOUT (default 30 min)
-               │  reset by any owner message or new queued task for this session
-               └──────────────┬─────────────┘
-                              │ timeout  ·  or  owner: "done" / /done  ·  or  /stop
-                              ▼
-                     SIGTERM → process exits
+                   done          cancelled / failed  (SIGTERM to the process group, SIGKILL 10 s later)
                      transcript stays in CLAUDE_CONFIG_DIR/projects/<ws>/<session_id>.jsonl
 ```
 
 Rules:
 
-- **Spawn on demand.** One task → one `claude -p` process with its own `cwd` (the task's worktree). Several may run concurrently (bounded by `MAX_CONCURRENT_SESSIONS`, RAM ≈ 1 GiB each).
-- **Idle timeout** is per session, configurable globally and per project. "Idle" means: no owner input, no queued follow-up, and the last output was a `result` message (not mid-tool-call). A running tool call is never interrupted by the idle timer.
-- **Explicit finish.** Any of: the owner's message classified as a closing phrase ("thanks, done", …) by a cheap in-code matcher, the `/done` command, or the agent's own final report followed by no follow-up. The process is terminated immediately; the task is marked `done`.
-- **Hard stop.** `/stop` sends SIGTERM regardless of state and marks the task `cancelled`.
-- **Resume.** A later message that the supervisor routes to a finished/idle-killed task (reply in the same Telegram thread, or explicit `/resume <task>`) restarts the process with `--resume <session_id>`. Context continuity is Claude Code's own transcript, nothing is copied.
-- **Crash safety.** If the supervisor restarts (deploy, reboot, crash), running CLIs are lost. A task found `running` at startup goes back to the queue and its next run resumes the conversation's session, so the agent continues from where the transcript ends (the task's prompt is sent once more to the resumed session). Each task survives this once (`restarts` column); a task that keeps hitting restarts fails with a notice, so a task that takes the supervisor down cannot loop. A graceful stop (SIGTERM to the supervisor) leaves running tasks `running` on purpose for the same recovery; only the owner's `/stop` cancels.
+- **Spawn on demand.** One task → one `claude -p` process, cwd = the checkout of the conversation's project (a project-less conversation runs from the workspaces root). Several may run concurrently (bounded by `MAX_CONCURRENT_SESSIONS`, RAM ≈ 1 GiB each); one running task per conversation.
+- **Questions and permissions.** A `can_use_tool` request is stored on the task (`ask`: kind, request id, tool, input, answers so far) and shown in the web thread (a form inside the turn) and in Telegram (one message per question with inline buttons; free text also counts). The task stays `running`, its wall-clock timeout is paused, and it keeps its concurrency slot for as long as it waits (decided 2026-09-30). The answer from either channel goes back as a `control_response`, the other channel's prompt is settled, and the same run continues. Under `bypassPermissions` (the container) only `AskUserQuestion` arrives; under `acceptEdits` / `default` every unsettled tool does. Open: "Always allow" rules and a deny-on-timeout policy.
+- **Hard stop.** `/stop` (or the Stop button) sends SIGTERM to the CLI's process group, SIGKILL after 10 s, and marks the task `cancelled`. `CLAUDE_TASK_TIMEOUT_MIN` bounds a run's wall-clock time (0 = none).
+- **Resume.** The next task of the same conversation restarts the process with `--resume <session_id>`. Context continuity is Claude Code's own transcript, nothing is copied. A session that cannot be resumed is forgotten and the task runs once more from scratch. `/new` starts a conversation without a session.
+- **Crash safety.** If the supervisor restarts (deploy, reboot, crash), running CLIs are lost. A task found `running` at startup goes back to the queue and its next run resumes the conversation's session, so the agent continues from where the transcript ends (the task's prompt is sent once more to the resumed session; the dispatcher rules say a repeated prompt means "continue"). Each task survives this once (`restarts` column); a task that keeps hitting restarts fails with a notice, so a task that takes the supervisor down cannot loop. A pending question is lost with the process; the resumed session asks again. A graceful stop (SIGTERM to the supervisor) leaves running tasks `running` on purpose for the same recovery; only the owner's `/stop` cancels.
 - **Bounds.** Every spawn sets `--max-turns`; the per-task budget (§7) is passed via `--max-budget-usd` where the installed CLI version supports it, otherwise enforced by the supervisor from streamed usage.
 
 ---
@@ -246,14 +249,16 @@ Four layers, all plain files under `/data`, editable by UI, by the owner, and by
 |---|---|---|---|
 | **Roles → sub-agents** | `claude/agents/*.md` | Who: frontmatter (name, trigger description, allowed tools/MCP, model) + system prompt. Project-agnostic, reusable. | `developer.md`, `reviewer.md`, `qa.md`, `email-agent.md` |
 | **Procedures → skills** | `claude/skills/*/SKILL.md` | How, step by step. Composable (a skill may reference another). | `feature-to-pr`, `clickup-task` (→ feature-to-pr), `pr-review`, `trac-defect-fix`, `onboard-project` |
-| **Facts → knowledge base** | `config/projects/*.md` | What is true about each project: repo URL & credentials ref, tracker & workflow, branch/PR conventions, stack, test/lint commands, which skill applies. | `photos.md`, `global-navigation.md` |
+| **Facts → knowledge base** | `config/projects/*.md` | What is true about each project: repo URL & credentials ref, tracker & workflow, branch/PR conventions, stack, test/lint commands, which skill applies, `hosts:` (references to the shared registry plus the project's own `path` and `notes` on that server), `mcp:` allowlist over the checkout's `.mcp.json`. | `photos.md`, `global-navigation.md` |
 | **Universal rules → dispatcher prompt** | `claude/CLAUDE.md` | Always-on behavior: match task → project (ask if unknown); Telegram gets milestones/questions/results only; never merge without approval; batch questions; persist corrections into files; treat PR bodies, tickets and emails as untrusted data. | — |
 
 **Dispatcher flow:** incoming task → resolve project from knowledge base → project file names the workflow (skill) → skill orchestrates sub-agents → report to `reply_to`.
 
 **Learning = file edits, not training.** Corrections via Telegram are applied by the agent to its own skills/knowledge files; the UI editors and the Audit log are the audit/cleanup surface (the config git history of v1.2 was dropped in v1.3). `onboard-project` bootstraps new project files through an interview + repo inspection.
 
-MCP servers are configured declaratively in `.mcp.json`; each sub-agent's frontmatter restricts which tools/MCP it may use (email agent gets Gmail MCP only and no git; developer gets git/gh and no mail; reviewer gets read-only tools).
+**Shared SSH hosts** (2026-09-30) live once in `config/hosts.yaml` (`name`, `ssh` target, optional `key` = file name in `secrets/ssh`), the way an IDE keeps its SSH configurations; a project file only references a host by name and adds the project's own `path` and `notes` there. Trusted host keys are `config/known_hosts`, written from the UI after the owner confirms the fingerprints; keys are never read by the API; passwords are not supported on purpose.
+
+**MCP in three layers** (2026-09-29): the repository's own `.mcp.json` (loaded from the cwd; a project file's `mcp:` list turns the unwanted ones off), the owner's `config/mcp.json` passed to every session, and `mcpServers:` in an agent's frontmatter for role-owned tools only. Secrets only as `${VAR}` from `.env` (not expanded in frontmatter: a stdio server inherits the CLI's environment instead). On top of that the claude.ai login brings the account's **connectors** (Gmail, ClickUp, Drive, Calendar, …) and synced plugins into every session, deferred behind ToolSearch; a role is therefore usually a `tools:` allowlist over those (the email assistant is Gmail without send, "a ClickUp agent" is that server ticked) rather than a server of its own. Each sub-agent's frontmatter restricts which tools/MCP it may use (developer gets git/gh and no mail; reviewer gets read-only tools); sub-agents get data from the orchestrator, not MCP access, except role-owned tools. The supervisor keeps a registry of every server the CLI ever reported (source: connector / plugin / project / factory, last status, URL) and can sign in to a server from Settings.
 
 ---
 
@@ -270,7 +275,7 @@ Screens (v1):
 5. **Projects** — knowledge-base editor; onboarding wizard (drives the `onboard-project` skill).
 6. **Schedules** — CRUD for cron entries, active windows, prefilter binding, enable/disable, run-now, last result.
 7. **Quota dashboard** — the 5-hour and weekly windows as the CLI reports them (`rate_limit_event`), with reset times and a history of readings; tokens per day/project/agent/task-type; forecast to limit. No money anywhere: the owner pays a subscription, so the unit is tokens and window share.
-8. **Settings** — MCP servers, connected repos/credentials references, Telegram whitelist, idle timeout, concurrency, budget policies. Shows Claude Code login status (`claude auth status`) but never performs the login.
+8. **Settings** — MCP: the registry of servers the sessions have seen (connectors first, then plugins, project and factory servers; duplicates by URL folded into the connector's row), Refresh (`claude mcp list` in the factory), Authorize for a server that needs sign-in (the CLI's `claude mcp login --no-browser` under a pseudo-terminal; the dialog shows the link and, for a redirect-style server, takes the redirect URL back), and the editor for `config/mcp.json`. Hosts: the shared SSH registry with the projects on each, test connection, host-key trust. Presets install. Shows the Claude login status (`claude.ai (team, connectors)` / `token` / `none`) but never performs the login. Telegram whitelist, concurrency, timeouts and budget policies stay in `.env`.
 9. **Audit log** — every model call (model, tokens), tool call, file edit, sub-agent start / end, task lifecycle and rate-limit reading, each attributed to the agent that produced it (orchestrator or sub-agent type) and the project the task worked in. Period selector, filter by kind / agent / project, expandable details. Built live from the stream-json events; there is no separate config git history (dropped in v1.3: the owner's repositories are on GitHub, and self-edits of agents / skills show up here as file events).
 
 Non-functional: UI is behind auth (basic auth minimum; Tailscale/Cloudflare Access recommended) — it controls an agent holding GitHub and mail credentials.
@@ -287,7 +292,7 @@ sessions (session_id, task_id, workspace, started_at, ended_at,
 usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 ```
 
-- Tokens per task come from the `result` message in stream-json output (`usage`, cache read/creation included); `total_cost_usd` is stored for the record but never shown. Window utilisation comes from the `rate_limit_event` messages (`unifiedWindows.five_hour` / `seven_day`, utilisation 0..1 and reset time) that the CLI emits after API calls; every task refreshes it, and an explicit probe (one Haiku turn) refreshes it on demand. The `/api/oauth/usage` endpoint requires the `user:profile` scope, which a setup-token does not carry, so it is not used. Per-turn detail is parsed from the transcript for the session view and aggregates.
+- Tokens per task come from the `result` message in stream-json output (`usage`, cache read/creation included); `total_cost_usd` is stored for the record but never shown. Window utilisation comes from the `rate_limit_event` messages (`unifiedWindows.five_hour` / `seven_day`, utilisation 0..1 and reset time) that the CLI emits after API calls; every task refreshes it, and an explicit probe (one Haiku turn) refreshes it on demand. The `/api/oauth/usage` endpoint is not used: it needs the `user:profile` scope a setup-token lacks, and even with the claude.ai login the supervisor never calls Anthropic APIs with the owner's credentials (decided 2026-09-29). Per-turn detail is parsed from the transcript for the session view and aggregates.
 - Supervisor's own logs (bot, scheduler, prefilters, lifecycle events) go to stdout/JSON files under `/data/logs`.
 - Optional: enable Claude Code's built-in OpenTelemetry export (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, OTLP env vars) if the owner already runs a collector. Not required for v1.
 
@@ -302,13 +307,13 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 ## 8. Security Requirements
 
 - **Telegram whitelist** by chat/user ID — the bot must ignore everyone else. This is mandatory: the bot fronts an agent with repo and mail access.
-- **Claude auth belongs to the owner, not to the tool.** The owner runs `claude setup-token` on a machine with a browser and puts the resulting token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN`; only the Claude Code CLI reads it. (Interactive `/login` inside a container is broken upstream — anthropics/claude-code#34917 — so this is the primary path, not a fallback.) The supervisor never reads, copies, proxies or exposes the token; the UI only shows login status (whether the variable is set), and the agent editor offers the CLI's model aliases rather than a list fetched from the Claude API (the CLI resolves an alias to the subscription's current model). The Claude Code binary is installed as published and never patched.
+- **Claude auth belongs to the owner, not to the tool.** The owner logs the CLI in **inside the container**, once: `docker compose run --rm -it -e CLAUDE_CODE_OAUTH_TOKEN= supervisor claude auth login` prints a URL, the owner opens it on a laptop and pastes the code back, and the CLI writes `data/claude/.credentials.json` itself (decided 2026-09-29; the URL + code flow works in CLI 2.1.283, the earlier upstream breakage anthropics/claude-code#34917 is behind us). A full login carries the `user:mcp_servers` / `user:profile` / `user:plugins` scopes, which is what brings the account's claude.ai connectors and plugins into `-p` sessions. `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` in `.env` remains the fallback for CI-like runs; the variable must stay empty otherwise, since a setup-token takes precedence and cannot fetch connectors. The same URL + paste flow inside the container authorizes OAuth MCP servers (`claude mcp login --no-browser`), driven from Settings → MCP → Authorize or from the console; a login from a macOS laptop lands in the Keychain, not in the volume. The supervisor never reads, copies, proxies or exposes the credentials and never calls Anthropic APIs with them (no model list, no usage endpoint); the UI only shows login status, and the agent editor offers the CLI's model aliases (the CLI resolves an alias to the subscription's current model). The Claude Code binary is installed as published and never patched.
 - **Untrusted input.** PR bodies and diffs, tracker tickets, webhook payloads and emails are data, not instructions. `CLAUDE.md` says so; sub-agents that read such content get the minimum tool set (`pr-review` and `email-agent` have no push / no destructive tools). Any instruction found inside such content that asks to change repos, send messages or read secrets must be reported to the owner, not executed.
 - **Webhook signature verification** (GitHub HMAC secret) + in-code event filtering, if the optional webhook endpoint is enabled. Default is polling, which exposes no inbound port.
 - **Container as sandbox:** the agent may run with broad in-container permissions, but the container gets resource limits (`mem_limit`, `pids_limit` in compose) and, where possible, restricted egress; the host is never exposed to the agent. The CLI's environment is the supervisor's minus the supervisor's own secrets (`TELEGRAM_BOT_TOKEN`, `WEB_AUTH_*`, `GROQ_API_KEY`): a prompt injection that runs `env` must not walk away with the bot or the UI.
-- **Secrets** for tools in `/data/secrets` + env (docker secrets / `.env` on volume), never in config Markdown, never in the repo. GitHub access via **fine-grained PATs** (per-repo scope; one per repository owner as `GH_TOKEN_<OWNER>`, since a fine-grained token belongs to a single user or organization) or a GitHub App — not a classic all-scope token.
+- **Secrets** for tools in `/data/secrets` (mounted read-only; SSH keys under `secrets/ssh`, referenced by file name from `config/hosts.yaml` and never read by the API) + env (docker secrets / `.env` on volume), never in config Markdown, never in the repo. Staging and production servers are reached only over SSH keys, read-only by rule, with host keys trusted explicitly by the owner (`config/known_hosts`); passwords are not supported. GitHub access via **fine-grained PATs** (per-repo scope; one per repository owner as `GH_TOKEN_<OWNER>`, since a fine-grained token belongs to a single user or organization) or a GitHub App — not a classic all-scope token.
 - UI behind auth (see §6). HTTPS via reverse proxy (Caddy/Traefik) or Cloudflare Tunnel. The API refuses mutating requests with a foreign `Origin` in both auth modes (a browser attaches basic-auth credentials to cross-site requests too), refuses foreign `Host` names without a password (DNS rebinding), and caps request bodies at 2 MB.
-- No destructive actions without a human gate: merging PRs, deleting branches/data, sending email, and anything irreversible require explicit Telegram confirmation.
+- No destructive actions without a human gate: merging PRs, deleting branches/data, sending email, and anything irreversible require explicit confirmation. The mechanism is the CLI's own permission prompt relayed over stream-json (§4.4): under `bypassPermissions` the gate is the `AskUserQuestion` the skills call before such steps, under `acceptEdits` / `default` every unsettled tool call reaches the owner as Allow / Deny.
 
 ---
 
@@ -343,9 +348,9 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 
 | Phase | Deliverable | Acceptance |
 |---|---|---|
-| **0. Skeleton** ✅ | Repo, Dockerfile (node + claude-code + git + gh), compose, `/data` layout, `claude setup-token` documented | `docker compose up` runs on a clean VPS; `claude -p "hi"` answers from inside the container |
+| **0. Skeleton** ✅ | Repo, Dockerfile (node + claude-code + git + gh), compose, `/data` layout, Claude login documented (`claude auth login` in the container since v1.4; setup-token as fallback) | `docker compose up` runs on a clean VPS; `claude -p "hi"` answers from inside the container |
 | **1. Voice hotfix** ✅ (code) | Telegram bot + STT → `claude -p` in the owner's checkout → reply in Telegram; `developer`/`reviewer` agents, `feature-to-pr` skill, project file format + `onboard-project` | UC-1 end-to-end from a voice note: PR link comes back; zero tokens when idle — **still to be exercised on a real project** |
-| **2. Lifecycle & persistence** ✅ | Task queue in SQLite, session manager (`/new`, `/stop`, `--resume`, one-shot runs), HITL questions via Telegram (agent's final message ↔ owner's reply), crash recovery (orphans failed, queued tasks resumed) | UC-2 and UC-8: a question survives a supervisor restart |
+| **2. Lifecycle & persistence** ✅ | Task queue in SQLite, session manager (`/new`, `/stop`, `--resume`, one-shot runs), HITL questions via Telegram and the web (`AskUserQuestion` / permission prompts over stream-json since 2026-09-30, earlier the agent's final message ↔ owner's reply), crash recovery (running tasks re-queued once and resumed) | UC-2 and UC-8: a conversation survives a supervisor restart; a pending question is asked again |
 | **3. Web UI (read)** ✅ | Task feed + session view (transcript rendering, SSE live feed), overview with spend from the tasks table, **chat with Claude Code from the browser** | Owner can watch a live run and see spend without SSH |
 | **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), audit log, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a file event in the Audit log |
 | **5. Schedules** | `schedules` table + UI, prefilter pattern, TRAC poller, GitHub review-request poller | UC-3 and UC-4: zero tokens on empty polls |
@@ -360,12 +365,12 @@ Phase 1 is deliberately the whole "driving to a conference" story: if it works, 
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Token burn by autonomous loops (dispatcher + 3 sub-agents on a strong model) | Subscription window exhausted mid-day | Per-task budgets, model policy for sub-agents, soft-stop for background tasks, cost dashboard with forecast |
-| Runaway/looping agent | Cost + garbage PRs | `--max-turns` on every spawn, per-sub-agent turn caps, idle timeout, kill switch (`/stop`) in TG and UI |
+| Runaway/looping agent | Cost + garbage PRs | `--max-turns` on every spawn, per-sub-agent turn caps, wall-clock timeout per task, kill switch (`/stop`) in TG and UI |
 | Prompt injection via PR bodies, tickets, emails | Credential misuse, unwanted pushes/emails | Untrusted-input rule in `CLAUDE.md`, minimal tool sets per sub-agent, human gate on irreversible actions, fine-grained PATs |
 | Credential blast radius (GitHub + mail in one box) | Account compromise | Fine-grained PATs, per-agent MCP/tool allowlists, container egress limits, TG whitelist |
 | Usage-policy drift: limits assume "ordinary, individual usage"; heavy background automation could look otherwise | Account restricted | Keep cron/background work modest and prefiltered; owner-initiated tasks are the primary load; re-read the policy at each phase |
 | Reviewer agent rubber-stamps the developer agent | Bad PRs while owner is away | Reviewer runs in a fresh context with diff + project rules only; deterministic checks (tests, lint, CI) are the real gate; start supervised (report before PR), graduate to full autonomy per project |
-| Session killed mid-thought by idle timer | Lost work | Idle only counts after a `result` message; running tool calls are never interrupted; resume is always possible |
+| Run lost to a supervisor restart or a stuck question | Lost work, a slot held for ever | A task found `running` at startup is re-queued once and resumes its session; a question holds the slot by decision (2026-09-30) — a deny-on-timeout policy is still open |
 | Claude Code CLI changes flags/transcript format | Supervisor breaks | Pin the CLI version in the image; upgrade deliberately; integration test on `stream-json` shape |
 | SQLite contention at scale | Slow UI during runs | WAL mode; Postgres migration path documented |
 
@@ -373,17 +378,18 @@ Phase 1 is deliberately the whole "driving to a conference" story: if it works, 
 
 ## 13. Open Questions
 
-0. ~~Idle timeout / closing-phrase detection~~ — **moot in v1.2:** runs are one-shot; nothing stays warm. Revisit only if interactive `--input-format stream-json` sessions are introduced.
+0. ~~Idle timeout / closing-phrase detection~~ — **moot since v1.2:** runs are one-shot; nothing stays warm. v1.4 did introduce `--input-format stream-json`, but only to relay questions and permissions inside a run; the process still exits with the result, so the question stays closed.
 
-1. ~~Claude auth mode for production~~ — **Decided (v1.1):** the owner's own Claude Code login via `claude setup-token` → `.env`; the tool never holds credentials.
+1. ~~Claude auth mode for production~~ — **Decided (v1.1, revised 2026-09-29):** the owner's own claude.ai login inside the container (`claude auth login`, URL + code), credentials in `data/claude/.credentials.json` written by the CLI; `claude setup-token` → `.env` only as the fallback. The tool never holds or uses the credentials itself (§8).
 2. ~~Does the pinned Claude Code version support `--max-budget-usd`?~~ — **Yes** (verified on 2.1.283); the CLI enforces it.
 3. ~~Quota visibility~~ — answered 2026-09-28: `claude -p --output-format stream-json` emits `rate_limit_event` with `unifiedWindows.five_hour` / `seven_day` utilisation and reset times (CLI 2.1.283); works with a setup-token. Implemented (§7).
 4. STT: confirm Groq Whisper latency/cost from a moving car (LTE); keep faster-whisper as a fallback for offline-ish VPS setups.
-5. Closing-phrase detection: pure keyword list + `/done`, or let the agent emit an explicit "session can be closed" marker in its final report?
+5. ~~Closing-phrase detection: pure keyword list + `/done`, or let the agent emit an explicit "session can be closed" marker in its final report?~~ — **moot** for the same reason as 0; there is no `/done`. The dispatcher suggests `/new` after a finished task instead.
 6. Voice replies (TTS) from the agent — nice-to-have, out of v1 scope?
 7. How much of the transcript should be mirrored into Telegram on failure (error digest format).
-8. ~~Staging access pattern for UC-4 (how sub-agents reach the staging environment: SSH? VPN? MCP?)~~ — **Decided (2026-09-29):** SSH only, through the project file's `hosts:` (key from `data/secrets/ssh`, per-host `notes` with the rules), strictly read-only; a project without hosts reproduces from the code and tests, and the triager asks the owner when neither suffices. No VPN, no dedicated MCP server. The remaining risk (a ticket is untrusted input and the sub-agent holds a shell) is covered by the read-only rule in the skill and the host notes, the Audit log, and, where wanted, a restricted user or `command=` on the host itself.
+8. ~~Staging access pattern for UC-4 (how sub-agents reach the staging environment: SSH? VPN? MCP?)~~ — **Decided (2026-09-29):** SSH only, through the project file's `hosts:` (a shared host from `config/hosts.yaml` with its key in `data/secrets/ssh`, plus the project's own `path` and `notes` with the rules), strictly read-only; a project without hosts reproduces from the code and tests, and the triager asks the owner when neither suffices. No VPN, no dedicated MCP server. The remaining risk (a ticket is untrusted input and the sub-agent holds a shell) is covered by the read-only rule in the skill and the host notes, the Audit log, and, where wanted, a restricted user or `command=` on the host itself.
 9. Webhook ingress: is anyone going to miss the few-minutes latency of polling enough to justify a public endpoint?
+10. Permission policy: "Always allow" rules per tool / project so a recurring prompt is settled once, and what happens to a question nobody answers (deny after N hours? keep holding the slot?). Today a waiting task holds its slot indefinitely (decided 2026-09-30).
 
 ---
 
@@ -406,11 +412,13 @@ pocket-factory/
     │   ├── skills/           #   feature-to-pr/, onboard-project/, …
     │   ├── projects/         #   session transcripts (*.jsonl), written by the CLI
     │   └── (credentials)     #   never touched by the tool
-    ├── config/               # projects/*.md, mcp.json
-    │   ├── projects/         #   photos.md, global-navigation.md, … (frontmatter: repo, branches, tracker, hosts, checks)
-    │   └── .mcp.json
+    ├── config/               # the supervisor's own files
+    │   ├── projects/         #   photos.md, global-navigation.md, … (frontmatter: repo, branches, tracker, hosts, mcp, checks)
+    │   ├── hosts.yaml        #   shared SSH hosts (name, ssh target, key file name)
+    │   ├── known_hosts       #   host keys the owner trusted from the UI
+    │   └── mcp.json          #   the owner's MCP servers, passed to every session
     ├── workspaces/           # the owner's checkouts (or WORKSPACES_DIR bind-mounted)
-    ├── secrets/ssh/          # keys for project hosts → ~/.ssh in the container
+    ├── secrets/ssh/          # keys for project hosts → ~/.ssh in the container (mounted read-only)
     ├── db/                   # sqlite: conversations, tasks, task_events
     └── logs/                 # supervisor logs
 ```
