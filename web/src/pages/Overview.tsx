@@ -43,7 +43,7 @@ export function OverviewPage() {
                     <Stat label="Agents" value={agents.data?.length ?? '…'} to="/agents" />
                     <Stat label="Skills" value={skills.data?.length ?? '…'} to="/skills" />
                     <Stat label="Projects" value={projects.data?.length ?? '…'} to="/projects" />
-                    <Stat label="Workspaces" value={d?.workspaces.length ?? '…'} to="/settings" />
+                    <Stat label="Workspaces" value={d?.workspaces.length ?? '…'} to="/settings#workspaces" />
                     <Stat label="Model" value={d?.claude.model ?? '…'} />
                     <Stat label="Max sessions" value={d?.max_concurrent_sessions ?? '…'} />
                 </div>
@@ -117,7 +117,7 @@ function McpConnected({ servers }: { servers: McpEntry[] | undefined }) {
             )}
             <div className="card-foot">
                 <span>{[more > 0 ? `${more} more authorized` : '', rest > 0 ? `${rest} need authentication` : ''].filter(Boolean).join(' · ') || 'Every known server is authorized'}</span>
-                <Link to="/settings" className="quiet">
+                <Link to="/settings#mcp" className="quiet">
                     Settings → MCP
                 </Link>
             </div>

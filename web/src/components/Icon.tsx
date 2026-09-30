@@ -1,23 +1,4 @@
-import {
-    Activity,
-    Bot,
-    ClipboardList,
-    FileText,
-    FolderGit2,
-    Gauge,
-    LayoutDashboard,
-    ListChecks,
-    KeyRound,
-    type LucideIcon,
-    MessageSquare,
-    Package,
-    Send,
-    Settings,
-    Trash2,
-    TriangleAlert,
-    X,
-    Zap
-} from 'lucide-react'
+import { Activity, Bot, ClipboardList, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, MessageSquare, Package, Send, Server, Settings, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
 
 /**
  * One icon per concept, used by the sidebar, tiles and card heads alike so
@@ -46,7 +27,8 @@ export const ICONS = {
     delete: Trash2,
     warning: TriangleAlert,
     close: X,
-    key: KeyRound
+    key: KeyRound,
+    host: Server
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

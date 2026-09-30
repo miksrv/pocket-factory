@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 
+import { HostsSection } from '../components/Hosts'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
@@ -12,13 +14,34 @@ export function SettingsPage() {
     const status = useAsync(() => api.status(), [], 10_000)
     const mcp = useAsync(() => api.mcp(), [], 30_000)
     const s = status.data
+    // `/settings#hosts` opens the page scrolled to that section (the links "Edit in Settings", "Settings → MCP").
+    // The sections exist only once the status has loaded, and the MCP list above Hosts grows when its
+    // data lands, so the scroll repeats on each of those until the layout is settled.
+    // The glow is a class, not `:target`: the router changes the hash with pushState, which browsers do not
+    // count as a fragment navigation, so `:target` never matches. Once the MCP data is in, the layout is
+    // settled and the hash is done: the polls that refresh `s` and `mcp.data` every few seconds must not
+    // scroll or glow again.
+    const { hash } = useLocation()
+    const settled = useRef<string | null>(null)
+    useEffect(() => {
+        if (!hash || !s || settled.current === hash) return
+        const el = document.getElementById(hash.slice(1))
+        if (!el) return
+        el.scrollIntoView({ block: 'start' })
+        el.classList.remove('flash')
+        void el.offsetWidth // restart the animation when the same section is targeted again
+        el.classList.add('flash')
+        const timer = setTimeout(() => el.classList.remove('flash'), 2200)
+        if (mcp.data) settled.current = hash
+        return () => clearTimeout(timer)
+    }, [hash, s, mcp.data])
     return (
         <div className="page">
             <PageHead title="Settings" sub="Read-only view of the running configuration. Everything here comes from .env; edit it on the host and restart the container." />
             <ErrorBox error={status.error} />
             {s && (
                 <div className="stack">
-                    <Section title="Claude Code">
+                    <Section id="claude" title="Claude Code">
                         <Row k="CLI" v={s.claude.version ?? 'not found'} />
                         <Row k="Login" v={s.claude.login === 'token' ? 'CLAUDE_CODE_OAUTH_TOKEN — model calls only, no claude.ai connectors' : s.claude.login === 'none' ? 'not logged in — docker compose run --rm -it supervisor claude auth login' : s.claude.login} />
                         <Row k="Model" v={s.claude.model ?? 'CLI default'} />
@@ -27,26 +50,29 @@ export function SettingsPage() {
                         <Row k="Concurrent sessions" v={String(s.max_concurrent_sessions)} />
                         <Row k="Config dir" v={s.claude.config_dir} mono />
                     </Section>
-                    <Section title="GitHub">
+                    <Section id="github" title="GitHub">
                         <Row k="gh CLI" v={s.github.cli ?? 'not found'} />
                         <Row k="Default token" v={s.github.token ? 'GH_TOKEN set (fine-grained PAT)' : s.github.owners.length ? 'GH_TOKEN not set — only the owners below' : 'GH_TOKEN missing — push and PR creation will fail'} />
                         <Row k="Owner tokens" v={s.github.owners.length ? s.github.owners.map((o) => `GH_TOKEN_${o.toUpperCase()}`).join(', ') : 'none — one GH_TOKEN_<OWNER> per user / organization'} mono />
                         <Row k="git" v={s.git.version ?? 'not found'} />
                     </Section>
-                    <Section title="Telegram">
+                    <Section id="telegram" title="Telegram">
                         <Row k="Bot" v={s.telegram.enabled ? 'enabled (long polling)' : 'disabled — TELEGRAM_BOT_TOKEN not set, web only'} />
                         <Row k="Allowed user ids" v={s.telegram.allowed_user_ids.join(', ')} mono />
                         <Row k="Voice input" v={s.stt.enabled ? `${s.stt.model}${s.stt.language ? ` · ${s.stt.language}` : ' · autodetect'}` : 'disabled (GROQ_API_KEY missing)'} />
                     </Section>
-                    <Section title="MCP servers">
+                    <Section id="mcp" title="MCP servers">
                         <McpSection data={mcp.data} error={mcp.error} onSaved={mcp.reload} />
                     </Section>
-                    <Section title="Paths">
+                    <Section id="hosts" title="Hosts">
+                        <HostsSection />
+                    </Section>
+                    <Section id="paths" title="Paths">
                         <Row k="Data" v={s.paths.data} mono />
                         <Row k="Workspaces" v={s.paths.workspaces} mono />
                         <Row k="Config" v={s.paths.config} mono />
                     </Section>
-                    <Section title={`Workspaces (${s.workspaces.length})`}>
+                    <Section id="workspaces" title={`Workspaces (${s.workspaces.length})`}>
                         <div className="row wrap">
                             {s.workspaces.map((w) => (
                                 <span key={w.name} className="badge plain" title={w.git ? 'git repository' : 'not a git repository'}>
@@ -205,10 +231,15 @@ function McpEditor({ file, config, fileError, onSaved }: { file: string; config:
     )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** A card with an anchor: `/settings#<id>` scrolls to it, and the heading is a link to itself, so a section can be shared. */
+function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
     return (
-        <div className="card">
-            <h3 style={{ marginTop: 0 }}>{title}</h3>
+        <div className="card section" id={id}>
+            <h3 style={{ marginTop: 0 }}>
+                <a href={`#${id}`} className="anchor">
+                    {title}
+                </a>
+            </h3>
             {children}
         </div>
     )

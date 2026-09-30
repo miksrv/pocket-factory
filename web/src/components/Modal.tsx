@@ -30,10 +30,12 @@ export interface ModalProps {
     busy?: boolean
     /** The × in the corner; off for a confirmation, whose Cancel is the way out. */
     closeButton?: boolean
+    /** `wide` for a window with a form in it (720px instead of 440px). */
+    size?: 'wide'
     children?: ReactNode
 }
 
-export function Modal({ open, onClose, title, description, icon, tone, footer, busy, closeButton = true, children }: ModalProps) {
+export function Modal({ open, onClose, title, description, icon, tone, footer, busy, closeButton = true, size, children }: ModalProps) {
     const ref = useRef<HTMLDialogElement>(null)
     const id = useId()
     const downOnBackdrop = useRef(false)
@@ -73,7 +75,7 @@ export function Modal({ open, onClose, title, description, icon, tone, footer, b
     return (
         <dialog
             ref={ref}
-            className={`modal${tone ? ` ${tone}` : ''}`}
+            className={`modal${tone ? ` ${tone}` : ''}${size ? ` ${size}` : ''}`}
             aria-labelledby={`${id}-title`}
             aria-describedby={description ? `${id}-desc` : undefined}
             aria-busy={busy || undefined}

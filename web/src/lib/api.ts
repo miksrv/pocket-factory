@@ -311,6 +311,85 @@ export interface ToolList {
     source: 'cli' | 'default'
 }
 
+/** A shared SSH host (`data/config/hosts.yaml`): the connection once, picked by any project. */
+export interface SharedHost {
+    name: string
+    /** user@host or user@host:port. */
+    ssh: string
+    /** File name of the private key in data/secrets/ssh; empty = ssh's own defaults. */
+    key?: string
+}
+
+/** A project's entry under `hosts:`: a shared host by name plus the project's own path and notes on that server. */
+export interface HostRef {
+    host: string
+    path?: string
+    notes?: string
+}
+
+/** A host written out inside a project file (the form before 2026-09-30). */
+export interface InlineHost {
+    name?: string
+    ssh?: string
+    key?: string
+    path?: string
+    notes?: string
+}
+
+export type ProjectHost = HostRef | InlineHost
+
+export const isHostRef = (h: ProjectHost): h is HostRef => typeof (h as HostRef).host === 'string'
+
+export interface HostUsage {
+    project: string
+    path?: string
+    notes?: string
+}
+
+export interface HostView extends SharedHost {
+    /** Projects that refer to this host, with what they add to it. */
+    projects: HostUsage[]
+}
+
+export interface InlineHostView {
+    project: string
+    index: number
+    host: InlineHost
+    /** A shared host with the same target and key, if there is one. */
+    same_as: string | null
+}
+
+export interface HostsOverview {
+    file: string
+    hosts: HostView[]
+    inline: InlineHostView[]
+    error: string | null
+}
+
+export interface SshKeys {
+    dir: string
+    keys: Array<{ name: string; public: boolean }>
+    /** The factory's known_hosts file (data/config/known_hosts), written from the UI via `trustHost`. */
+    known_hosts: string
+}
+
+/** One key a server offers, as `ssh-keyscan` saw it. */
+export interface HostKey {
+    type: string
+    fingerprint: string
+    line: string
+}
+
+export interface HostTest {
+    ok: boolean
+    output: string
+    ms: number
+    /** The server is not in known_hosts yet, or its key changed since: the UI can settle it with `keyscanHost` + `trustHost`. */
+    host_key?: 'unknown' | 'changed'
+}
+
+export type HostTarget = { ssh: string; key?: string } | { name: string }
+
 export interface Preset {
     name: string
     title: string
@@ -349,6 +428,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (body === null) throw new ApiError(response.status, 'The API returned something other than JSON — a proxy login page? Reload and sign in.')
     return body as T
 }
+
+const targetBody = (target: HostTarget) => ('name' in target ? target : { ssh: target.ssh, key: target.key || undefined })
 
 export const api = {
     status: () => request<Status>('/status'),
@@ -417,9 +498,21 @@ export const api = {
     session: (id: string, before?: number, limit = 200) => request<SessionDetail>(`/sessions/${id}?limit=${limit}${before ? `&before=${before}` : ''}`),
 
     /** Names of the SSH keys in data/secrets/ssh (never their contents). */
-    sshKeys: () => request<{ dir: string; keys: Array<{ name: string; public: boolean }>; known_hosts: boolean }>('/hosts/keys'),
-    /** `ssh -o BatchMode=yes user@host echo ok` with the chosen key. */
-    testHost: (ssh: string, key?: string) => request<{ ok: boolean; output: string; ms: number }>('/hosts/test', { method: 'POST', body: JSON.stringify({ ssh, key: key || undefined }) }),
+    sshKeys: () => request<SshKeys>('/hosts/keys'),
+    /** `ssh -o BatchMode=yes user@host echo ok` with the chosen key, or for a shared host by name. */
+    testHost: (target: HostTarget) => request<HostTest>('/hosts/test', { method: 'POST', body: JSON.stringify(targetBody(target)) }),
+    /** The keys the server offers, with fingerprints to compare before trusting. */
+    keyscanHost: (target: HostTarget) =>
+        request<{ host: string; port: string | null; known: boolean; keys: HostKey[] }>('/hosts/keyscan', { method: 'POST', body: JSON.stringify(targetBody(target)) }),
+    /** Write the scanned lines into the factory's known_hosts; `replace` drops the server's old entries first. */
+    trustHost: (target: HostTarget, lines: string[], replace: boolean) =>
+        request<{ file: string }>('/hosts/trust', { method: 'POST', body: JSON.stringify({ ...targetBody(target), lines, replace }) }),
+    /** The shared hosts with the projects using each, plus hosts still written inside project files. */
+    hosts: () => request<HostsOverview>('/hosts'),
+    /** Create or update a shared host; a different `name` in the body renames it and the projects follow. */
+    saveHost: (name: string, host: Omit<SharedHost, 'name'> & { name?: string }) => request<HostView>(`/hosts/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(host) }),
+    /** Remove a shared host; `detach` also drops it from the projects that use it (refused otherwise). */
+    deleteHost: (name: string, detach = false) => request<void>(`/hosts/${encodeURIComponent(name)}${detach ? '?detach=1' : ''}`, { method: 'DELETE' }),
 
     presets: () => request<Preset[]>('/presets'),
     installPreset: (name: string, overwrite = false) =>

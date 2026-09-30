@@ -1,19 +1,9 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 
 import { Editor, Field, str } from '../components/Editor'
-import { Button, GrowingTextarea } from '../components/ui'
-import { api, type CatalogEntry, type McpEntry } from '../lib/api'
+import { ProjectHosts } from '../components/Hosts'
+import { api, type CatalogEntry, type McpEntry, type ProjectHost } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
-
-interface Host {
-    name?: string
-    /** user@host or user@host:port */
-    ssh?: string
-    /** File name of the private key in data/secrets/ssh; empty = ssh's own defaults. */
-    key?: string
-    path?: string
-    notes?: string
-}
 
 const TEMPLATE = `Notes for the agent: conventions, gotchas, what never to touch, how deploys work.
 `
@@ -48,12 +38,9 @@ export function ProjectsPage() {
     const status = useAsync(() => api.status(), [])
     const skills = useAsync(() => api.list('skills'), [])
     const keys = useAsync(() => api.sshKeys(), [])
+    const sharedHosts = useAsync(() => api.hosts(), [])
     const mcp = useAsync(() => api.mcp(), [])
     const workspaces = status.data?.workspaces ?? []
-    // Stable keys for the host cards (their test result is local state): one id per row, handed out
-    // as rows appear and removed with them. Never written into the frontmatter.
-    const hostIds = useRef<number[]>([])
-    const nextHostId = useRef(0)
 
     return (
         <Editor
@@ -69,14 +56,8 @@ export function ProjectsPage() {
             form={(fm, set) => {
                 const tracker = (fm.tracker as Record<string, unknown> | undefined) ?? {}
                 const trackerType = str(tracker.type) || 'none'
-                const hosts = (Array.isArray(fm.hosts) ? fm.hosts : []) as Host[]
+                const hosts = (Array.isArray(fm.hosts) ? fm.hosts : []).filter((h): h is ProjectHost => Boolean(h) && typeof h === 'object')
                 const checks = Array.isArray(fm.checks) ? (fm.checks as string[]) : []
-                const setHost = (i: number, patch: Host) => set({ hosts: hosts.map((h, j) => (j === i ? { ...h, ...patch } : h)) })
-                const removeHost = (i: number) => {
-                    hostIds.current.splice(i, 1)
-                    set({ hosts: hosts.filter((_, j) => j !== i) })
-                }
-                while (hostIds.current.length < hosts.length) hostIds.current.push(nextHostId.current++)
                 return (
                     <>
                         <Field label="Display name">
@@ -129,21 +110,7 @@ export function ProjectsPage() {
                         <Field label="Checks (one per line)" hint="Run from the repository root before a PR is opened. All must pass." wide>
                             <LinesInput value={checks} onChange={(next) => set({ checks: next })} />
                         </Field>
-                        <div className="field wide hosts">
-                            <div className="field-head">
-                                <span>
-                                    Hosts — servers this project runs on
-                                    <span className="dim"> · reached over SSH with the keys in {keys.data?.dir ?? 'data/secrets/ssh/'}; passwords are not supported on purpose</span>
-                                </span>
-                                <Button size="sm" onClick={() => set({ hosts: [...hosts, { name: '', ssh: '' }] })}>
-                                    Add host
-                                </Button>
-                            </div>
-                            {hosts.length === 0 && <div className="dim small">No hosts. The agent can still work on the repository; host checks need at least one.</div>}
-                            {hosts.map((h, i) => (
-                                <HostCard key={hostIds.current[i]} host={h} keys={keys.data?.keys ?? []} knownHosts={keys.data?.known_hosts ?? false} onChange={(patch) => setHost(i, patch)} onRemove={() => removeHost(i)} />
-                            ))}
-                        </div>
+                        <ProjectHosts value={hosts} onChange={(next) => set({ hosts: next })} shared={sharedHosts.data} onSharedChanged={sharedHosts.reload} keys={keys.data} />
                     </>
                 )
             }}
@@ -210,64 +177,4 @@ function workflowSkills(skills: CatalogEntry[]): CatalogEntry[] {
     const isWorkflow = (s: CatalogEntry) => /pull request|\bPR\b/i.test(String(s.frontmatter.description ?? ''))
     const list = skills.filter(isWorkflow)
     return (list.length ? list : skills).sort((a, b) => (a.name === 'feature-to-pr' ? -1 : b.name === 'feature-to-pr' ? 1 : a.name.localeCompare(b.name)))
-}
-
-/** One server: where it is, which key opens it, and a test button that tries exactly that. */
-function HostCard({ host, keys, knownHosts, onChange, onRemove }: { host: Host; keys: Array<{ name: string; public: boolean }>; knownHosts: boolean; onChange: (patch: Host) => void; onRemove: () => void }) {
-    const [test, setTest] = useState<{ busy: boolean; ok?: boolean; output?: string; ms?: number }>({ busy: false })
-    const run = async () => {
-        setTest({ busy: true })
-        try {
-            const result = await api.testHost(host.ssh ?? '', host.key)
-            setTest({ busy: false, ...result })
-        } catch (e) {
-            setTest({ busy: false, ok: false, output: (e as Error).message })
-        }
-    }
-    return (
-        <div className="host-card">
-            <label className="field">
-                <span>Name</span>
-                <input placeholder="production" value={host.name ?? ''} onChange={(e) => onChange({ name: e.target.value })} />
-            </label>
-            <label className="field">
-                <span>SSH target</span>
-                <input className="mono" placeholder="deploy@203.0.113.10 or deploy@host:2222" value={host.ssh ?? ''} onChange={(e) => onChange({ ssh: e.target.value })} />
-            </label>
-            <label className="field">
-                <span>Key</span>
-                <select value={host.key ?? ''} onChange={(e) => onChange({ key: e.target.value || undefined })}>
-                    <option value="">default (~/.ssh/config or id_*)</option>
-                    {host.key && !keys.some((k) => k.name === host.key) && <option value={host.key}>{host.key} (missing)</option>}
-                    {keys.map((k) => (
-                        <option key={k.name} value={k.name}>
-                            {k.name}
-                        </option>
-                    ))}
-                </select>
-                {keys.length === 0 && <span className="dim">No keys yet: `ssh-keygen -t ed25519 -f data/secrets/ssh/id_ed25519 -C pocket-factory`, add the .pub to the host.</span>}
-            </label>
-            <label className="field">
-                <span>Path</span>
-                <input className="mono" placeholder="/srv/app" value={host.path ?? ''} onChange={(e) => onChange({ path: e.target.value })} />
-            </label>
-            <label className="field wide">
-                <span>Notes</span>
-                <GrowingTextarea placeholder="how to restart, where the logs are, what never to touch" value={host.notes ?? ''} onChange={(e) => onChange({ notes: e.target.value })} />
-            </label>
-            <div className="host-foot wide">
-                <Button size="sm" onClick={run} disabled={test.busy || !host.ssh?.trim()} title="ssh -o BatchMode=yes <target> echo ok">
-                    {test.busy ? 'Connecting…' : 'Test connection'}
-                </Button>
-                {test.ok === true && <span className="badge done">reachable · {test.ms} ms</span>}
-                {test.ok === false && <span className="badge failed">failed</span>}
-                {test.output && <code className="host-output" title={test.output}>{test.output.split('\n').at(-1)}</code>}
-                {!knownHosts && <span className="dim small">{'no known_hosts yet: ssh-keyscan <host> >> data/secrets/ssh/known_hosts'}</span>}
-                <span className="grow" />
-                <Button size="sm" variant="danger" onClick={onRemove} aria-label="Remove host">
-                    Remove
-                </Button>
-            </div>
-        </div>
-    )
 }

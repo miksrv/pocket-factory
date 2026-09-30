@@ -62,6 +62,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/gh /usr/local/bin/gh-to
     && mkdir -p /data /home/node \
     && chown -R node:node /data /home/node
 
+# The factory's known_hosts lives with its config, not with the read-only keys:
+# the UI writes it (Settings → Hosts → Test connection → Trust host key) and
+# every ssh an agent runs consults the same file.
+RUN printf '\nHost *\n    UserKnownHostsFile /data/config/known_hosts\n' >> /etc/ssh/ssh_config
+
 # Never root: bind-mounted repos keep sane ownership, and Claude Code refuses
 # bypassPermissions as root anyway.
 USER node

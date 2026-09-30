@@ -114,9 +114,10 @@ Sub-agents may reach the servers listed under `hosts:` in a project file over SS
 `data/secrets/ssh/`; read-only inspection is allowed, changes need an explicit "yes" from you.
 Keys only, no passwords, by design: generate a pair for the factory (`ssh-keygen -t ed25519 -f
 data/secrets/ssh/id_ed25519 -C pocket-factory`), add the `.pub` to a dedicated user on each host,
-`ssh-keyscan <host> >> data/secrets/ssh/known_hosts`, `chmod 700 data/secrets`. The directory is
-mounted read-only; the project form lists the key names, never their contents, and has a "Test
-connection" button. Inside the container the CLI runs as uid 1000 (`node`): on a Linux server make
+`chmod 700 data/secrets`. The directory is mounted read-only; the UI lists the key names, never
+their contents. Everything else happens in Settings → Hosts: "Test connection" checks the login,
+and when the server is not known yet (or its key changed) "Trust host key" shows its fingerprints
+and writes them to `data/config/known_hosts`, the file every ssh in the container consults. Inside the container the CLI runs as uid 1000 (`node`): on a Linux server make
 the keys readable by that uid and keep private keys at mode 0600, or ssh refuses them
 ("UNPROTECTED PRIVATE KEY FILE"); the read-only mount means the entrypoint cannot fix this for you.
 

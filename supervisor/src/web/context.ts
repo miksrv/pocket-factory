@@ -1,5 +1,7 @@
 import type { Config } from '../config.js'
 import type { Catalog } from '../files/catalog.js'
+import type { Hosts } from '../files/hosts.js'
+import type { KnownHosts } from '../files/knownHosts.js'
 import type { Presets } from '../presets/index.js'
 import type { Transcripts } from '../sessions/transcripts.js'
 import type { Store } from '../store/index.js'
@@ -11,6 +13,8 @@ export interface AppContext {
     store: Store
     tasks: TaskService
     catalog: Catalog
+    hosts: Hosts
+    knownHosts: KnownHosts
     transcripts: Transcripts
     presets: Presets
 }

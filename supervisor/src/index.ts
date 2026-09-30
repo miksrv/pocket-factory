@@ -3,6 +3,8 @@ import path from 'node:path'
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
 import { Catalog } from './files/catalog.js'
+import { Hosts } from './files/hosts.js'
+import { KnownHosts } from './files/knownHosts.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
 import { Transcripts } from './sessions/transcripts.js'
@@ -31,6 +33,8 @@ async function main(): Promise<void> {
 
     const store = new Store(openDatabase(config.paths.dbFile))
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)
+    const hosts = new Hosts(path.join(config.paths.configRoot, 'hosts.yaml'), catalog)
+    const knownHosts = new KnownHosts(path.join(config.paths.configRoot, 'known_hosts'), path.join(config.paths.dataRoot, 'secrets', 'ssh', 'known_hosts'))
     const transcripts = new Transcripts(config.claude.configDir)
     // What the session manager needs from the project files and the transcript index.
     // A project is named by its file, but tasks name it by the checkout directory
@@ -83,6 +87,8 @@ async function main(): Promise<void> {
         store,
         tasks,
         catalog,
+        hosts,
+        knownHosts,
         transcripts,
         presets: new Presets(config.presetsDir)
     })

@@ -73,6 +73,13 @@ h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; letter-spacing: -.01em;
 h2, th, .stat .label, .turn .who { font-weight: 500; color: var(--text-dim); text-transform: uppercase; letter-spacing: .12em; }
 h2 { font-size: 11px; margin: 28px 0 10px; }
 h3 { font-size: 13px; margin: 12px 0 6px; font-weight: 600; }
+/* Section headings on Settings link to themselves; the section a `#hosts` link opens gets a short glow, then settles. */
+h3 a.anchor { color: inherit; }
+h3 a.anchor:hover { text-decoration: none; }
+h3 a.anchor:hover::after { content: ' #'; color: var(--text-dim); font-weight: 400; }
+.section { scroll-margin-top: 16px; }
+.section.flash { animation: target-glow 2s ease-out; }
+@keyframes target-glow { 0%, 55% { background: var(--amber-bg); } 100% { background: var(--surface); } }
 p { margin: 6px 0; }
 .dim { color: var(--text-dim); }
 .small { font-size: 11.5px; }
@@ -325,11 +332,35 @@ label.field > span:first-child, div.field.group > span:first-child { color: var(
 .form-grid > .field.hosts { display: flex; flex-direction: column; gap: 10px; grid-row: auto; }
 .field.hosts > .field-head { color: var(--text-2); }
 .field.hosts > .field-head > span:first-child { flex: 1; min-width: 0; }
+/* "Add host…" on its own line under the caption, wide enough not to change size with the list of names. */
+.field.hosts > select.add-host { align-self: flex-start; width: auto; min-width: 360px; max-width: 100%; }
 /* Four named columns, not auto-fit: the full-width Notes row would otherwise keep an empty fifth track alive. */
+/* Shared hosts (Settings → Hosts and the project form's section; `components/Hosts.tsx`). */
+.host-list { display: flex; flex-direction: column; }
+.host-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 12.5px; border-bottom: 1px dashed var(--border); flex-wrap: wrap; }
+.host-row:last-child { border-bottom: 0; }
+.host-id { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; flex: 1 1 260px; }
+.host-projects { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1 1 160px; }
+.host-projects a.badge:hover { text-decoration: none; background: var(--surface-3); }
+.host-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.host-card.shared { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+/* The connection alone (name, target, key) fills three columns; in a dialog it stacks in two. */
+.host-card.connection { grid-template-columns: minmax(0, 1fr) minmax(0, 1.8fr) minmax(0, 1fr); }
+.host-card.compact { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 0; padding: 0; background: none; }
+.host-card.compact > .field:nth-child(2) { grid-column: 1 / -1; }
+.host-id { flex: 2 1 320px; }
+.host-shared-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.host-card textarea.short { min-height: 84px; }
+.host-card.compact > .wide { grid-column: 1 / -1; }
+.host-legacy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--amber); }
 .host-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
 .host-card > .wide { grid-column: 1 / -1; }
 .host-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .host-output { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The server's keys in the "Trust host key" question: one line per key, the fingerprint wraps rather than overflows on a phone. */
+.host-fingerprints { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.host-fingerprints li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.host-fingerprints code { font-size: 11.5px; word-break: break-all; }
 .btn.chip { padding: 2px 10px; font-size: 11.5px; border-radius: 999px; color: var(--text-2); box-shadow: none; }
 .btn.chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .btn.chip.on:hover { background: #333; }
@@ -382,6 +413,7 @@ label.mcp-server { gap: 8px; cursor: pointer; font-size: 12px; }
    centres it, traps the focus and dims nothing by itself: the backdrop is the
    drawer's scrim, the window a card with a deeper shadow. */
 dialog.modal { width: min(440px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; margin: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: 0 24px 64px -24px rgba(29,29,27,.35), var(--shadow); overflow: hidden; }
+dialog.modal.wide { width: min(720px, calc(100vw - 32px)); }
 dialog.modal::backdrop { background: rgba(29,29,27,.35); }
 dialog.modal[open] { animation: modal-in .16s ease-out; }
 dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
@@ -396,6 +428,8 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
 .modal-close.btn { margin: -6px -8px 0 0; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface-2); }
 /* The confirming button of a destructive question is filled: the one red thing on the screen. */
+/* A secondary action of the whole form (Test connection) sits left, the decisions right. */
+.modal-foot-aside { margin-right: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .modal-foot .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .modal-foot .btn.danger:hover { background: #9a1e14; }
 @media (prefers-reduced-motion: reduce) {
@@ -504,6 +538,7 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
     .form-body { overflow: visible; }
     .form-grid { grid-template-columns: 1fr; }
     .host-card { grid-template-columns: 1fr 1fr; }
+    .field.hosts > select.add-host { min-width: 0; width: 100%; }
     .stat-row { grid-template-columns: repeat(2, 1fr); }
     .overview-grid { grid-template-columns: 1fr; }
     .card.pad0 { overflow-x: auto; }
@@ -531,4 +566,5 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
     .modal-body { padding: 18px 16px; }
     .modal-foot { flex-direction: column-reverse; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
     .modal-foot .btn { width: 100%; padding: 9px 12px; }
+    .modal-foot-aside { margin-right: 0; }
 }
