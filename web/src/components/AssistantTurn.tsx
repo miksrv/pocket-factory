@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmt, type Task, type TaskEvent, taskTokens } from '../lib/api'
+import { AskForm } from './Ask'
 import { Event, summarizeInput } from './EventFeed'
 import { Button, Markdown, StatusBadge } from './ui'
 import { Tile } from './Tile'
@@ -68,7 +69,8 @@ function Steps({ events, live }: { events: TaskEvent[]; live: boolean }) {
     )
 }
 
-export function AssistantTurn({ task, events }: { task: Task; events: TaskEvent[] }) {
+/** `onTask`: the task row after the owner answered what it asked (its `ask` gone or advanced). */
+export function AssistantTurn({ task, events, onTask }: { task: Task; events: TaskEvent[]; onTask?: (task: Task) => void }) {
     const [copied, setCopied] = useState(false)
     const live = task.status === 'running' || task.status === 'queued'
     const parts = segments(events)
@@ -108,7 +110,8 @@ export function AssistantTurn({ task, events }: { task: Task; events: TaskEvent[
                     )
                 )}
                 {finalText && <Markdown source={finalText} />}
-                {task.status === 'running' && (
+                {task.status === 'running' && task.ask && <AskForm task={task} onAnswered={onTask} />}
+                {task.status === 'running' && !task.ask && (
                     <div className="working">
                         <span className="dots">
                             <i />

@@ -6,7 +6,37 @@ import type { RateLimits } from '../claude/runner.js'
 export type Channel = 'telegram' | 'web'
 export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type TaskEventType = 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits'
+export type TaskEventType = 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
+
+/** One question of an `AskUserQuestion` call, as the CLI sends it. */
+export interface AskQuestion {
+    question: string
+    header?: string
+    options?: Array<{ label: string; description?: string }>
+    multiSelect?: boolean
+}
+
+/**
+ * What a running task waits for from the owner. The CLI paused a tool call
+ * and asked the supervisor (`can_use_tool` over stream-json): either the
+ * agent's `AskUserQuestion` (kind `question`) or a permission request for
+ * another tool (kind `permission`). The task stays `running` until the owner
+ * answers from the web or Telegram; the answer goes back as the tool's input.
+ */
+export interface Ask {
+    kind: 'question' | 'permission'
+    /** The CLI's request id; the answer names it. */
+    request_id: string
+    tool_use_id: string
+    tool_name: string
+    /** The tool's input: `{ questions: AskQuestion[] }` for a question, the tool's arguments for a permission. */
+    input: Record<string, unknown>
+    /** Answers gathered so far, by question text (Telegram answers one question at a time). */
+    answers: Record<string, string>
+    /** Sub-agent that asked, null for the orchestrator. */
+    agent: string | null
+    asked_at: string
+}
 
 export interface Conversation {
     id: string
@@ -23,6 +53,8 @@ export interface Conversation {
     read_at: string | null
     /** A task finished after `read_at`: its reply was neither opened in the web nor delivered to Telegram. */
     unread: boolean
+    /** A running task waits for the owner: a question or a permission request (Chat list, sidebar badge). */
+    needs_reply: boolean
 }
 
 export interface Task {
@@ -48,6 +80,8 @@ export interface Task {
     project: string | null
     /** How many supervisor restarts interrupted this task; it is re-queued while under the limit. */
     restarts: number
+    /** What the task waits for from the owner; null while nothing is pending (always null once finished). */
+    ask: Ask | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -113,11 +147,11 @@ const AUDIT_KINDS: Record<Exclude<AuditQuery['kind'], undefined | 'all' | 'files
     llm: ['llm'],
     tools: ['tool_use'],
     agents: ['agent'],
-    sessions: ['status', 'error'],
+    sessions: ['status', 'error', 'ask', 'answer'],
     limits: ['limits']
 }
 /** Everything the audit log lists; assistant prose and tool output stay in the task view. */
-const AUDIT_TYPES: TaskEventType[] = ['llm', 'tool_use', 'agent', 'status', 'error', 'limits']
+const AUDIT_TYPES: TaskEventType[] = ['llm', 'tool_use', 'agent', 'status', 'error', 'limits', 'ask', 'answer']
 
 export interface TaskStats {
     queued: number
@@ -129,6 +163,8 @@ export interface TaskStats {
     tokens_total: number
     /** Conversations with a reply the owner has not seen (see `Conversation.unread`). */
     chat_unread: number
+    /** Conversations whose agent waits for the owner's answer (see `Conversation.needs_reply`). */
+    chat_needs_reply: number
     /** Queued or running tasks of conversations in the Chat list. */
     chat_active: number
 }
@@ -202,10 +238,23 @@ const UNREAD = `EXISTS (
     WHERE t.conversation_id = c.id AND t.status IN ('done', 'failed')
       AND t.finished_at > COALESCE(c.read_at, '')
 )`
-const CONVERSATION = `c.*, ${UNREAD} AS unread FROM conversations c`
+/**
+ * "Needs a reply": a running task of the conversation waits for the owner
+ * (see `Ask`). Exact, not a guess: the CLI paused the agent's tool call and
+ * nothing moves until the answer arrives.
+ */
+const NEEDS_REPLY = `EXISTS (
+    SELECT 1 FROM tasks t WHERE t.conversation_id = c.id AND t.status = 'running' AND t.ask IS NOT NULL
+)`
+const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply FROM conversations c`
 
-type ConversationRow = Omit<Conversation, 'unread'> & { unread: number }
-const conversationOf = (row: ConversationRow): Conversation => ({ ...row, unread: Boolean(row.unread) })
+type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply'> & { unread: number; needs_reply: number }
+const conversationOf = (row: ConversationRow): Conversation => ({ ...row, unread: Boolean(row.unread), needs_reply: Boolean(row.needs_reply) })
+
+/** A `tasks` row as SQLite returns it: `ask` is JSON text. */
+type TaskRow = Omit<Task, 'ask'> & { ask: string | null }
+const taskOf = (row: TaskRow): Task => ({ ...row, ask: row.ask ? (JSON.parse(row.ask) as Ask) : null })
+const tasksOf = (rows: TaskRow[]): Task[] => rows.map(taskOf)
 
 export class Store {
     constructor(private readonly db: DatabaseSync) {}
@@ -237,7 +286,8 @@ export class Store {
             updated_at: ts,
             deleted_at: null,
             read_at: null,
-            unread: false
+            unread: false,
+            needs_reply: false
         }
         this.db
             .prepare(
@@ -304,6 +354,7 @@ export class Store {
             window_5h_delta: null,
             project,
             restarts: 0,
+            ask: null,
             created_at: now(),
             started_at: null,
             finished_at: null
@@ -318,7 +369,8 @@ export class Store {
     }
 
     getTask(id: string): Task | undefined {
-        return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task | undefined
+        const row = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined
+        return row && taskOf(row)
     }
 
     updateTask(id: string, patch: Partial<Omit<Task, 'id'>>): Task {
@@ -326,7 +378,7 @@ export class Store {
         const values: unknown[] = []
         for (const [key, value] of Object.entries(patch)) {
             sets.push(`${key} = ?`)
-            values.push(value)
+            values.push(key === 'ask' && value !== null ? JSON.stringify(value) : value)
         }
         if (sets.length > 0) {
             values.push(id)
@@ -357,12 +409,14 @@ export class Store {
             values.push(...cursor.values)
         }
         values.push(options.limit ?? 100)
-        return this.db
-            .prepare(
-                `SELECT * FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-                 ORDER BY created_at DESC, id DESC LIMIT ?`
-            )
-            .all(...(values as never[])) as unknown as Task[]
+        return tasksOf(
+            this.db
+                .prepare(
+                    `SELECT * FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+                     ORDER BY created_at DESC, id DESC LIMIT ?`
+                )
+                .all(...(values as never[])) as unknown as TaskRow[]
+        )
     }
 
     /** Distinct projects tasks have worked in, for filter menus. */
@@ -373,9 +427,10 @@ export class Store {
 
     /** Oldest queued tasks first, one per conversation that has nothing running. */
     nextQueuedTasks(): Task[] {
-        return this.db
-            .prepare(
-                `SELECT t.* FROM tasks t
+        return tasksOf(
+            this.db
+                .prepare(
+                    `SELECT t.* FROM tasks t
                  WHERE t.status = 'queued'
                    AND NOT EXISTS (
                        SELECT 1 FROM tasks r
@@ -384,8 +439,9 @@ export class Store {
                  GROUP BY t.conversation_id
                  HAVING t.created_at = MIN(t.created_at)
                  ORDER BY t.created_at ASC`
-            )
-            .all() as unknown as Task[]
+                )
+                .all() as unknown as TaskRow[]
+        )
     }
 
     /**
@@ -394,19 +450,20 @@ export class Store {
      * queue (the next run resumes the conversation's session), the rest fail.
      */
     recoverOrphanedTasks(maxRestarts: number): { requeued: Task[]; failed: Task[] } {
+        // A pending question died with the CLI: the resumed session asks again if it still needs to.
         const requeued = this.db
             .prepare(
-                `UPDATE tasks SET status = 'queued', restarts = restarts + 1, started_at = NULL
+                `UPDATE tasks SET status = 'queued', restarts = restarts + 1, started_at = NULL, ask = NULL
                  WHERE status = 'running' AND restarts < ? RETURNING *`
             )
-            .all(maxRestarts) as unknown as Task[]
+            .all(maxRestarts) as unknown as TaskRow[]
         const failed = this.db
             .prepare(
                 `UPDATE tasks SET status = 'failed', error = 'supervisor restarted while the task was running',
-                 finished_at = ? WHERE status = 'running' RETURNING *`
+                 finished_at = ?, ask = NULL WHERE status = 'running' RETURNING *`
             )
-            .all(now()) as unknown as Task[]
-        return { requeued, failed }
+            .all(now()) as unknown as TaskRow[]
+        return { requeued: tasksOf(requeued), failed: tasksOf(failed) }
     }
 
     stats(): TaskStats {
@@ -430,16 +487,18 @@ export class Store {
             .prepare(
                 `SELECT
                     (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${UNREAD}) AS chat_unread,
+                    (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${NEEDS_REPLY}) AS chat_needs_reply,
                     (SELECT COUNT(*) FROM tasks t JOIN conversations c ON c.id = t.conversation_id
                       WHERE c.deleted_at IS NULL AND t.status IN ('queued', 'running')) AS chat_active`
             )
-            .get() as { chat_unread: number; chat_active: number }
+            .get() as { chat_unread: number; chat_needs_reply: number; chat_active: number }
         return {
             queued: row.queued ?? 0,
             running: row.running ?? 0,
             done_today: row.done_today ?? 0,
             failed_today: row.failed_today ?? 0,
             chat_unread: chat.chat_unread,
+            chat_needs_reply: chat.chat_needs_reply,
             chat_active: chat.chat_active,
             tokens_today: row.tokens_today ?? 0,
             tokens_total: row.tokens_total ?? 0
@@ -665,9 +724,11 @@ export class Store {
 
     /** Tasks of a conversation that are not finished, for a client that (re)connects to the live feed. */
     openTasks(conversationId: string): Task[] {
-        return this.db
-            .prepare(`SELECT * FROM tasks WHERE conversation_id = ? AND status IN ('queued', 'running') ORDER BY created_at ASC`)
-            .all(conversationId) as unknown as Task[]
+        return tasksOf(
+            this.db
+                .prepare(`SELECT * FROM tasks WHERE conversation_id = ? AND status IN ('queued', 'running') ORDER BY created_at ASC`)
+                .all(conversationId) as unknown as TaskRow[]
+        )
     }
 
     listConversationEvents(conversationId: string, afterId = 0): TaskEvent[] {

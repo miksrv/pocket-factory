@@ -1,10 +1,10 @@
-import { Bot, type Context } from 'grammy'
+import { Bot, type Context, InlineKeyboard } from 'grammy'
 
 import type { Config } from './config.js'
 import { createLogger } from './logger.js'
-import type { RateLimitSnapshot, Task } from './store/index.js'
+import type { Ask, RateLimitSnapshot, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
-import type { TaskService } from './tasks/service.js'
+import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 
 const log = createLogger('bot')
@@ -130,6 +130,42 @@ function footer(task: Task, limits: RateLimitSnapshot | undefined): string {
     return `— ${parts.join(' · ')}${windows ? `\n— windows: ${windows}` : ''}`
 }
 
+/** What a permission request is about, in one line: the command, the file, or the arguments. */
+function permissionSummary(input: Record<string, unknown>): string {
+    for (const key of ['command', 'file_path', 'pattern', 'description', 'prompt', 'query', 'url']) {
+        if (typeof input[key] === 'string') return String(input[key]).slice(0, 600)
+    }
+    const json = JSON.stringify(input)
+    return json.length > 600 ? `${json.slice(0, 600)}…` : json
+}
+
+/**
+ * A question of the agent as a Telegram message: the question, its options
+ * with their descriptions, and one button per option; free text is the
+ * "Other" choice. A permission request gets Allow / Deny.
+ */
+function askMessage(task: Task, ask: Ask): { key: string; text: string; keyboard: InlineKeyboard } | null {
+    if (ask.kind === 'permission') {
+        const text = [`🔐 The agent asks to run ${ask.tool_name}:`, '', permissionSummary(ask.input), '', 'Allow it or deny it below.'].join('\n')
+        return { key: ask.request_id, text, keyboard: new InlineKeyboard().text('✅ Allow', `p|${task.id}|allow`).text('⛔ Deny', `p|${task.id}|deny`) }
+    }
+    const questions = askQuestions(ask)
+    const next = openQuestions(ask)[0]
+    if (!next) return null
+    const index = questions.indexOf(next)
+    const lines = [`❓ ${next.header ? `${next.header}: ` : ''}${next.question}`]
+    const options = next.options ?? []
+    if (options.length) {
+        lines.push('')
+        for (const option of options) lines.push(`• ${option.label}${option.description ? ` — ${option.description}` : ''}`)
+    }
+    lines.push('', options.length ? (next.multiSelect ? 'Tap an option, or type your answer (several: comma-separated).' : 'Tap an option, or type your answer.') : 'Type your answer.')
+    if (questions.length > 1) lines.push(`(question ${index + 1} of ${questions.length})`)
+    const keyboard = new InlineKeyboard()
+    options.forEach((option, i) => keyboard.text(option.label.slice(0, 60), `a|${task.id}|${index}|${i}`).row())
+    return { key: `${ask.request_id}:${index}`, text: lines.join('\n'), keyboard }
+}
+
 export function createBot(config: Config, tasks: TaskService): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
@@ -243,12 +279,39 @@ export function createBot(config: Config, tasks: TaskService): Bot {
         await ctx.reply(`Unknown command ${ctx.message.text.split(/\s/)[0]}. See /start.`)
     })
 
+    // While the agent waits for an answer, the message is the answer (see TaskService.submit).
     const submit = async (ctx: Context, prompt: string) => {
         const conversation = conversationFor(ctx)
-        const waits = tasks.willWait(conversation.id)
+        const answering = Boolean(tasks.pendingAsk(conversation.id))
+        const waits = !answering && tasks.willWait(conversation.id)
         tasks.submit(conversation.id, 'telegram', prompt)
-        await ctx.reply(waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…')
+        await ctx.reply(answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…')
     }
+
+    // Buttons under a question or a permission request. The data names the
+    // task and the option, never the answer text: the ask on the task is the
+    // truth, so a stale button (already answered, task over) is refused.
+    bot.on('callback_query:data', async (ctx) => {
+        const [kind, taskId, a, b] = ctx.callbackQuery.data.split('|')
+        try {
+            const ask = tasks.task(taskId)?.ask
+            if (!ask) throw new Error('this request is no longer open')
+            if (kind === 'a') {
+                const question = askQuestions(ask)[Number(a)]
+                const option = question?.options?.[Number(b)]
+                if (!question || !option) throw new Error('this option is no longer available')
+                tasks.answer(taskId, { answers: { [question.question]: option.label } })
+                await ctx.answerCallbackQuery({ text: `✓ ${option.label}` })
+            } else if (kind === 'p') {
+                tasks.answer(taskId, b === 'allow' ? { behavior: 'allow' } : { behavior: 'deny' })
+                await ctx.answerCallbackQuery({ text: b === 'allow' ? '✓ Allowed' : 'Denied' })
+            } else {
+                await ctx.answerCallbackQuery()
+            }
+        } catch (error) {
+            await ctx.answerCallbackQuery({ text: `❌ ${error instanceof Error ? error.message : error}`, show_alert: true }).catch(() => undefined)
+        }
+    })
 
     bot.on('message:text', async (ctx) => {
         await submit(ctx, ctx.message.text)
@@ -289,6 +352,61 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 await ctx.reply(`❌ Voice message failed: ${message}`)
             }
         })
+    })
+
+    // Questions and permission requests go to the conversation's chat with
+    // buttons; the message is edited once the request is settled, from
+    // whichever channel. Keyed by request and question, so a poll of the
+    // same task never sends a question twice.
+    const sentAsks = new Map<string, { taskId: string; chatId: number; messageId: number; question: string | null }>()
+    const settle = async (key: string, note: string) => {
+        const sent = sentAsks.get(key)
+        if (!sent) return
+        sentAsks.delete(key)
+        try {
+            await bot.api.editMessageReplyMarkup(sent.chatId, sent.messageId)
+            await bot.api.sendMessage(sent.chatId, note, { reply_parameters: { message_id: sent.messageId } })
+        } catch (error) {
+            log.warn(`could not settle ask message ${sent.messageId}: ${error instanceof Error ? error.message : error}`)
+        }
+    }
+    tasks.on('task', (task) => {
+        if (task.status !== 'running') {
+            for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— the task ended before an answer')
+            return
+        }
+        const conversation = tasks.conversationOf(task)
+        if (conversation?.channel !== 'telegram') return
+        const chatId = Number(conversation.external_id)
+        if (!chatId) return
+        if (!task.ask) {
+            // Answered from the web (the `answer` event settled it already) or withdrawn by the CLI.
+            for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— withdrawn')
+            return
+        }
+        const message = askMessage(task, task.ask)
+        if (!message || sentAsks.has(message.key)) return
+        const question = task.ask.kind === 'question' ? openQuestions(task.ask)[0]?.question ?? null : null
+        sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question })
+        bot.api
+            .sendMessage(chatId, message.text, { reply_markup: message.keyboard })
+            .then((sent) => {
+                const entry = sentAsks.get(message.key)
+                if (entry) entry.messageId = sent.message_id
+            })
+            .catch((error) => {
+                sentAsks.delete(message.key)
+                log.error(`ask to chat ${chatId} failed`, error)
+            })
+    })
+    tasks.on('event', (event: TaskEvent) => {
+        if (event.type !== 'answer') return
+        const p = event.payload as { request_id?: string; behavior?: string; answers?: Record<string, string> }
+        for (const [key, sent] of sentAsks) {
+            if (sent.taskId !== event.task_id) continue
+            const answer = sent.question ? p.answers?.[sent.question] : p.behavior === 'allow' ? 'allowed' : 'denied'
+            void settle(key, `✅ ${answer ?? 'answered'}`)
+        }
     })
 
     // Deliver results of Telegram-originated tasks back to their chat.

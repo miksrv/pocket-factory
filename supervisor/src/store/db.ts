@@ -107,6 +107,12 @@ const MIGRATIONS: string[] = [
     `
     ALTER TABLE conversations ADD COLUMN read_at TEXT;
     UPDATE conversations SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+    `,
+    // v8: what a running task waits for from the owner — an AskUserQuestion
+    // call or a permission request the CLI routed to the supervisor (JSON,
+    // see `Ask`); null while nothing is pending.
+    `
+    ALTER TABLE tasks ADD COLUMN ask TEXT;
     `
 ]
 

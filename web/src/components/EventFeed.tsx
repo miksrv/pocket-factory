@@ -33,7 +33,7 @@ const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'
  * the file in its own language, a Bash call as the command, everything else
  * as its JSON arguments.
  */
-function ToolInput({ name, input }: { name: string; input: unknown }) {
+export function ToolInput({ name, input }: { name: string; input: unknown }) {
     const record = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
     const file = typeof record.file_path === 'string' ? record.file_path : ''
     if (name === 'Edit' && typeof record.old_string === 'string' && typeof record.new_string === 'string') {
@@ -137,6 +137,24 @@ export function Event({ event }: { event: TaskEvent }) {
             )
         case 'error':
             return <div className="tool error">{String(p.error ?? p.status)}</div>
+        case 'ask': {
+            const questions = Array.isArray((p.input as { questions?: unknown } | undefined)?.questions) ? ((p.input as { questions: Array<{ question?: string }> }).questions ?? []) : []
+            return (
+                <div className="dim small">
+                    {who}
+                    {p.kind === 'question' ? `asked: ${questions.map((q) => q.question ?? '').join(' · ')}` : `asked permission for ${String(p.tool_name)}`}
+                </div>
+            )
+        }
+        case 'answer': {
+            const answers = (p.answers ?? {}) as Record<string, string>
+            return (
+                <div className="dim small">
+                    {who}
+                    {p.kind === 'question' ? `answered: ${Object.values(answers).join(' · ')}` : p.behavior === 'allow' ? `allowed ${String(p.tool_name)}` : `denied ${String(p.tool_name)}`}
+                </div>
+            )
+        }
         default:
             return null
     }

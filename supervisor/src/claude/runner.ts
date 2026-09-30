@@ -45,7 +45,18 @@ export type RunnerEvent = EventOrigin &
         | { type: 'rate_limit'; limits: RateLimits }
         /** The CLI's session setup: which tools this run has and which MCP servers it connected. */
         | { type: 'init'; tools: string[]; model: string; mcpServers: McpServerStatus[] }
+        /**
+         * The CLI paused a tool call and asks the supervisor (`can_use_tool`): the agent's
+         * `AskUserQuestion`, or a permission request for another tool. The run waits until
+         * `RunHandle.answer` is called with this `requestId`.
+         */
+        | { type: 'ask'; requestId: string; toolName: string; toolUseId: string; input: Record<string, unknown>; requiresUserInteraction: boolean }
+        /** The CLI withdrew a pending request (the turn was interrupted). */
+        | { type: 'ask_cancelled'; requestId: string }
     )
+
+/** The supervisor's answer to an `ask`: let the tool run (with the owner's answers folded into its input) or refuse it. */
+export type AskResponse = { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }
 
 /** An MCP server as the CLI reported it at session start. */
 export interface McpServerStatus {
@@ -83,7 +94,7 @@ export interface RunOptions {
     permissionMode: string
     /** The CLI's whole environment; defaults to the supervisor's own. */
     env?: NodeJS.ProcessEnv
-    /** Wall-clock limit for the whole run; 0 = none. A hung tool otherwise holds a session slot forever. */
+    /** Wall-clock limit for the run; 0 = none. A hung tool otherwise holds a session slot forever. Paused while an `ask` waits for the owner, then restarted. */
     timeoutMs?: number
     /** Extra MCP servers for this run (`--mcp-config`), as a path to a JSON file. */
     mcpConfig?: string
@@ -117,10 +128,20 @@ export interface RunHandle {
     result: Promise<RunResult>
     /** Ask the CLI to stop; SIGKILL follows if it has not exited after `KILL_GRACE_MS`. */
     kill: () => void
+    /** Answer a pending `ask`; false when no such request is waiting (answered, cancelled, or the run ended). */
+    answer: (requestId: string, response: AskResponse) => boolean
 }
 
 /** How long a stopped CLI gets to exit on its own before SIGKILL. */
 const KILL_GRACE_MS = 10_000
+
+/**
+ * The CLI answers the `initialize` control request at once; if a build ever
+ * does not, the prompt still goes out after this, so a task never hangs on
+ * the handshake.
+ */
+const HANDSHAKE_MS = 10_000
+const INIT_REQUEST_ID = 'supervisor-init'
 
 export class RunTimeout extends Error {
     constructor(ms: number) {
@@ -184,6 +205,16 @@ interface StreamEvent {
         resetsAt?: number
         unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number } | undefined>
     }
+    // control protocol (stream-json input): the CLI asks the host, the host answers
+    request_id?: string
+    request?: {
+        subtype?: string
+        tool_name?: string
+        input?: unknown
+        tool_use_id?: string
+        requires_user_interaction?: boolean
+    }
+    response?: { subtype?: string; request_id?: string }
 }
 
 function window(raw: { utilization?: number; resetsAt?: number } | undefined): RateLimitWindow | null {
@@ -209,13 +240,24 @@ function blockText(content: ContentBlock['content']): string {
 
 /**
  * Spawn the unmodified Claude Code CLI in print mode and stream its events.
- * The prompt is passed over stdin so long messages never hit argv limits.
+ *
+ * stdin carries stream-json too: after the SDK-style `initialize` handshake
+ * the prompt goes out as a user message, and stdin stays open until the
+ * result so the CLI can ask back. With `--permission-prompt-tool stdio` the
+ * CLI offers `AskUserQuestion` to the model and routes it, like any
+ * permission prompt, to us as a `can_use_tool` control request; the answer
+ * returns as a `control_response`. Without a host the tool does not exist in
+ * print mode and the agent can only ask in prose (verified 2026-09-30).
  */
 export function runClaude(options: RunOptions): RunHandle {
     const args = [
         '-p',
+        '--input-format',
+        'stream-json',
         '--output-format',
         'stream-json',
+        '--permission-prompt-tool',
+        'stdio',
         '--verbose',
         '--permission-mode',
         options.permissionMode,
@@ -244,7 +286,23 @@ export function runClaude(options: RunOptions): RunHandle {
     // before reading it (bad --resume id, auth error). Unhandled, that would
     // crash the supervisor; `close` reports the real failure anyway.
     child.stdin!.on('error', (error) => log.debug(`stdin: ${error.message}`))
-    child.stdin!.end(options.prompt)
+    let stdinOpen = true
+    const write = (message: unknown) => {
+        if (!stdinOpen || child.exitCode !== null) return
+        child.stdin!.write(`${JSON.stringify(message)}\n`)
+    }
+    const closeStdin = () => {
+        if (!stdinOpen) return
+        stdinOpen = false
+        child.stdin!.end()
+    }
+    let promptSent = false
+    const sendPrompt = () => {
+        if (promptSent) return
+        promptSent = true
+        write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: options.prompt }] } })
+    }
+    write({ type: 'control_request', request_id: INIT_REQUEST_ID, request: { subtype: 'initialize', hooks: {} } })
 
     const signal = (sig: NodeJS.Signals) => {
         if (child.exitCode !== null || child.signalCode !== null) return
@@ -263,14 +321,30 @@ export function runClaude(options: RunOptions): RunHandle {
         signal('SIGTERM')
         timers.push(setTimeout(() => signal('SIGKILL'), KILL_GRACE_MS))
     }
-    if (options.timeoutMs && options.timeoutMs > 0) {
-        timers.push(
-            setTimeout(() => {
-                timedOut = true
-                log.warn(`claude exceeded ${options.timeoutMs} ms, stopping`)
-                kill()
-            }, options.timeoutMs)
-        )
+    timers.push(setTimeout(sendPrompt, HANDSHAKE_MS))
+
+    // The wall-clock limit measures the agent's work, not the owner's
+    // thinking time: it is disarmed while a request waits and re-armed in
+    // full once the last one is answered.
+    const pending = new Set<string>()
+    let timeout: NodeJS.Timeout | undefined
+    const armTimeout = () => {
+        if (!options.timeoutMs || options.timeoutMs <= 0) return
+        clearTimeout(timeout)
+        timeout = setTimeout(() => {
+            timedOut = true
+            log.warn(`claude exceeded ${options.timeoutMs} ms, stopping`)
+            kill()
+        }, options.timeoutMs)
+        timers.push(timeout)
+    }
+    armTimeout()
+
+    const answer = (requestId: string, response: AskResponse): boolean => {
+        if (!pending.delete(requestId)) return false
+        write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
+        if (pending.size === 0) armTimeout()
+        return true
     }
 
     let resolveSession: (id: string) => void
@@ -307,6 +381,38 @@ export function runClaude(options: RunOptions): RunHandle {
                 return
             }
 
+            if (event.type === 'control_response') {
+                if (event.response?.request_id === INIT_REQUEST_ID) sendPrompt()
+                return
+            }
+            if (event.type === 'control_request' && event.request_id) {
+                const request = event.request ?? {}
+                if (request.subtype === 'can_use_tool' && request.tool_name) {
+                    pending.add(event.request_id)
+                    clearTimeout(timeout)
+                    emit({
+                        type: 'ask',
+                        agent: null,
+                        parentToolUseId: null,
+                        requestId: event.request_id,
+                        toolName: request.tool_name,
+                        toolUseId: request.tool_use_id ?? '',
+                        input: (request.input && typeof request.input === 'object' ? request.input : {}) as Record<string, unknown>,
+                        requiresUserInteraction: request.requires_user_interaction ?? false
+                    })
+                } else {
+                    // Hooks and other host services were not offered in the handshake; refuse anything else politely.
+                    write({ type: 'control_response', response: { subtype: 'error', request_id: event.request_id, error: `unsupported request ${request.subtype ?? '?'}` } })
+                }
+                return
+            }
+            if (event.type === 'control_cancel_request' && event.request_id) {
+                if (pending.delete(event.request_id)) {
+                    if (pending.size === 0) armTimeout()
+                    emit({ type: 'ask_cancelled', agent: null, parentToolUseId: null, requestId: event.request_id })
+                }
+                return
+            }
             if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
                 sessionFromInit = event.session_id
                 resolveSession(event.session_id)
@@ -346,6 +452,7 @@ export function runClaude(options: RunOptions): RunHandle {
             }
             if (event.type === 'result') {
                 finalEvent = event
+                closeStdin() // one prompt per run: the CLI exits once stdin ends
                 return
             }
             if (event.type === 'rate_limit_event' && event.rate_limit_info) {
@@ -457,5 +564,5 @@ export function runClaude(options: RunOptions): RunHandle {
         })
     })
 
-    return { sessionId, result, kill }
+    return { sessionId, result, kill, answer }
 }

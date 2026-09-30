@@ -62,6 +62,18 @@ function describe(e: AuditEvent): { badge: string; tone: string; text: string } 
             const parts = [five && `5h ${fmt.pct(five.used)}`, week && `week ${fmt.pct(week.used)}`].filter(Boolean).join(' · ')
             return { badge: 'LIMITS', tone: p.status === 'allowed' ? 'green' : 'amber', text: `Subscription windows: ${parts}${p.status !== 'allowed' ? ` · ${String(p.status)}` : ''}` }
         }
+        case 'ask': {
+            const questions = ((p.input as { questions?: Array<{ question?: string }> } | undefined)?.questions ?? []).map((q) => q.question ?? '').filter(Boolean)
+            return p.kind === 'question'
+                ? { badge: 'ASK', tone: 'amber', text: `Asked the owner: ${questions.join(' · ')}`.slice(0, 200) }
+                : { badge: 'ASK', tone: 'amber', text: `Asked permission for ${String(p.tool_name)} ${summarizeInput(p.input)}`.slice(0, 200) }
+        }
+        case 'answer': {
+            const answers = Object.values((p.answers ?? {}) as Record<string, string>)
+            return p.kind === 'question'
+                ? { badge: 'ANSWER', tone: 'green', text: `Owner answered: ${answers.join(' · ')}`.slice(0, 200) }
+                : { badge: 'ANSWER', tone: p.behavior === 'allow' ? 'green' : 'red', text: `Owner ${p.behavior === 'allow' ? 'allowed' : 'denied'} ${String(p.tool_name)}` }
+        }
         default:
             return { badge: String(e.type).toUpperCase(), tone: 'gray', text: JSON.stringify(p).slice(0, 200) }
     }

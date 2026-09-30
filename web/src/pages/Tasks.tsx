@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 
 import { EventFeed } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
+import { AskForm } from '../components/Ask'
 import { Empty, ErrorBox, FilterSelect, PageHead, Stat, StatusBadge, StopButton, Tabs } from '../components/ui'
 import { api, fmt, taskTokens, type TaskStatus } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
@@ -128,6 +129,13 @@ export function TaskPage() {
             <div className="card" style={{ whiteSpace: 'pre-wrap' }}>
                 {t.prompt}
             </div>
+
+            {t.status === 'running' && t.ask && (
+                <>
+                    <h2>Waiting for you</h2>
+                    <AskForm task={t} onAnswered={task.reload} />
+                </>
+            )}
 
             <h2>Output</h2>
             <div className="card">

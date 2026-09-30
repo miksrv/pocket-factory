@@ -67,7 +67,7 @@ export function ChatPage() {
                 <div className="list">
                     {(error || conversations.error) && <div className="error small" style={{ padding: '8px 14px' }}>{error ?? conversations.error}</div>}
                     {conversations.items.map((c) => (
-                        <NavLink key={c.id} to={`/chat/${c.id}`} className={({ isActive }) => `${isActive ? 'active' : ''}${c.unread ? ' unread' : ''}`}>
+                        <NavLink key={c.id} to={`/chat/${c.id}`} className={({ isActive }) => `${isActive ? 'active' : ''}${c.unread ? ' unread' : ''}${c.needs_reply ? ' needs-reply' : ''}`}>
                             <div className="grow">
                                 <div className="title" title={c.title ?? undefined}>{c.title ?? 'Untitled'}</div>
                                 <div className="desc">
@@ -75,6 +75,11 @@ export function ChatPage() {
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
                                 </div>
                             </div>
+                            {c.needs_reply && (
+                                <span className="mark ask" title="Waiting for your answer">
+                                    ?
+                                </span>
+                            )}
                             {c.unread && <span className="dot unread" title="New reply" />}
                         </NavLink>
                     ))}
@@ -267,6 +272,8 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
     const ordered = [...tasks.values()].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     const running = ordered.find((t) => t.status === 'running' || t.status === 'queued')
     const active = Boolean(running)
+    // The agent asked a question: the next message answers it (the "Other" choice) instead of queueing a task.
+    const answering = running?.status === 'running' && running.ask?.kind === 'question'
 
     const loadEarlier = async () => {
         const oldest = ordered[0]
@@ -378,7 +385,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                                     {fmt.ago(task.created_at)}
                                 </div>
                             </div>
-                            <AssistantTurn task={task} events={byTask.get(task.id) ?? []} />
+                            <AssistantTurn task={task} events={byTask.get(task.id) ?? []} onTask={mergeTask} />
                         </div>
                     ))}
                     {error && <div className="tool error">{error}</div>}
@@ -393,7 +400,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                 <textarea
                     ref={composer}
                     value={prompt}
-                    placeholder={active ? 'Queued after the running task…' : 'Describe the task…'}
+                    placeholder={answering ? 'Type your answer to the question above…' : active ? 'Queued after the running task…' : 'Describe the task…'}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -408,7 +415,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     <SendHorizontal size={16} />
                 </Button>
                 <div className="composer-hint dim">
-                    Enter to send · Shift+Enter for a new line{active ? ' · a task is running, yours will queue' : ''}
+                    Enter to send · Shift+Enter for a new line{answering ? ' · the agent is waiting: your message is the answer' : active ? ' · a task is running, yours will queue' : ''}
                 </div>
             </form>
         </div>

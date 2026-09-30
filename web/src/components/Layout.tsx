@@ -42,7 +42,18 @@ export function Layout() {
     const status = useAsync(() => api.status(), [], 10_000)
     const running = status.data?.stats.running ?? 0
     const unread = status.data?.stats.chat_unread ?? 0
+    const needsReply = status.data?.stats.chat_needs_reply ?? 0
     const chatActive = status.data?.stats.chat_active ?? 0
+    // One badge per item: the Chat item shows what needs the owner first —
+    // replies not seen yet, then questions waiting for an answer, then work in progress.
+    const chatBadge =
+        unread > 0
+            ? { kind: 'unread', count: unread, title: `${unread} unread` }
+            : needsReply > 0
+              ? { kind: 'ask', count: needsReply, title: `${needsReply} waiting for your answer` }
+              : chatActive > 0
+                ? { kind: 'running', count: chatActive, title: `${chatActive} working` }
+                : null
 
     // A page that changed what the badges show (the Chat marking a thread read) asks for a fresh reading at once.
     useEffect(() => {
@@ -114,14 +125,9 @@ export function Layout() {
                                 </span>
                                 <span className="grow label">{item.label}</span>
                                 {item.to === '/tasks' && running > 0 && <span className="badge running count">{running}</span>}
-                                {item.to === '/chat' && unread > 0 && (
-                                    <span className="badge unread count" title={`${unread} unread`}>
-                                        {unread}
-                                    </span>
-                                )}
-                                {item.to === '/chat' && unread === 0 && chatActive > 0 && (
-                                    <span className="badge running count" title={`${chatActive} working`}>
-                                        {chatActive}
+                                {item.to === '/chat' && chatBadge && (
+                                    <span className={`badge ${chatBadge.kind} count`} title={chatBadge.title}>
+                                        {chatBadge.count}
                                     </span>
                                 )}
                             </NavLink>

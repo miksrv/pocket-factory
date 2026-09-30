@@ -1,5 +1,31 @@
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
+/** One question of an `AskUserQuestion` call. */
+export interface AskQuestion {
+    question: string
+    header?: string
+    options?: Array<{ label: string; description?: string }>
+    multiSelect?: boolean
+}
+
+/**
+ * What a running task waits for from the owner: the agent's `AskUserQuestion`
+ * (kind `question`) or a permission request for another tool. Answered with
+ * `api.answerTask`; the task stays `running` meanwhile.
+ */
+export interface Ask {
+    kind: 'question' | 'permission'
+    request_id: string
+    tool_use_id: string
+    tool_name: string
+    /** `{ questions: AskQuestion[] }` for a question, the tool's arguments for a permission. */
+    input: Record<string, unknown>
+    /** Answers given so far, by question text (Telegram answers one question at a time). */
+    answers: Record<string, string>
+    agent: string | null
+    asked_at: string
+}
+
 export interface Task {
     id: string
     conversation_id: string
@@ -23,6 +49,8 @@ export interface Task {
     project: string | null
     /** Supervisor restarts that interrupted the task; it is re-queued once, then fails. */
     restarts: number
+    /** What the task waits for from the owner; null while nothing is pending. */
+    ask: Ask | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -32,7 +60,7 @@ export interface TaskEvent {
     id: number
     task_id: string
     ts: string
-    type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits'
+    type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
     payload: Record<string, unknown>
     /** Sub-agent type that produced the event; null for the orchestrator. */
     agent: string | null
@@ -92,6 +120,8 @@ export interface Conversation {
     read_at: string | null
     /** A task finished after `read_at`: its reply was neither opened here nor delivered to Telegram. */
     unread: boolean
+    /** A running task waits for the owner: a question or a permission request. */
+    needs_reply: boolean
 }
 
 export interface ConversationHistory {
@@ -112,6 +142,8 @@ export interface Stats {
     tokens_total: number
     /** Conversations with a reply the owner has not seen. */
     chat_unread: number
+    /** Conversations whose agent waits for the owner's answer. */
+    chat_needs_reply: number
     /** Queued or running tasks of conversations in the Chat list. */
     chat_active: number
 }
@@ -332,6 +364,9 @@ export const api = {
     taskProjects: () => request<string[]>('/tasks/projects'),
     task: (id: string) => request<Task & { events: TaskEvent[]; conversation: Conversation }>(`/tasks/${id}`),
     stopTask: (id: string) => request<{ stopped: boolean }>(`/tasks/${id}/stop`, { method: 'POST' }),
+    /** Answer what a running task asked: `{ answers }` by question text, or `{ behavior: 'allow' | 'deny' }` for a permission. */
+    answerTask: (id: string, body: { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }) =>
+        request<Task>(`/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify(body) }),
 
     audit: (q: { period: AuditPeriod; kind: AuditKind; agent?: string; project?: string; before?: number }) => {
         const params = new URLSearchParams({ period: q.period, kind: q.kind })

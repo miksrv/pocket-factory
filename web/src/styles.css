@@ -220,6 +220,7 @@ tr.click:hover td, tr.selected td { background: var(--surface-2); }
 .badge.failed { background: var(--red-bg); color: var(--red); }
 .badge.cancelled { background: var(--gray-bg); color: var(--gray); }
 .badge.unread { background: var(--green-bg); color: var(--green); font-weight: 600; }
+.badge.ask { background: var(--amber-bg); color: var(--amber); font-weight: 600; }
 .badge.tag, .badge.plain { border-radius: var(--radius-sm); padding: 1px 7px; }
 .badge.tag::before, .badge.plain::before { display: none; }
 .badge.green { background: var(--green-bg); color: var(--green); }
@@ -365,10 +366,13 @@ label.mcp-server { gap: 8px; cursor: pointer; font-size: 12px; }
 .list a { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
 .list a:last-child { border-bottom: none; }
 .list a:hover { background: var(--surface-2); text-decoration: none; }
-/* A reply the owner has not seen: the active stripe in green, plus a dot. The open thread is read at once, so `active` wins. */
+/* The stripe says what a conversation needs: amber = the agent asked and waits, green = a reply the owner has
+   not seen (a new question is unseen first), ink = the open thread (read at once, so `active` wins). */
+.list a.needs-reply { box-shadow: inset 2px 0 0 var(--amber); }
 .list a.unread { box-shadow: inset 2px 0 0 var(--green); }
 .list a.active { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--ink); }
 .dot.unread { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); flex-shrink: 0; }
+.mark.ask { width: 18px; height: 18px; border-radius: 50%; background: var(--amber-bg); color: var(--amber); font-size: 11px; font-weight: 700; line-height: 1; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .list .title { font-weight: 600; font-size: 12.5px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .list .desc { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .toolbar { display: flex; gap: 8px; align-items: center; }
@@ -429,6 +433,20 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
 .reply.queued { padding: 9px 14px; font-size: 12px; }
 .reply-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .working { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12px; }
+/* What the agent asked, waiting for the owner: an amber card inside the turn (`components/Ask.tsx`). */
+.ask-form { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--amber); border-radius: var(--radius-sm); background: var(--amber-bg); padding: 12px 14px; margin: 0; }
+.ask-head { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); flex-wrap: wrap; }
+.ask-q { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ask-q legend { padding: 0; margin-bottom: 6px; font-weight: 600; font-size: 12.5px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ask-q.done legend { color: var(--text-dim); font-weight: 500; }
+.ask-done { font-size: 12px; color: var(--green); }
+.ask-opt { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; padding: 5px 8px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); }
+.ask-opt:hover { border-color: var(--border-strong); }
+.ask-opt input[type='radio'], .ask-opt input[type='checkbox'] { margin: 0; width: 14px; height: 14px; accent-color: var(--amber); flex-shrink: 0; }
+.ask-opt input[type='text'] { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }
+.ask-label { font-weight: 600; }
+.ask-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ask-form .tool, .ask-form pre { margin: 0; }
 .dots { display: inline-flex; gap: 3px; }
 .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); animation: blink 1.2s infinite; }
 .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }

@@ -24,6 +24,29 @@ export function taskRoutes(): Hono<Env> {
         return c.json({ ...task, events: store.listEvents(task.id), conversation: store.getConversation(task.conversation_id) })
     })
 
+    /**
+     * The owner's answer to what a running task asked (`task.ask`): for a
+     * question `{ answers: { "<question>": "<label or free text>" } }` (any
+     * subset), for a permission `{ behavior: 'allow' | 'deny', message? }`.
+     */
+    app.post('/:id/answer', async (c) => {
+        const { tasks } = c.get('app')
+        const body = (await c.req.json().catch(() => null)) as { answers?: unknown; behavior?: unknown; message?: unknown } | null
+        if (!body || typeof body !== 'object') return c.json({ error: 'a JSON body is required' }, 400)
+        try {
+            if (body.answers !== undefined) {
+                if (!body.answers || typeof body.answers !== 'object' || Array.isArray(body.answers)) return c.json({ error: 'answers must be an object' }, 400)
+                const answers = Object.fromEntries(Object.entries(body.answers as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>
+                return c.json(tasks.answer(c.req.param('id'), { answers }))
+            }
+            if (body.behavior === 'allow') return c.json(tasks.answer(c.req.param('id'), { behavior: 'allow' }))
+            if (body.behavior === 'deny') return c.json(tasks.answer(c.req.param('id'), { behavior: 'deny', message: typeof body.message === 'string' ? body.message : undefined }))
+            return c.json({ error: 'answers, or behavior allow / deny, is required' }, 400)
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 409)
+        }
+    })
+
     app.post('/:id/stop', (c) => {
         const { tasks } = c.get('app')
         return c.json({ stopped: tasks.stop(c.req.param('id')) })

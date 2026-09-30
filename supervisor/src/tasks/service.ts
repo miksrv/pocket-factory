@@ -5,10 +5,10 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 
 import { type McpLoginView, McpLogins } from '../claude/mcpLogin.js'
-import { type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
+import { type AskResponse, type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { createLogger } from '../logger.js'
-import type { Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
+import type { Ask, AskQuestion, Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
 
 const log = createLogger('tasks')
 
@@ -32,7 +32,7 @@ export interface Workspace {
 export const claudeSlug = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-')
 
 export interface TaskServiceEvents {
-    /** A task row changed (queued → running → done / failed / cancelled). */
+    /** A task row changed (queued → running → done / failed / cancelled, or its `ask` was set, advanced or cleared). */
     task: [task: Task]
     /** Streamed output for a running task. */
     event: [event: TaskEvent]
@@ -53,6 +53,21 @@ const PROBE_TIMEOUT_MS = 5 * 60_000
  * or a reboot; a task that keeps taking the supervisor down must not loop.
  */
 const MAX_RESTARTS = 1
+
+/** The questions of an `AskUserQuestion` call, as far as the input is well-formed. */
+export function askQuestions(ask: Ask): AskQuestion[] {
+    const questions = ask.kind === 'question' ? ask.input.questions : undefined
+    return Array.isArray(questions) ? questions.filter((q): q is AskQuestion => Boolean(q) && typeof (q as AskQuestion).question === 'string') : []
+}
+
+/** Questions the owner has not answered yet, in order. */
+export const openQuestions = (ask: Ask): AskQuestion[] => askQuestions(ask).filter((q) => !(q.question in ask.answers))
+
+/**
+ * How the owner answers an `Ask`: for a question, answers by question text
+ * (any subset; the rest stay open); for a permission, allow or deny.
+ */
+export type Answer = { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }
 
 /**
  * Variables the CLI (and so every Bash call of the agent) must not see: they
@@ -325,6 +340,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.store.getConversation(task.conversation_id)
     }
 
+    task(id: string): Task | undefined {
+        return this.store.getTask(id)
+    }
+
     /** The owner has seen the conversation's replies (web UI, or delivered to Telegram): clears `unread`. */
     markRead(conversationId: string): void {
         this.store.markConversationRead(conversationId)
@@ -332,9 +351,20 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     // ---- queue ------------------------------------------------------------
 
+    /**
+     * A message for the conversation. While its running task waits for the
+     * owner's answer to a question, the message *is* the answer (free text
+     * for the first open question — the "Other" choice) and the task goes
+     * on; otherwise a new task queues behind whatever runs.
+     */
     submit(conversationId: string, source: TaskSource, prompt: string): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
+        const asking = this.pendingAsk(conversationId)
+        if (asking) {
+            const question = openQuestions(asking.ask!)[0]
+            if (question) return this.answer(asking.id, { answers: { [question.question]: prompt } })
+        }
         // The project is detected per task from its own tool calls, never inherited
         // from the conversation: one session may serve several projects in turn.
         const task = this.store.createTask(conversationId, source, prompt)
@@ -350,6 +380,73 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** Returns the running task of a conversation, if any. */
     activeTask(conversationId: string): Task | undefined {
         return this.store.listTasks({ conversationId, status: 'running', limit: 1 })[0]
+    }
+
+    /** The running task of a conversation whose agent waits for the owner's answer to a *question* (permissions are answered with buttons only). */
+    pendingAsk(conversationId: string): Task | undefined {
+        const task = this.activeTask(conversationId)
+        return task?.ask?.kind === 'question' && this.running.has(task.id) ? task : undefined
+    }
+
+    /**
+     * The owner's answer to what a running task asked. Answers to some of
+     * the questions are kept on the task (Telegram asks one at a time) and
+     * the CLI hears back once every question has one; a permission request
+     * is settled in one go. Returns the task as it is afterwards.
+     */
+    answer(taskId: string, answer: Answer): Task {
+        const task = this.store.getTask(taskId)
+        const handle = this.running.get(taskId)
+        if (!task || !handle) throw new Error('the task is not running')
+        const ask = task.ask
+        if (!ask) throw new Error('the task is not waiting for an answer')
+
+        let response: AskResponse | null
+        let answers = ask.answers
+        if ('answers' in answer) {
+            if (ask.kind !== 'question') throw new Error('this request is a permission prompt: allow or deny it')
+            const known = new Set(askQuestions(ask).map((q) => q.question))
+            const given = Object.fromEntries(Object.entries(answer.answers).filter(([q, a]) => known.has(q) && typeof a === 'string' && a.trim()))
+            if (!Object.keys(given).length) throw new Error('no answer to any of the questions')
+            answers = { ...ask.answers, ...given }
+            response = openQuestions({ ...ask, answers }).length ? null : { behavior: 'allow', updatedInput: { ...ask.input, answers } }
+        } else if (answer.behavior === 'allow') {
+            response = { behavior: 'allow', updatedInput: ask.kind === 'question' ? { ...ask.input, answers } : ask.input }
+        } else {
+            response = { behavior: 'deny', message: answer.message?.trim() || 'The owner declined.' }
+        }
+
+        if (!response) {
+            const updated = this.store.updateTask(taskId, { ask: { ...ask, answers } })
+            this.emit('task', updated)
+            return updated
+        }
+        if (!handle.answer(ask.request_id, response)) {
+            // The CLI no longer waits (cancelled, or the run ended meanwhile): drop the stale ask.
+            const updated = this.store.updateTask(taskId, { ask: null })
+            this.emit('task', updated)
+            throw new Error('the request is no longer open')
+        }
+        const updated = this.store.updateTask(taskId, { ask: null })
+        this.emit(
+            'event',
+            this.store.addEvent(
+                taskId,
+                'answer',
+                {
+                    kind: ask.kind,
+                    request_id: ask.request_id,
+                    tool_name: ask.tool_name,
+                    behavior: response.behavior,
+                    ...(ask.kind === 'question' ? { answers } : {}),
+                    ...(response.behavior === 'deny' ? { message: response.message } : {})
+                },
+                { agent: ask.agent, parent_tool_use_id: null }
+            )
+        )
+        log.info(`${taskId} answered: ${ask.kind} ${ask.tool_name} → ${response.behavior}`)
+        this.emit('task', updated)
+        return updated
     }
 
     /** Whether a task submitted now waits: this conversation is busy or queued, or every session slot is taken. */
@@ -621,6 +718,28 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     this.emit('event', this.store.addEvent(task.id, 'limits', event.limits, origin))
                     return
                 }
+                if (event.type === 'ask') {
+                    // Under bypassPermissions only AskUserQuestion comes this way; in the other modes every tool the mode does not settle does.
+                    const ask: Ask = {
+                        kind: event.toolName === 'AskUserQuestion' ? 'question' : 'permission',
+                        request_id: event.requestId,
+                        tool_use_id: event.toolUseId,
+                        tool_name: event.toolName,
+                        input: event.input,
+                        answers: {},
+                        agent: null,
+                        asked_at: new Date().toISOString()
+                    }
+                    this.emit('event', this.store.addEvent(task.id, 'ask', { kind: ask.kind, request_id: ask.request_id, tool_name: ask.tool_name, input: ask.input }, origin))
+                    this.emit('task', this.store.updateTask(task.id, { ask }))
+                    log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name}`)
+                    return
+                }
+                if (event.type === 'ask_cancelled') {
+                    const current = this.store.getTask(task.id)
+                    if (current?.ask?.request_id === event.requestId) this.emit('task', this.store.updateTask(task.id, { ask: null }))
+                    return
+                }
                 const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
                 if (event.type === 'tool_use' && !project) {
                     project = detectProject(event.input, this.workspaces())
@@ -690,7 +809,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     private finish(taskId: string, patch: Partial<Task>): void {
-        const task = this.store.updateTask(taskId, { ...patch, finished_at: new Date().toISOString() })
+        const task = this.store.updateTask(taskId, { ...patch, ask: null, finished_at: new Date().toISOString() })
         const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
         this.emit('event', this.store.addEvent(taskId, task.status === 'failed' ? 'error' : 'status', {
             status: task.status,
