@@ -1,0 +1,5 @@
+{
+    "title": "Email Assistant",
+    "description": "Read your Gmail and prepare reply drafts through the claude.ai Gmail connector — the agent searches, summarises and drafts in the thread; you send. Nothing is ever sent, deleted or relabelled.",
+    "tags": ["email", "gmail", "drafts", "read-only"]
+}
