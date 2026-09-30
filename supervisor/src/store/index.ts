@@ -19,6 +19,10 @@ export interface Conversation {
     updated_at: string
     /** Set when the owner removed it from the Chat list; tasks and events remain. */
     deleted_at: string | null
+    /** When the owner last opened it in the web UI; null = never. */
+    read_at: string | null
+    /** A task finished after `read_at`: its reply was neither opened in the web nor delivered to Telegram. */
+    unread: boolean
 }
 
 export interface Task {
@@ -123,6 +127,10 @@ export interface TaskStats {
     /** All tokens (input, output, cache read, cache creation) of tasks created today / ever. */
     tokens_today: number
     tokens_total: number
+    /** Conversations with a reply the owner has not seen (see `Conversation.unread`). */
+    chat_unread: number
+    /** Queued or running tasks of conversations in the Chat list. */
+    chat_active: number
 }
 
 /** A persisted rate-limit reading; see `RateLimits` for where it comes from. */
@@ -183,21 +191,37 @@ function keyset(column: string, before: Cursor | undefined, prefix = 'AND '): { 
     return { sql: `${prefix}(${column} < ? OR (${column} = ? AND id < ?))`, values: [before.ts, before.ts, before.id] }
 }
 
+/**
+ * "Unread" for a conversation `c`: a task finished after the owner last saw
+ * the conversation. Seeing it = opening it in the web UI, or the bot
+ * delivering the reply to Telegram (a reply that could not be delivered stays
+ * unread in the web).
+ */
+const UNREAD = `EXISTS (
+    SELECT 1 FROM tasks t
+    WHERE t.conversation_id = c.id AND t.status IN ('done', 'failed')
+      AND t.finished_at > COALESCE(c.read_at, '')
+)`
+const CONVERSATION = `c.*, ${UNREAD} AS unread FROM conversations c`
+
+type ConversationRow = Omit<Conversation, 'unread'> & { unread: number }
+const conversationOf = (row: ConversationRow): Conversation => ({ ...row, unread: Boolean(row.unread) })
+
 export class Store {
     constructor(private readonly db: DatabaseSync) {}
 
     // ---- conversations ----------------------------------------------------
 
     findConversation(channel: Channel, externalId: string): Conversation | undefined {
-        return this.db
-            .prepare(
-                'SELECT * FROM conversations WHERE channel = ? AND external_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1'
-            )
-            .get(channel, externalId) as Conversation | undefined
+        const row = this.db
+            .prepare(`SELECT ${CONVERSATION} WHERE c.channel = ? AND c.external_id = ? AND c.deleted_at IS NULL ORDER BY c.created_at DESC LIMIT 1`)
+            .get(channel, externalId) as ConversationRow | undefined
+        return row && conversationOf(row)
     }
 
     getConversation(id: string): Conversation | undefined {
-        return this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as Conversation | undefined
+        const row = this.db.prepare(`SELECT ${CONVERSATION} WHERE c.id = ?`).get(id) as ConversationRow | undefined
+        return row && conversationOf(row)
     }
 
     createConversation(channel: Channel, externalId: string | null, title: string | null = null, project: string | null = null): Conversation {
@@ -211,7 +235,9 @@ export class Store {
             project,
             created_at: ts,
             updated_at: ts,
-            deleted_at: null
+            deleted_at: null,
+            read_at: null,
+            unread: false
         }
         this.db
             .prepare(
@@ -220,6 +246,11 @@ export class Store {
             )
             .run(conversation.id, channel, externalId, title, project, ts, ts)
         return conversation
+    }
+
+    /** The owner has seen the conversation (web UI open, or the reply delivered to Telegram): its finished tasks are read. Not activity: `updated_at` stays. */
+    markConversationRead(id: string): void {
+        this.db.prepare('UPDATE conversations SET read_at = ? WHERE id = ?').run(now(), id)
     }
 
     updateConversation(id: string, patch: Partial<Pick<Conversation, 'title' | 'session_id' | 'project'>>): void {
@@ -239,9 +270,11 @@ export class Store {
      */
     listConversations(limit = 50, before?: Cursor): Conversation[] {
         const { sql, values } = keyset('updated_at', before)
-        return this.db
-            .prepare(`SELECT * FROM conversations WHERE deleted_at IS NULL ${sql} ORDER BY updated_at DESC, id DESC LIMIT ?`)
-            .all(...(values as never[]), limit) as unknown as Conversation[]
+        return (
+            this.db
+                .prepare(`SELECT ${CONVERSATION} WHERE c.deleted_at IS NULL ${sql} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`)
+                .all(...(values as never[]), limit) as unknown as ConversationRow[]
+        ).map(conversationOf)
     }
 
     /** Soft delete: hide from the Chat list; the next Telegram message starts a fresh conversation. */
@@ -393,11 +426,21 @@ export class Store {
                  )`
             )
             .get(today, today, today) as Record<keyof TaskStats, number | null>
+        const chat = this.db
+            .prepare(
+                `SELECT
+                    (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${UNREAD}) AS chat_unread,
+                    (SELECT COUNT(*) FROM tasks t JOIN conversations c ON c.id = t.conversation_id
+                      WHERE c.deleted_at IS NULL AND t.status IN ('queued', 'running')) AS chat_active`
+            )
+            .get() as { chat_unread: number; chat_active: number }
         return {
             queued: row.queued ?? 0,
             running: row.running ?? 0,
             done_today: row.done_today ?? 0,
             failed_today: row.failed_today ?? 0,
+            chat_unread: chat.chat_unread,
+            chat_active: chat.chat_active,
             tokens_today: row.tokens_today ?? 0,
             tokens_total: row.tokens_total ?? 0
         }

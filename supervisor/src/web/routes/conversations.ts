@@ -77,6 +77,15 @@ export function conversationRoutes(): Hono<Env> {
         return c.json({ tasks, events: store.listEventsOfTasks(tasks.map((t) => t.id)), has_more: page.length > PAGE })
     })
 
+    /** The owner has the conversation on screen: clears its `unread` flag (the Chat list, the sidebar badge). */
+    app.post('/:id/read', (c) => {
+        const { store } = c.get('app')
+        const conversation = live(c)
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        store.markConversationRead(conversation.id)
+        return c.body(null, 204)
+    })
+
     /** Remove from the Chat list. Refused while a task of it is queued or running. */
     app.delete('/:id', (c) => {
         const { tasks, store } = c.get('app')

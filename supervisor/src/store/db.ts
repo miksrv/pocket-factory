@@ -100,6 +100,13 @@ const MIGRATIONS: string[] = [
     // crashing the supervisor must not loop).
     `
     ALTER TABLE tasks ADD COLUMN restarts INTEGER NOT NULL DEFAULT 0;
+    `,
+    // v7: when the owner last looked at a conversation in the web UI. A web
+    // task that finished later is "unread" (Chat list, sidebar badge). Existing
+    // rows count as read: nothing lights up on the upgrade.
+    `
+    ALTER TABLE conversations ADD COLUMN read_at TEXT;
+    UPDATE conversations SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
     `
 ]
 
