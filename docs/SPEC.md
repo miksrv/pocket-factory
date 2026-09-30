@@ -90,7 +90,7 @@ Inspiration: Guild.ai's "Software Factory" (specialized agents producing ready p
 
 1. Schedule: hourly, working hours only (Mon–Fri, configurable window).
 2. **Deterministic pre-filter script** (no LLM): polls the TRAC API, diffs ticket IDs against the `seen_items` table. No new defects → zero tokens spent, no session spawned.
-3. New relevant defect → task created with the `trac-defect-fix` skill: reproduce on staging, find root cause, branch, fix, review loop, PR.
+3. New relevant defect → task created with the `trac-defect-fix` skill: reproduce (over SSH on the project's `hosts:` when it has any, read-only; from the code and tests otherwise), find root cause, branch, fix, review loop, PR.
 4. Telegram report: "Defect #46812 fixed, PR ready: <link>."
 
 ### UC-5 — Creating a new sub-agent (via Telegram or UI)
@@ -382,7 +382,7 @@ Phase 1 is deliberately the whole "driving to a conference" story: if it works, 
 5. Closing-phrase detection: pure keyword list + `/done`, or let the agent emit an explicit "session can be closed" marker in its final report?
 6. Voice replies (TTS) from the agent — nice-to-have, out of v1 scope?
 7. How much of the transcript should be mirrored into Telegram on failure (error digest format).
-8. Staging access pattern for UC-4 (how sub-agents reach the staging environment: SSH? VPN? MCP?) — must be resolved before Phase 5.
+8. ~~Staging access pattern for UC-4 (how sub-agents reach the staging environment: SSH? VPN? MCP?)~~ — **Decided (2026-09-29):** SSH only, through the project file's `hosts:` (key from `data/secrets/ssh`, per-host `notes` with the rules), strictly read-only; a project without hosts reproduces from the code and tests, and the triager asks the owner when neither suffices. No VPN, no dedicated MCP server. The remaining risk (a ticket is untrusted input and the sub-agent holds a shell) is covered by the read-only rule in the skill and the host notes, the Audit log, and, where wanted, a restricted user or `command=` on the host itself.
 9. Webhook ingress: is anyone going to miss the few-minutes latency of polling enough to justify a public endpoint?
 
 ---

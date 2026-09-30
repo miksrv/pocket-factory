@@ -24,7 +24,15 @@ try {
             ws.addEventListener('message', on)
             ws.send(JSON.stringify({ id: me, method, params }))
         })
-    await call('Page.navigate', { url })
+    // Basic auth: credentials in the URL would break the page's own fetches, so they go into a header instead.
+    const page = new URL(url)
+    if (page.username) {
+        await call('Network.enable')
+        await call('Network.setExtraHTTPHeaders', { headers: { Authorization: `Basic ${Buffer.from(`${decodeURIComponent(page.username)}:${decodeURIComponent(page.password)}`).toString('base64')}` } })
+        page.username = ''
+        page.password = ''
+    }
+    await call('Page.navigate', { url: page.toString() })
     await sleep(4000)
     if (js) {
         const { result } = await call('Runtime.evaluate', { expression: js, awaitPromise: true, returnByValue: true })

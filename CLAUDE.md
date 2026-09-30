@@ -81,7 +81,15 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   `LoadMore` sentinel) with a `(timestamp, id)` cursor sent as `before` + `before_id`, so equal
   timestamps neither skip nor repeat rows; the audit log pages by event id and the server says
   `has_more`. Polling refreshes only the first page and drops rows that left it. `lib/unsaved.ts`
-  is the one "unsaved edits" flag the editor sets and the sidebar checks
+  is the one "unsaved edits" flag the editor sets and the sidebar checks. **Unread replies**
+  (2026-09-30): `conversations.read_at` (migration v7) and a computed `unread` on every
+  conversation row (a `done` / `failed` task finished after `read_at`); `/api/status` `stats`
+  carries `chat_unread` / `chat_active`. The sidebar's Chat item shows a green count while
+  something is unread (blue count while a task runs), the tab title gets `(N)`, the Chat list
+  draws a green stripe + dot. The open thread posts `/read` when it loads, when a reply lands
+  and when the tab becomes visible again (a reply that arrives in a hidden tab stays unread);
+  the bot marks a conversation read once its reply is delivered to Telegram, so a failed
+  delivery keeps it lit
 - `templates/claude/` — seeded into `data/claude/` on **every** container start with `cp -n`: new
   files appear, edited files are never overwritten. On the host, copy by hand the same way.
   Prose in agent / skill / project Markdown is not hard-wrapped (one line per paragraph or
@@ -112,8 +120,16 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
 ## Decisions already made (don't re-open)
 
 - Agent runtime = `claude` CLI subprocess, never the Agent SDK with a stored token (ToS, see SPEC §8).
-- Auth = `claude setup-token` on a laptop → `CLAUDE_CODE_OAUTH_TOKEN` in `.env`. Interactive `/login`
-  inside the container is broken upstream (anthropics/claude-code#34917).
+- Auth (changed 2026-09-29) = a full claude.ai login **inside the container**:
+  `docker compose run --rm -it -e CLAUDE_CODE_OAUTH_TOKEN= supervisor claude auth login` prints a
+  URL, the code is pasted back, and `data/claude/.credentials.json` gets `claudeAiOauth` with the
+  `user:mcp_servers` / `user:profile` / `user:plugins` scopes. That brings the **claude.ai
+  connectors** (Gmail, ClickUp, ferret with Trac, Drive, Calendar, Figma, …) and the synced
+  plugins into every `-p` session, deferred behind ToolSearch (~200 tool names, schemas on
+  demand). `CLAUDE_CODE_OAUTH_TOKEN` in `.env` must stay empty: a setup-token takes precedence
+  and, by the docs, "can't fetch claude.ai connectors". The setup-token stays as the fallback
+  for CI-like runs. (Earlier: interactive login was broken upstream, anthropics/claude-code#34917;
+  the URL + code flow works in 2.1.283.)
 - Agent works inside the owner's real checkouts on a branch (no worktrees, no re-cloning). A
   conversation bound to a project (`conversations.project`, set via the Chat selector, Telegram
   `/new <p>` / `/project <p>`, or detected from the first task) spawns `claude -p` with
@@ -131,9 +147,66 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   (prints the URL: open it on the laptop, paste the redirect URL back); the token lands in
   `data/claude/.credentials.json`, shared by every task, and the CLI refreshes it. Logging in
   from the laptop does not work on macOS: the CLI writes to the Keychain there, not to
-  `CLAUDE_CONFIG_DIR`. Same command over SSH on a VPS. `/api/mcp` reports servers and variable status, never values; the init event's
+  `CLAUDE_CONFIG_DIR`. Same command over SSH on a VPS. **The URL + paste flow in the
+  container is the proven way to authorize anything OAuth**: ClickUp's MCP server
+  (2026-09-28, `claude mcp login … --no-browser`) and the claude.ai account itself (2026-09-29,
+  `claude auth login`) were both done this way; the ClickUp connector of the account now covers
+  the same server without a `.mcp.json`. `/api/mcp` reports servers and variable status, never values; the init event's
   `mcp_servers` is kept in `meta` (`claude.mcp`). Sub-agents get data from the orchestrator, not
-  MCP access (their `tools:` allowlists stay MCP-free), except role-owned tools.
+  MCP access (their `tools:` allowlists stay MCP-free), except role-owned tools. Role-owned
+  servers (verified in the container 2026-09-29 with a stdio probe): `mcpServers:` in an agent
+  file is a **list** — a bare name, or `- name: { type, command, args, env | url, headers }`
+  inline; the server starts for that sub-agent only, its tool schemas never reach the
+  orchestrator; the sub-agent's `tools:` may name `mcp__<server>__<tool>`; the call is still
+  denied in `-p` unless settings allow `mcp__<server>`, so `TaskService.sessionSettings` adds an
+  allow rule for every server declared in `data/claude/agents/*.md` (`Workspace.agentMcp`).
+  Under `bypassPermissions` (the container) connector and project MCP calls go through without a
+  rule; the rules matter for `acceptEdits` (`yarn dev`) and the default mode. `${VAR}` is
+  **not** expanded in frontmatter (only in `.mcp.json` / `--mcp-config`); a stdio
+  server inherits the CLI's environment instead, so secrets go into `.env` under the variable
+  name the server expects and the frontmatter carries only literal paths and flags. The agent
+  form does **not** edit `mcpServers:` (decided 2026-09-29: with the connectors in every
+  session there is nothing for a role to declare); instead its tool picker lists the MCP
+  servers the sessions have seen, grouped from the CLI's reported tool names
+  (`/api/tools` → `mcp`, `mcp__<server>__<tool>`), with a whole-server box or single tools, so
+  "a ClickUp agent" is a role with that server ticked and the email assistant is Gmail without
+  send. `McpServersField` (`components/McpServers.tsx`) serves Settings → MCP only; a
+  hand-written `mcpServers:` in a file still works and keeps its allow rule. **MCP registry**
+  (`TaskService.mcpRegistry`, meta `claude.mcp.registry`): every server the CLI ever reported,
+  keyed like its tools (`mcp__<key>__`), with `source` (connector / plugin / project:<slug> /
+  factory) and the last `status`; fed by init events and by `POST /api/mcp/refresh`, which
+  runs `claude mcp list` in the factory (~10 s) and is the only way to see servers that still
+  need authentication. Settings → MCP shows this list (connected first) with a Refresh button;
+  the editor for `data/config/mcp.json` is folded underneath; per-project lists are gone from
+  Settings (the project form still reads the checkout's `.mcp.json` for its `mcp:` allowlist).
+  `/api/status` reports `login`: `claude.ai (team, connectors)` or `token` or `none`.
+  **Sign-in from the browser** (2026-09-30): every row that needs authentication has an
+  Authorize button; `POST /api/mcp/login` runs `claude mcp login <name> --no-browser` in the
+  factory (`claude/mcpLogin.ts`, `McpLogins`), from the project's checkout for a
+  `project:<slug>` server, and the dialog (`components/McpLogin.tsx`) shows the link. Two
+  modes, decided by the CLI: a **connector** URL leads to claude.ai and the command exits at
+  once (the dialog ends with "Refresh statuses"); a project's OAuth server (`redirect` mode)
+  keeps a callback server on a random localhost port inside the container and waits for the
+  redirect URL, which the owner copies from the address bar of the page that could not load
+  and pastes into the dialog (`POST /api/mcp/login/:id/complete`; the CLI's own rejection of a
+  wrong URL comes back as the error, and the sign-in stays open). The CLI refuses that flow
+  without a TTY ("stdin isn't a terminal"), so the command runs under a pseudo-terminal:
+  util-linux `script -qfec` in the image (bookworm), a small `python3` pty loop on macOS for
+  `yarn dev` (BSD `script` cannot take a pipe as stdin, and `pty.spawn` never returns after the
+  child exits). Output is parsed with ANSI / OSC 8 escapes stripped. A completed redirect
+  sign-in marks the server connected in the registry; an open one is cancelled on close, on
+  shutdown and after 10 minutes. Plugins (stdio) and the owner's own `mcp.json` servers get no
+  button: `claude mcp login` does not list them. On a macOS host the CLI reads no
+  `.credentials.json` with an absolute `CLAUDE_CONFIG_DIR` (Keychain), so from `yarn dev`
+  connectors answer "No MCP server named …": test sign-ins against the container.
+  **Duplicates by URL** (2026-09-30): the registry keeps each server's `target` (the URL
+  `claude mcp list` printed, so a Refresh is what fills it); `GET /api/mcp` marks a project or
+  factory server whose URL equals a connector's with `duplicate_of` (the connector's key) and
+  each project server with `connector` (its label). Settings folds such a server into the
+  connector's row ("also `clickup` in project TenantManagement") and the project form badges it
+  "via connector": the CLI itself drops the project entry when a connector has the same URL
+  (verified: from the TenantManagement checkout `claude mcp list` omits BP JSKit MCP), sessions
+  only ever reported the connector's tools, and the `.mcp.json` entry adds nothing.
 - Token hygiene: `Explore` is overridden in `templates/claude/agents/Explore.md` with `model:
   haiku`; agents carry `maxTurns`, read-only ones `effort: medium`, `devops-engineer` also
   `omitClaudeMd`. The dispatcher suggests `/new` after a finished task.
@@ -207,7 +280,9 @@ the history up to the evening of 2026-09-28). Since then, uncommitted at the tim
 - Voice works (Groq, `.oga` → `.ogg` upload name fix). Health on Overview is fully green.
 - Presets (2026-09-29): `fullstack-ts-go` (go-developer, web-developer, go/typescript
   conventions), `fullstack-ts-php` (php-developer, php-conventions, the same web-developer),
-  `devops` (devops-engineer with a read-only hook, devops-check), `pr-review`. The two full-stack
+  `devops` (devops-engineer with a read-only hook, devops-check), `pr-review`, `email-assistant`
+  (agent on the **claude.ai Gmail connector**, `tools:` limited to eight read / draft tools, no
+  send; skill `email-reply`; a second mailbox is an agent-owned server added in the agent form). The two full-stack
   presets share `fullstack-feature` and `web-developer` byte for byte: the skill picks the server
   developer from the checkout (`go.mod` → go-developer, `composer.json` → php-developer), so both
   can be installed and reinstalled in any order. Keep shared files identical across presets, since
@@ -229,14 +304,17 @@ Not done / next:
 1. Commit the batch above (the owner sets the commit budget).
 2. First real feature-to-pr / fullstack-feature run on a real repository, end to end from
    Telegram: branch → developer → reviewer → checks → PR link.
-3. ClickUp MCP login for `TenantManagement` (`docker compose run --rm -it -w
-   /data/workspaces/TenantManagement supervisor claude mcp login clickup --no-browser`),
-   onboarding of the other three work repos.
-4. Deferred to the next session (details in the assistant's memory): "Extra MCP servers" in the
-   project form and "MCP servers of this role" in the agent form (same editor as Settings), then
-   the `email-assistant` preset (Gmail MCP, drafts only).
+3. Onboarding of the other three work repos (MCP sign-ins now go through Settings → MCP →
+   Authorize; the console flow stays as the fallback).
+4. Email assistant: preset on the claude.ai Gmail connector, installed; the owner blanks
+   `CLAUDE_CODE_OAUTH_TOKEN` in `.env`, recreates the container and runs the first draft from
+   Telegram. Connectors also close the Trac gap (ferret) and give UserManagement ClickUp without
+   a `.mcp.json`. A project form section for extra MCP servers was dropped: projects inherit
+   their checkout's `.mcp.json`, roles own theirs in the agent form.
 5. Phase 5: schedules + prefilters (TRAC poller, GitHub review requests) — `source: cron` is
-   already in the tasks table; UC-4 staging access (SPEC open question 8) must be settled first.
+   already in the tasks table; UC-4 staging access is settled (SPEC open question 8, 2026-09-29: SSH via
+   the project's `hosts:`, read-only, code-only reproduction without hosts). Still needed: Trac
+   credentials in `.env` for the LLM-free poller.
 6. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram;
    README for forkers.
 7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
