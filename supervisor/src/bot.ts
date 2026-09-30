@@ -302,9 +302,10 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 : task.status === 'cancelled'
                   ? '⏹ Stopped.'
                   : `❌ ${task.error || 'failed'}`
-        void sendMarkdown(bot, chatId, `${body}\n\n${footer(task, tasks.limits())}`).catch((error) =>
-            log.error(`delivery to chat ${chatId} failed`, error)
-        )
+        // Delivered = seen: the web's "unread" mark goes; a failed delivery keeps it, so the reply is not lost.
+        void sendMarkdown(bot, chatId, `${body}\n\n${footer(task, tasks.limits())}`)
+            .then(() => tasks.markRead(task.conversation_id))
+            .catch((error) => log.error(`delivery to chat ${chatId} failed`, error))
     })
 
     bot.catch((err) => {

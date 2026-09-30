@@ -4,6 +4,7 @@ import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-ro
 
 import { AssistantTurn } from '../components/AssistantTurn'
 import { Channel } from '../components/Icon'
+import { STATUS_CHANGED } from '../components/Layout'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
 import { useConfirm } from '../components/Modal'
 import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
@@ -66,7 +67,7 @@ export function ChatPage() {
                 <div className="list">
                     {(error || conversations.error) && <div className="error small" style={{ padding: '8px 14px' }}>{error ?? conversations.error}</div>}
                     {conversations.items.map((c) => (
-                        <NavLink key={c.id} to={`/chat/${c.id}`}>
+                        <NavLink key={c.id} to={`/chat/${c.id}`} className={({ isActive }) => `${isActive ? 'active' : ''}${c.unread ? ' unread' : ''}`}>
                             <div className="grow">
                                 <div className="title" title={c.title ?? undefined}>{c.title ?? 'Untitled'}</div>
                                 <div className="desc">
@@ -74,6 +75,7 @@ export function ChatPage() {
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
                                 </div>
                             </div>
+                            {c.unread && <span className="dot unread" title="New reply" />}
                         </NavLink>
                     ))}
                     {conversations.items.length === 0 && !conversations.loading && <Empty>No conversations yet.</Empty>}
@@ -87,6 +89,7 @@ export function ChatPage() {
                     key={id}
                     id={id}
                     onSent={conversations.reload}
+                    onRead={conversations.refresh}
                     onDeleted={() => {
                         conversations.reload()
                         navigate('/chat')
@@ -123,7 +126,7 @@ function ProjectSelect({ value, onChange, projects, disabled }: { value: string;
     return <FilterSelect label="Project" all="no project (workspaces root)" value={value} onChange={onChange} options={projects.map((p) => p.name)} disabled={disabled} />
 }
 
-function Thread({ id, onSent, onDeleted, projects }: { id: string; onSent: () => void; onDeleted: () => void; projects: CatalogEntry[] }) {
+function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSent: () => void; onRead: () => void; onDeleted: () => void; projects: CatalogEntry[] }) {
     const [conversation, setConversation] = useState<Conversation | null>(null)
     const [tasks, setTasks] = useState<Map<string, Task>>(new Map())
     const [events, setEvents] = useState<TaskEvent[]>([])
@@ -152,6 +155,31 @@ function Thread({ id, onSent, onDeleted, projects }: { id: string; onSent: () =>
             return new Map(prev).set(task.id, task)
         })
 
+    // The thread on screen is read: when it opens, when a reply lands while
+    // it is shown, and when the owner comes back to the tab. A reply that
+    // arrives while the tab is hidden keeps its "unread" mark until then.
+    // The list is refetched rather than patched in place: on a fresh page
+    // the 204 lands before the list's body is parsed, and the stale list
+    // would overwrite a local patch.
+    const onReadRef = useRef(onRead)
+    onReadRef.current = onRead
+    const markRead = () => {
+        if (document.visibilityState !== 'visible') return
+        api.markConversationRead(id)
+            .then(() => {
+                onReadRef.current()
+                window.dispatchEvent(new Event(STATUS_CHANGED))
+            })
+            .catch(() => undefined)
+    }
+    const markReadRef = useRef(markRead)
+    markReadRef.current = markRead
+    useEffect(() => {
+        const onVisible = () => document.visibilityState === 'visible' && markReadRef.current()
+        document.addEventListener('visibilitychange', onVisible)
+        return () => document.removeEventListener('visibilitychange', onVisible)
+    }, [])
+
     useEffect(() => {
         let cancelled = false
         let stop = () => {}
@@ -159,11 +187,19 @@ function Thread({ id, onSent, onDeleted, projects }: { id: string; onSent: () =>
             .then((detail) => {
                 if (cancelled) return // unmounted before the load finished: never open a stream nobody closes
                 setConversation(detail)
+                markReadRef.current()
                 setTasks(new Map(detail.tasks.map((t) => [t.id, t])))
                 setEvents(detail.events)
                 setHasEarlier(detail.has_more)
                 lastEvent.current = detail.events.at(-1)?.id ?? 0
-                const refresh = (taskId: string) => api.task(taskId).then(mergeTask).catch(() => undefined)
+                const refresh = (taskId: string) =>
+                    api
+                        .task(taskId)
+                        .then((task) => {
+                            mergeTask(task)
+                            if (task.status === 'done' || task.status === 'failed') markReadRef.current()
+                        })
+                        .catch(() => undefined)
                 stop = streamConversation(id, () => lastEvent.current, {
                     onTask: mergeTask,
                     onEvent: (event) => {

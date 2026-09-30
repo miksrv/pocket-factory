@@ -6,7 +6,7 @@ import { useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { Icon, type IconName } from './Icon'
 import { LimitsInline } from './Limits'
-import { Button } from './ui'
+import { Button, CloseButton } from './ui'
 
 const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }> = [
     { to: '/', label: 'Overview', icon: 'overview' },
@@ -23,6 +23,9 @@ const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }
 
 const STORAGE_KEY = 'pf.sidebar.collapsed'
 
+/** Dispatched on `window` by a page that changed what the sidebar badges show, so they refresh before the next poll. */
+export const STATUS_CHANGED = 'pf:status-changed'
+
 /** Initial state: `?sidebar=collapsed|expanded` wins (bookmarkable), then the remembered choice. */
 function readCollapsed(): boolean {
     const param = new URLSearchParams(window.location.search).get('sidebar')
@@ -38,6 +41,19 @@ function readCollapsed(): boolean {
 export function Layout() {
     const status = useAsync(() => api.status(), [], 10_000)
     const running = status.data?.stats.running ?? 0
+    const unread = status.data?.stats.chat_unread ?? 0
+    const chatActive = status.data?.stats.chat_active ?? 0
+
+    // A page that changed what the badges show (the Chat marking a thread read) asks for a fresh reading at once.
+    useEffect(() => {
+        window.addEventListener(STATUS_CHANGED, status.reload)
+        return () => window.removeEventListener(STATUS_CHANGED, status.reload)
+    }, [status.reload])
+
+    // The browser tab counts unread replies too: that is where the owner looks when the app is in another tab.
+    useEffect(() => {
+        document.title = unread > 0 ? `(${unread}) Pocket Factory` : 'Pocket Factory'
+    }, [unread])
     const [collapsed, setCollapsed] = useState(readCollapsed)
     const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === 'open') // mobile drawer
     const location = useLocation()
@@ -86,9 +102,7 @@ export function Layout() {
                 <div className="brand">
                     <Logo />
                     <span className="label">Pocket Factory</span>
-                    <Button className="icon-btn mobile-only" aria-label="Close menu" onClick={() => setOpen(false)}>
-                        ×
-                    </Button>
+                    <CloseButton className="icon-btn mobile-only" label="Close menu" onClick={() => setOpen(false)} />
                 </div>
                 <nav className="nav">
                     {NAV.map((item) => (
@@ -100,6 +114,16 @@ export function Layout() {
                                 </span>
                                 <span className="grow label">{item.label}</span>
                                 {item.to === '/tasks' && running > 0 && <span className="badge running count">{running}</span>}
+                                {item.to === '/chat' && unread > 0 && (
+                                    <span className="badge unread count" title={`${unread} unread`}>
+                                        {unread}
+                                    </span>
+                                )}
+                                {item.to === '/chat' && unread === 0 && chatActive > 0 && (
+                                    <span className="badge running count" title={`${chatActive} working`}>
+                                        {chatActive}
+                                    </span>
+                                )}
                             </NavLink>
                         </div>
                     ))}

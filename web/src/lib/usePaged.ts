@@ -11,6 +11,8 @@ export interface Paged<T> {
     loadMore: () => void
     /** Start over from the first page. */
     reload: () => void
+    /** Merge a fresh first page over the list now (what polling does), without a loading state or a rebuild. */
+    refresh: () => void
     setItems: (update: (items: T[]) => T[]) => void
 }
 
@@ -35,6 +37,8 @@ export function usePaged<T>(
     itemsRef.current = items
     /** Generation of the request in flight, so a reset is never blocked by (or unblocked by) an older one. */
     const busy = useRef<number | null>(null)
+    /** A refresh asked for while a request was in flight runs once that request is done, so it is never lost. */
+    const again = useRef(false)
     const cursorOf = (item: T): Cursor => ({ ts: cursor(item), id: key(item) })
     const more = options.hasMore ?? ((page: T[]) => page.length >= pageSize)
     /** Strictly older on the server's `(ts DESC, id DESC)` order; numeric ids (audit events) compare as numbers. */
@@ -51,7 +55,10 @@ export function usePaged<T>(
 
     const load = useCallback(
         (mode: 'reset' | 'more' | 'poll') => {
-            if (mode !== 'reset' && busy.current !== null) return
+            if (mode !== 'reset' && busy.current !== null) {
+                if (mode === 'poll') again.current = true
+                return
+            }
             if (mode === 'more' && itemsRef.current.length === 0) return
             const gen = mode === 'reset' ? ++generation.current : generation.current
             const before = mode === 'more' ? cursorOf(itemsRef.current[itemsRef.current.length - 1]) : undefined
@@ -84,6 +91,10 @@ export function usePaged<T>(
                 .finally(() => {
                     if (busy.current === gen) busy.current = null
                     if (gen === generation.current) setLoading(false)
+                    if (again.current && busy.current === null) {
+                        again.current = false
+                        load('poll')
+                    }
                 })
         },
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,6 +115,7 @@ export function usePaged<T>(
         hasMore,
         loadMore: () => load('more'),
         reload: () => load('reset'),
+        refresh: () => load('poll'),
         setItems: (update) => setItems((prev) => update(prev))
     }
 }
