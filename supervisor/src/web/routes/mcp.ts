@@ -115,38 +115,121 @@ function describe(name: string, server: McpServer) {
     }
 }
 
+/** Two spellings of one URL compare equal: scheme and host case, a trailing slash, a fragment. */
+function sameUrl(url: string | null | undefined): string | null {
+    if (!url) return null
+    try {
+        const u = new URL(url)
+        u.hash = ''
+        return `${u.origin.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`
+    } catch {
+        return null
+    }
+}
+
 export function mcpRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
+    /**
+     * Every server the factory has seen with its last status, plus the owner's own
+     * file for the editor. Statuses come from session starts; `POST /refresh` asks
+     * the CLI directly (`claude mcp list`), which also lists servers that need
+     * authentication and therefore expose no tools.
+     */
     app.get('/', (c) => {
         const { config, catalog, tasks } = c.get('app')
         const file = path.join(config.paths.configRoot, 'mcp.json')
         const global = readServers(file)
-        const status = tasks.mcpStatus()
+        const own = new Set(Object.keys(global.servers))
+        const registry = tasks.mcpRegistry().map((entry) => ({ ...entry, source: own.has(entry.name) ? 'factory' : entry.source }))
+        // The connectors by URL (`claude mcp list` printed it): a project or factory server with the
+        // same URL is the same server under another name, and the connector already serves every session.
+        const connectors = new Map<string, { key: string; label: string }>()
+        for (const entry of registry) {
+            const url = entry.source === 'connector' ? sameUrl(entry.target) : null
+            if (url && !connectors.has(url)) connectors.set(url, { key: entry.key, label: entry.label })
+        }
+        // URLs of the project and factory servers, from their files (the registry may not have seen them yet).
+        const declaredUrl = new Map<string, string | null>()
+        for (const [name, server] of Object.entries(global.servers)) declaredUrl.set(name, sameUrl(server.url))
+        // What each checkout declares, for the project form's `mcp:` allowlist.
         const projects = catalog.list('projects').map((entry) => {
             const dir = typeof entry.frontmatter.path === 'string' && entry.frontmatter.path ? entry.frontmatter.path : path.join(config.paths.workspacesRoot, entry.name)
             const declared = readServers(path.join(dir, '.mcp.json'))
-            const allowed = Array.isArray(entry.frontmatter.mcp) ? entry.frontmatter.mcp.map(String) : null
-            return {
-                slug: entry.name,
-                path: dir,
-                checkout: fs.existsSync(dir),
-                servers: Object.entries(declared.servers).map(([name, server]) => ({ ...describe(name, server), enabled: !allowed || allowed.includes(name) })),
-                allowed,
-                error: declared.error,
-                last_session: status[entry.name] ?? null
-            }
+            const servers = Object.entries(declared.servers).map(([name, server]) => {
+                const url = sameUrl(server.url)
+                if (!declaredUrl.has(name)) declaredUrl.set(name, url)
+                return { ...describe(name, server), connector: (url && connectors.get(url)?.label) ?? null }
+            })
+            return { slug: entry.name, servers, error: declared.error }
+        })
+        const servers = registry.map((entry) => {
+            const url = entry.source === 'connector' ? null : (declaredUrl.get(entry.name) ?? sameUrl(entry.target))
+            const twin = url ? connectors.get(url) : undefined
+            return { ...entry, tools: entry.tools.length, duplicate_of: twin && twin.key !== entry.key ? twin.key : null }
         })
         return c.json({
+            servers,
+            projects,
             global: {
                 file,
                 servers: Object.entries(global.servers).map(([name, server]) => describe(name, server)),
                 config: Object.fromEntries(Object.entries(global.servers).map(([name, server]) => [name, masked(server)])),
-                error: global.error,
-                last_session: status['.'] ?? null
-            },
-            projects
+                error: global.error
+            }
         })
+    })
+
+    app.post('/refresh', async (c) => {
+        const { tasks } = c.get('app')
+        try {
+            const servers = await tasks.refreshMcp()
+            return c.json({ servers: servers.map((entry) => ({ ...entry, tools: entry.tools.length, duplicate_of: null })) })
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 502)
+        }
+    })
+
+    /**
+     * Sign in to a server from the browser: `claude mcp login <name> --no-browser`
+     * under a pseudo-terminal. The answer carries the authorization URL and the
+     * mode: a claude.ai connector is authorized on claude.ai and the command is
+     * over; an OAuth server of a project waits for the redirect URL, which the
+     * owner copies from the browser's address bar and pastes back through
+     * `/login/:id/complete`. The dialog polls `/login/:id` meanwhile (on the host
+     * the CLI's own localhost callback may complete the sign-in by itself).
+     */
+    app.post('/login', async (c) => {
+        const { tasks } = c.get('app')
+        const body = (await c.req.json().catch(() => null)) as { name?: unknown } | null
+        if (!body || typeof body.name !== 'string' || !body.name.trim()) return c.json({ error: 'name required' }, 400)
+        try {
+            return c.json({ login: await tasks.startMcpLogin(body.name.trim()) })
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 502)
+        }
+    })
+
+    app.get('/login/:id', (c) => {
+        const login = c.get('app').tasks.mcpLogin(c.req.param('id'))
+        return login ? c.json({ login }) : c.json({ error: 'No such sign-in: start it again' }, 404)
+    })
+
+    app.post('/login/:id/complete', async (c) => {
+        const { tasks } = c.get('app')
+        const id = c.req.param('id')
+        const body = (await c.req.json().catch(() => null)) as { url?: unknown } | null
+        if (!body || typeof body.url !== 'string' || !body.url.trim()) return c.json({ error: 'url required' }, 400)
+        try {
+            return c.json({ login: await tasks.completeMcpLogin(id, body.url) })
+        } catch (error) {
+            return c.json({ error: (error as Error).message, login: tasks.mcpLogin(id) ?? null }, 400)
+        }
+    })
+
+    app.delete('/login/:id', (c) => {
+        c.get('app').tasks.cancelMcpLogin(c.req.param('id'))
+        return c.body(null, 204)
     })
 
     /** Replace the factory's servers. Other top-level keys of the file are kept; withheld values come back from disk. */

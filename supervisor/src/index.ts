@@ -62,6 +62,13 @@ async function main(): Promise<void> {
             const mcp = projectEntry(slug)?.frontmatter.mcp
             return { declared, allowed: Array.isArray(mcp) ? mcp.map(String) : null }
         },
+        // `mcpServers:` in an agent file is a list: a name (a server defined elsewhere) or `- name: { … }` inline.
+        agentMcp: () =>
+            catalog.list('agents').flatMap((entry) => {
+                const list = entry.frontmatter.mcpServers
+                if (!Array.isArray(list)) return []
+                return list.flatMap((item) => (item && typeof item === 'object' ? Object.keys(item as object) : typeof item === 'string' ? [item] : []))
+            }),
         sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null
     }
     const tasks = new TaskService(store, config, workspace)

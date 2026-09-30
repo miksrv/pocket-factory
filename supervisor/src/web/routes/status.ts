@@ -41,6 +41,18 @@ function tokenOwners(): string[] {
         .sort()
 }
 
+/** What `.credentials.json` holds: a claude.ai login (with its subscription type), or nothing usable. */
+function loginOf(configDir: string): 'none' | `claude.ai (${string})` {
+    try {
+        const creds = JSON.parse(fs.readFileSync(path.join(configDir, '.credentials.json'), 'utf8')) as { claudeAiOauth?: { subscriptionType?: string; scopes?: string[] } }
+        const oauth = creds.claudeAiOauth
+        if (!oauth) return 'none'
+        return `claude.ai (${[oauth.subscriptionType ?? 'subscription', oauth.scopes?.includes('user:mcp_servers') ? 'connectors' : 'no connectors'].join(', ')})`
+    } catch {
+        return 'none'
+    }
+}
+
 export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
@@ -67,7 +79,9 @@ export function statusRoutes(): Hono<Env> {
                 max_turns: config.claude.maxTurns,
                 max_budget_usd: config.claude.maxBudgetUsd,
                 config_dir: config.claude.configDir,
-                logged_in: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) || fs.existsSync(path.join(config.claude.configDir, '.credentials.json'))
+                logged_in: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) || loginOf(config.claude.configDir) !== 'none',
+                // `claude.ai`: a full login in the container (connectors available); `token`: CLAUDE_CODE_OAUTH_TOKEN (model calls only).
+                login: process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'token' : loginOf(config.claude.configDir)
             },
             github: { cli: gh, token: Boolean(process.env.GH_TOKEN), owners: tokenOwners() },
             git: { version: git },

@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { execFile } from 'node:child_process'
+
+import { type McpLoginView, McpLogins } from '../claude/mcpLogin.js'
 import { type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { createLogger } from '../logger.js'
@@ -19,6 +22,8 @@ export interface Workspace {
     projectPath: (slug: string) => string | null
     /** MCP servers a project's checkout declares (`.mcp.json` names) and the ones its project file allows (`mcp:`), if restricted. */
     projectMcp: (slug: string) => { declared: string[]; allowed: string[] | null }
+    /** Names of the servers agent files declare inline in `mcpServers:` (role-owned servers, started for that sub-agent only). */
+    agentMcp: () => string[]
     /** Claude Code's directory slug of the cwd a session was recorded under, or null when the transcript is unknown. */
     sessionWorkspace: (sessionId: string) => string | null
 }
@@ -63,6 +68,50 @@ const PRIVATE_ENV = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USER_IDS', 'WEB_AUT
  * that appears as a path segment in the call's input (file paths, `cd x`,
  * `x/src/...`). Names shorter than three characters are too ambiguous.
  */
+/** A server in the registry, as stored in `meta`. */
+interface StoredMcp {
+    name: string
+    status: string
+    /** `connector` (claude.ai account), `plugin`, `project:<slug>`, `factory` (data/config/mcp.json) or the CLI's own word. */
+    source: string | null
+    seen_at: string | null
+    /** The URL (or command) as `claude mcp list` printed it; the same URL under two names is one server. */
+    target?: string | null
+}
+
+/** What a session start or `claude mcp list` says about a server. */
+type RegistryUpdate = McpServerStatus & { target?: string | null }
+
+export interface McpEntry {
+    /** The key in tool names: `mcp__<key>__<tool>`. */
+    key: string
+    name: string
+    label: string
+    source: string | null
+    /** `connected`, `needs-auth`, `failed`, `unknown`. */
+    status: string
+    seen_at: string | null
+    target: string | null
+    tools: string[]
+}
+
+/** "claude.ai Gmail" → `claude_ai_Gmail`, the way the CLI prefixes the server's tools. */
+export const mcpKey = (name: string) => name.replace(/[^A-Za-z0-9_-]/g, '_')
+
+/** "claude.ai Gmail" → "claude.ai Gmail", "plugin:trac:trac" → "plugin trac"; other servers keep their name. */
+export function mcpLabel(name: string): string {
+    const plugin = /^plugin:(.+?):\1$/.exec(name)
+    return plugin ? `plugin ${plugin[1]}` : name
+}
+
+function sourceOf(name: string, cliSource: string | null, scope: string | null): string | null {
+    if (name.startsWith('claude.ai ')) return 'connector'
+    if (name.startsWith('plugin:')) return 'plugin'
+    if (cliSource === 'project' && scope && scope !== '.') return `project:${scope}`
+    if (cliSource === 'mcp-config' || cliSource === 'mcpConfig') return 'factory'
+    return cliSource
+}
+
 function detectProject(input: unknown, workspaces: string[]): string | null {
     const haystack = JSON.stringify(input ?? '')
     for (const name of workspaces) {
@@ -88,6 +137,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private stopped = false
     private probe: Promise<RateLimitSnapshot | null> | null = null
     private workspaceCache: { names: string[]; at: number } = { names: [], at: 0 }
+    /** Sign-ins to MCP servers started from the web UI; a completed one marks its server connected. */
+    private readonly logins = new McpLogins((name) => this.rememberRegistry([{ name, status: 'connected', source: null }], null))
 
     constructor(
         private readonly store: Store,
@@ -161,8 +212,122 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.store.getMeta<Record<string, McpServerStatus[]>>('claude.mcp') ?? {}
     }
 
+    /**
+     * Every MCP server the factory has seen, by the key its tools carry
+     * (`mcp__<key>__<tool>`): the claude.ai connectors, synced plugins, project
+     * `.mcp.json` servers and the owner's own — with the status the CLI last
+     * reported (session starts, or `claude mcp list` on demand) and its tools.
+     */
+    mcpRegistry(): McpEntry[] {
+        const known = this.store.getMeta<Record<string, StoredMcp>>('claude.mcp.registry') ?? {}
+        // Sessions before the registry existed left their statuses per scope in `claude.mcp`: a project's
+        // servers seen back then stay known until a new session of that project reports them again.
+        for (const [scope, servers] of Object.entries(this.mcpStatus())) {
+            for (const server of servers) {
+                const key = mcpKey(server.name)
+                if (!known[key]) known[key] = { name: server.name, status: server.status, source: sourceOf(server.name, server.source, scope), seen_at: null }
+            }
+        }
+        const tools = new Map<string, string[]>()
+        for (const tool of this.tools()) {
+            const match = /^mcp__(.+?)__(.+)$/.exec(tool)
+            if (match) tools.set(match[1], [...(tools.get(match[1]) ?? []), tool])
+        }
+        const keys = new Set([...Object.keys(known), ...tools.keys()])
+        return [...keys]
+            .map((key) => {
+                const stored = known[key]
+                const name = stored?.name ?? key
+                return {
+                    key,
+                    name,
+                    label: mcpLabel(name),
+                    source: stored?.source ?? sourceOf(name, null, null),
+                    status: stored?.status ?? (tools.has(key) ? 'connected' : 'unknown'),
+                    seen_at: stored?.seen_at ?? null,
+                    target: stored?.target ?? null,
+                    tools: tools.get(key) ?? []
+                }
+            })
+            .sort((a, b) => a.label.localeCompare(b.label))
+    }
+
+    /** `claude mcp list` from the workspaces root: the authoritative status of every server the CLI can see, needs-auth ones included. */
+    async refreshMcp(): Promise<McpEntry[]> {
+        const output = await new Promise<string>((resolve, reject) => {
+            execFile('claude', ['mcp', 'list'], { cwd: this.config.paths.workspacesRoot, env: this.agentEnv(), timeout: 90_000, maxBuffer: 1 << 20 }, (error, stdout, stderr) => {
+                if (error && !stdout) reject(new Error(`claude mcp list: ${stderr.trim() || error.message}`))
+                else resolve(stdout)
+            })
+        })
+        const names = new Set(this.mcpRegistry().map((e) => e.name))
+        const seen: RegistryUpdate[] = []
+        for (const line of output.split('\n')) {
+            const dash = line.lastIndexOf(' - ')
+            if (dash < 0) continue
+            const left = line.slice(0, dash).trim()
+            const verdict = line.slice(dash + 3).trim()
+            // "<name>: <target>" — a known name first (plugin names contain colons), else up to the first ": ".
+            const name = [...names].find((n) => left.startsWith(`${n}: `)) ?? left.split(': ')[0]
+            if (!name) continue
+            // The URL or command, without the CLI's "(HTTP)" / "(SSE)" / "(stdio)" suffix.
+            const target = left.slice(name.length + 2).replace(/\s*\((?:HTTP|SSE|stdio)\)\s*$/i, '').trim() || null
+            const status = /connected/i.test(verdict) ? 'connected' : /needs auth/i.test(verdict) ? 'needs-auth' : 'failed'
+            seen.push({ name, status, source: null, target })
+        }
+        if (seen.length) this.rememberRegistry(seen, null)
+        return this.mcpRegistry()
+    }
+
+    // ---- MCP sign-in from the UI ------------------------------------------
+
+    /**
+     * `claude mcp login <name> --no-browser` for a server of the registry, run
+     * from the project's checkout when the server is the project's (the CLI
+     * finds `.mcp.json` servers by cwd), else from the workspaces root.
+     */
+    startMcpLogin(name: string): Promise<McpLoginView> {
+        const entry = this.mcpRegistry().find((e) => e.name === name || e.key === name)
+        const slug = entry?.source?.startsWith('project:') ? entry.source.slice(8) : null
+        const cwd = (slug && this.workspace.projectPath(slug)) || this.config.paths.workspacesRoot
+        return this.logins.start(entry?.name ?? name, { cwd, env: this.agentEnv() })
+    }
+
+    mcpLogin(id: string): McpLoginView | undefined {
+        return this.logins.get(id)
+    }
+
+    completeMcpLogin(id: string, url: string): Promise<McpLoginView> {
+        return this.logins.complete(id, url)
+    }
+
+    cancelMcpLogin(id: string): void {
+        this.logins.cancel(id)
+    }
+
+    private rememberRegistry(servers: RegistryUpdate[], scope: string | null): void {
+        const known = this.store.getMeta<Record<string, StoredMcp>>('claude.mcp.registry') ?? {}
+        const now = new Date().toISOString()
+        let changed = false
+        for (const server of servers) {
+            const key = mcpKey(server.name)
+            const source = sourceOf(server.name, server.source, scope) ?? known[key]?.source ?? null
+            // Session starts do not carry the target: keep the one `claude mcp list` gave.
+            const target = server.target ?? known[key]?.target ?? null
+            const next: StoredMcp = { name: server.name, status: server.status, source, seen_at: now, target }
+            if (known[key]?.status !== next.status || known[key]?.source !== next.source || known[key]?.name !== next.name || known[key]?.target !== target) changed = true
+            known[key] = next
+        }
+        if (changed || servers.length) this.store.setMeta('claude.mcp.registry', known)
+    }
+
     conversationOf(task: Task): Conversation | undefined {
         return this.store.getConversation(task.conversation_id)
+    }
+
+    /** The owner has seen the conversation's replies (web UI, or delivered to Telegram): clears `unread`. */
+    markRead(conversationId: string): void {
+        this.store.markConversationRead(conversationId)
     }
 
     // ---- queue ------------------------------------------------------------
@@ -219,6 +384,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      */
     async shutdown(): Promise<void> {
         this.stopped = true
+        this.logins.close()
         for (const handle of this.running.values()) handle.kill()
         await Promise.allSettled([...this.running.values()].map((handle) => handle.result))
     }
@@ -302,6 +468,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     private rememberMcp(scope: string, servers: McpServerStatus[]): void {
+        this.rememberRegistry(servers, scope)
         const all = this.mcpStatus()
         const known = all[scope] ?? []
         if (known.length === servers.length && known.every((s, i) => s.name === servers[i].name && s.status === servers[i].status)) return
@@ -328,14 +495,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /**
      * Per-session settings layer: `disabledMcpjsonServers` for a project that restricts its
      * checkout's .mcp.json with `mcp:` (an allowlist does not work in -p mode), and a
-     * `permissions.allow` rule for every MCP server the session loads. Nobody can answer a
+     * `permissions.allow` rule for every MCP server the session may load — the owner's, the
+     * project's and the ones agent files declare for their role. Nobody can answer a
      * permission prompt in -p mode, so without a rule every MCP tool call is denied
      * ("Claude requested permissions … but you haven't granted it yet") whatever the
      * permission mode; loading a server is the owner's consent to its tools.
      */
     private sessionSettings(project: string | null): Record<string, unknown> {
         const settings: Record<string, unknown> = {}
-        const servers = new Set(this.globalMcpServers())
+        const servers = new Set([...this.globalMcpServers(), ...this.workspace.agentMcp()])
         if (project) {
             const { declared, allowed } = this.workspace.projectMcp(project)
             const disabled = allowed ? declared.filter((name) => !allowed.includes(name)) : []
@@ -346,8 +514,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return settings
     }
 
-    private rememberTools(tools: string[]): void {
+    private rememberTools(reported: string[]): void {
         const known = this.tools()
+        // The init event may come before the claude.ai connectors have connected, listing none of
+        // their tools: keep the MCP tools seen earlier rather than forgetting them on such a start.
+        const tools = [...reported, ...known.filter((t) => t.startsWith('mcp__') && !reported.includes(t))]
         if (known.length === tools.length && known.every((t, i) => t === tools[i])) return
         this.store.setMeta('claude.tools', tools)
         log.info(`claude tools: ${tools.length} (${tools.slice(0, 6).join(', ')}…)`)
