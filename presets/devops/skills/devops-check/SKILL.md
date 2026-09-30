@@ -7,8 +7,8 @@ description: Look at a project's server over SSH and report — is the service u
 
 ## Steps
 
-1. **Project and host.** Read `/data/config/projects/<project>.md`. Pick the host from `hosts:` that the task names (or the only one). If the project has no hosts, tell the owner and stop.
-2. **Inspect.** Spawn `devops-engineer` with the project file path, the host entry and the question. It connects with the keys in `~/.ssh` and reports.
+1. **Project and host.** Read `/data/config/projects/<project>.md`. Pick the host from `hosts:` that the task names (or the only one). An entry `host: <name>` refers to `/data/config/hosts.yaml`: take the connection (ssh target, key) from there; the `path` and `notes` are the project's own, in its entry. If the project has no hosts, tell the owner and stop.
+2. **Inspect.** Spawn `devops-engineer` with the project file path, the resolved host (ssh, key, the project's path and notes) and the question. It connects with the keys in `~/.ssh` and reports.
 3. **Report** to the owner: state, evidence (the log lines or numbers that matter), a suggested next step. Short; the owner reads it on a phone.
 4. **Change only on "yes".** If the fix is a change on the host (restart a service, roll back, edit a config, free disk space), propose the exact commands and wait. After an explicit "yes", run them yourself over the same SSH target, one at a time, and show what each returned. Never destructive shortcuts (`rm -rf`, wiping volumes, dropping databases) even with a "yes" — those the owner does by hand.
 
