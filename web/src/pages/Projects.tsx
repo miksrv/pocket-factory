@@ -176,7 +176,7 @@ function McpField({ slug, allowed, declared, registry, onChange }: { slug: strin
     }
     const tone = (status: string) => (status === 'connected' ? 'done' : status === 'needs-auth' ? 'queued' : status === 'failed' ? 'failed' : 'cancelled')
     return (
-        <Field label="MCP servers from the repository" hint={declared.length ? 'Declared in the checkout\'s .mcp.json; a session bound to this project loads the ones switched on. Statuses come from the last sessions and Settings → MCP → Refresh, where a sign-in is done once (Authorize). claude.ai connectors and factory-wide servers apply to every session and are not listed here; a server with a connector\'s URL is that connector, and the entry adds nothing.' : 'The checkout has no .mcp.json. claude.ai connectors and factory-wide servers (Settings → MCP) apply to every session anyway.'} wide>
+        <Field label="MCP servers from the repository" hint={declared.length ? 'Declared in the checkout\'s .mcp.json; a session bound to this project loads the ones switched on. Statuses come from the last sessions and Settings → MCP → Refresh, where a sign-in is done once (Authorize). claude.ai connectors and factory-wide servers apply to every session and are not listed here; a server with a connector\'s URL is that connector, and the entry adds nothing.' : 'The checkout has no .mcp.json. claude.ai connectors and factory-wide servers (Settings → MCP) apply to every session anyway.'} wide group>
             {declared.length === 0 ? (
                 <span className="dim small">none</span>
             ) : (

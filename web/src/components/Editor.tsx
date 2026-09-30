@@ -313,14 +313,21 @@ function Form({
     )
 }
 
-export function Field({ label, hint, wide, children }: { label: string; hint?: string; wide?: boolean; children: ReactNode }) {
-    return (
-        <label className={`field${wide ? ' wide' : ''}`}>
+/**
+ * A labelled control. `group` for a set of controls (a list of checkboxes):
+ * a <label> around several inputs would forward every click on the caption,
+ * the hint or the gaps to its first input, so a group is a <div>.
+ */
+export function Field({ label, hint, wide, group, children }: { label: string; hint?: string; wide?: boolean; group?: boolean; children: ReactNode }) {
+    const className = `field${wide ? ' wide' : ''}${group ? ' group' : ''}`
+    const body = (
+        <>
             <span>{label}</span>
             {children}
             {hint && <span className="dim">{hint}</span>}
-        </label>
+        </>
     )
+    return group ? <div className={className}>{body}</div> : <label className={className}>{body}</label>
 }
 
 export const str = (v: unknown) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v))

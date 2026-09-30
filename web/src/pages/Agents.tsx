@@ -284,7 +284,7 @@ function AgentEditor() {
                         <Field label="Description — when the dispatcher should use this agent" hint="Claude Code matches tasks to agents by this text. Be specific." wide>
                             <GrowingTextarea value={str(fm.description)} onChange={(e) => set({ description: e.target.value })} />
                         </Field>
-                        <Field label="Tools the agent may use" hint="An allowlist of Claude Code tool names. Read-only agents: Read, Bash, Grep, Glob. MCP servers are the ones the factory is connected to (claude.ai connectors, the project's .mcp.json, Settings → MCP); pick a server to make this a role for it, or only some of its tools (the email assistant has Gmail without send)." wide>
+                        <Field label="Tools the agent may use" hint="An allowlist of Claude Code tool names. Read-only agents: Read, Bash, Grep, Glob. MCP servers are the ones the factory is connected to (claude.ai connectors, the project's .mcp.json, Settings → MCP); pick a server to make this a role for it, or only some of its tools (the email assistant has Gmail without send)." wide group>
                             <ToolPicker value={str(fm.tools)} tools={tools.data} onChange={(next) => set({ tools: next })} />
                         </Field>
                     </>
