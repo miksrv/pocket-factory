@@ -9,6 +9,7 @@ import { LoadEarlier, LoadMore } from '../components/LoadMore'
 import { useConfirm } from '../components/Modal'
 import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
 import { api, type CatalogEntry, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
+import { readDraft, writeDraft } from '../lib/drafts'
 import { useAsync } from '../lib/useAsync'
 import { usePaged } from '../lib/usePaged'
 
@@ -137,7 +138,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
     const [events, setEvents] = useState<TaskEvent[]>([])
     const [hasEarlier, setHasEarlier] = useState(false)
     const [loadingEarlier, setLoadingEarlier] = useState(false)
-    const [prompt, setPrompt] = useState('')
+    const [prompt, setPrompt] = useState(() => readDraft(id)) // an unsent message survives leaving the page
     const [error, setError] = useState<string | null>(null)
     const [pinned, setPinned] = useState(true) // the view follows new output while the reader is at the bottom
     const confirm = useConfirm()
@@ -269,6 +270,14 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
         el.style.height = `${Math.min(el.scrollHeight + 2, 220)}px`
     }, [prompt])
 
+    // Every keystroke lands in storage; sending (or a restored draft that is emptied) removes it.
+    useEffect(() => writeDraft(id, prompt), [id, prompt])
+    // A restored draft opens with the caret at its end, where typing continues.
+    useEffect(() => {
+        const el = composer.current
+        if (el && el.value) el.setSelectionRange(el.value.length, el.value.length)
+    }, [])
+
     const ordered = [...tasks.values()].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     const running = ordered.find((t) => t.status === 'running' || t.status === 'queued')
     const active = Boolean(running)
@@ -315,6 +324,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
             icon: 'delete',
             onConfirm: async () => {
                 await api.deleteConversation(id)
+                writeDraft(id, '')
                 onDeleted()
             }
         })
