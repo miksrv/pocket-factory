@@ -48,15 +48,16 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
 
 - `supervisor/src/` — TypeScript, ESM (`"type": "module"`, NodeNext → import with `.js` suffix)
   - `index.ts` bootstrap (loads `.env`, wires everything); `config.ts` env parsing
-  - `store/` SQLite via `node:sqlite` (no native build): `conversations`, `tasks`, `task_events`;
-    migrations in `db.ts`
+  - `store/` SQLite via `node:sqlite` (no native build): `conversations`, `tasks` (with `ask`, what a
+    running task waits for), `task_events`; migrations in `db.ts`
   - `tasks/service.ts` — **the session manager**: one queue for all channels, spawn `claude -p` per
     task, one running task per conversation, `MAX_CONCURRENT_SESSIONS` overall; emits `task` /
     `event` for Telegram delivery and SSE
   - `claude/runner.ts` spawns `claude -p --output-format stream-json`, surfaces text / tool_use /
     tool_result blocks and the final `result`
   - `bot.ts` grammY bot (text + voice), `stt/groq.ts` Whisper, `telegram/format.ts` Markdown → HTML
-  - `files/catalog.ts` agents / skills / projects as Markdown+frontmatter; `sessions/transcripts.ts`
+  - `files/catalog.ts` agents / skills / projects as Markdown+frontmatter; `files/hosts.ts` the
+    shared SSH hosts (`data/config/hosts.yaml`, see below); `sessions/transcripts.ts`
     indexes Claude Code JSONL; `presets/`
   - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`
@@ -89,7 +90,30 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   draws a green stripe + dot. The open thread posts `/read` when it loads, when a reply lands
   and when the tab becomes visible again (a reply that arrives in a hidden tab stays unread);
   the bot marks a conversation read once its reply is delivered to Telegram, so a failed
-  delivery keeps it lit
+  delivery keeps it lit. **Questions and permissions** (2026-09-30): the runner speaks
+  stream-json on stdin too (`--input-format stream-json --permission-prompt-tool stdio`, an
+  SDK-style `initialize` control request, then the prompt as a user message, stdin open until
+  the result). That makes the CLI offer `AskUserQuestion` to the model in `-p` and route it,
+  like any permission prompt the mode does not settle, to the supervisor as a `can_use_tool`
+  control request; `TaskService` stores it as `tasks.ask` (migration v8, JSON: kind
+  `question` / `permission`, request id, tool, input, answers so far), emits `ask` / `answer`
+  events for the audit log and answers with a `control_response` (`updatedInput.answers`
+  by question text, or allow / deny). The task stays `running` meanwhile, the wall-clock
+  timeout is paused, and `needs_reply` on a conversation = a running task with an `ask`.
+  Web: `components/Ask.tsx` renders the form inside the turn (radios / checkboxes plus an
+  "Other" line, Allow / Deny for a permission) and on the task page; a message typed while
+  a question is open is the answer (`TaskService.submit` routes it). Telegram: one message
+  per question with inline buttons (`a|task|q|opt`), free text answers too, the message is
+  settled with a reply once answered from any channel. Under `bypassPermissions` only
+  `AskUserQuestion` arrives; in `acceptEdits` / `default` every unsettled tool does. A
+  supervisor restart drops the pending ask with the CLI; the resumed session asks again.
+  Without a host the tool does not exist in `-p` (verified 2026-09-30), so agents could only
+  ask in prose. The Chat list draws an amber stripe + `?`, the composer placeholder changes.
+  **One badge per menu item**: the sidebar's Chat item shows unread (green) first, else
+  waiting (amber), else active (blue), never two at once.
+  **Drafts**: an unsent message is kept in `localStorage` per conversation
+  (`lib/drafts.ts`, `pf.chat.draft.<id>`), restored with the caret at its end when the
+  thread reopens, removed on send or delete
 - `templates/claude/` — seeded into `data/claude/` on **every** container start with `cp -n`: new
   files appear, edited files are never overwritten. On the host, copy by hand the same way.
   Prose in agent / skill / project Markdown is not hard-wrapped (one line per paragraph or
@@ -245,10 +269,27 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   unfolded tool calls render an Edit as a diff, a Write as the file in its language, Bash as the
   command, the rest as JSON. Markdown / text files stay plain on purpose.
 - Telegram is optional (`TELEGRAM_BOT_TOKEN` empty = web-only).
-- Project files carry `hosts:` (SSH targets, optional `key` = file name in `data/secrets/ssh`) for
-  sub-agents; keys live in `data/secrets/ssh`, mounted read-only, and are never read by the API:
-  `/api/hosts/keys` lists names, `/api/hosts/test` runs `ssh -o BatchMode=yes`. Passwords are not
-  supported on purpose. Branches are `feature/…` / `fix/…` by task kind; `branch_prefix` is no
+- **Hosts are shared** (2026-09-30, the way an IDE keeps SSH configurations once): `data/config/hosts.yaml`
+  holds every connection (`name`, `ssh` target, optional `key` = file name in `data/secrets/ssh`) and
+  nothing else; a project's `hosts:` entry is `- host: <name>` plus the project's own `path` and
+  `notes` on that server (decided by the owner: path and notes are the project's, never the host's). Settings → Hosts lists them with the projects on each (add, edit, rename with the
+  references following, test, delete with detach); the project form's "Add host…" offers the shared
+  list or a new one, a shared host's card edits only the project's part and links to Settings, a host
+  still written inline (the pre-2026-09-30 form) shows "Move to shared hosts" (a dialog with Test
+  connection that keeps the path and notes with the project) or "Link to shared host X" when an identical target exists.
+  `/api/hosts` (list with usage + inline ones), `PUT/DELETE /api/hosts/:name`, `/api/hosts/keys`
+  lists key names, `/api/hosts/test` runs `ssh -o BatchMode=yes` for a target or a shared host by
+  name. Keys are never read by the API. **Host keys** (2026-09-30): the factory's `known_hosts` is
+  `data/config/known_hosts` (`files/knownHosts.ts`; `data/secrets` is mounted read-only, an old
+  `data/secrets/ssh/known_hosts` is copied over once), the test passes it as `UserKnownHostsFile`
+  and the image appends the same to `/etc/ssh/ssh_config` for the agents' own ssh. The test
+  answers `host_key: unknown | changed` from ssh's stderr; `POST /api/hosts/keyscan` runs
+  `ssh-keyscan` and returns the keys with SHA256 fingerprints, the UI shows them in a confirm
+  dialog ("Trust host key…", red "Replace host key…" for a changed one) and `POST /api/hosts/trust`
+  writes the confirmed lines (each must name that server; `replace` runs `ssh-keygen -R` first).
+  Deleting a host, or saving it with another address, forgets the old server's key unless another
+  shared or inline host still points at it. No shell on the factory box is needed to add a host. Passwords are not supported on purpose. Agents resolve
+  `host:` from hosts.yaml (dispatcher rules, `onboard-project`, `devops-check`, `devops-engineer`). Branches are `feature/…` / `fix/…` by task kind; `branch_prefix` is no
   longer a form field (an existing value still overrides). GitHub still goes through the PAT, never SSH.
 - The owner decides when to commit — never commit unprompted. When asked to commit: no
   `Co-Authored-By` lines.
@@ -319,8 +360,9 @@ Not done / next:
    README for forkers.
 7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
    audit log export.
-8. From the landscape survey (`docs/LANDSCAPE.md`), in priority order: permission prompts /
-   `AskUserQuestion` from Telegram and the web via `--permission-prompt-tool`; photos and files in
+8. From the landscape survey (`docs/LANDSCAPE.md`), in priority order: ~~permission prompts /
+   `AskUserQuestion` from Telegram and the web~~ (done 2026-09-30 over stream-json, see above;
+   "Always allow" rules and a deny-on-timeout policy still open); photos and files in
    (`data/inbox/<task>/`, `@path` in the prompt); auto-continue after a window reset; a diff panel
    with "Create PR" on the task page; "continue in chat" for an indexed laptop session; per-agent /
    project token budgets; audit export.
