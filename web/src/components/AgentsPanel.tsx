@@ -47,14 +47,17 @@ export function AgentStatus({ activity, queued }: { activity: AgentActivity | un
 
 export const auditLink = (name: string, period = '7d') => `/audit?agent=${encodeURIComponent(name)}&period=${period}`
 
-/** Overview card: who is on the team and who is working right now. */
-export function AgentsPanel() {
+/** Overview card: who is on the team and who is working right now. `limit` keeps the panel a summary; the rest is on /agents. */
+export function AgentsPanel({ limit }: { limit?: number }) {
     const entries = useAsync(() => api.list('agents'), [], 30_000)
     const activity = useAsync(() => api.agentActivity('7d'), [], 5_000)
     const status = useAsync(() => api.status(), [], 5_000)
     const queued = status.data?.stats.queued ?? 0
     const rows = rosterOf(entries.data, activity.data, queued)
     const running = rows.filter((r) => (r.activity?.running ?? 0) > 0).length
+    // Working agents first, then by last activity, so a cut list shows who is doing things now.
+    const last = (r: (typeof rows)[number]) => (r.activity?.last_active ? new Date(r.activity.last_active).getTime() : 0)
+    const shown = limit ? [...rows].sort((a, b) => (b.activity?.running ?? 0) - (a.activity?.running ?? 0) || last(b) - last(a)).slice(0, limit) : rows
 
     return (
         <div className="card pad0">
@@ -66,7 +69,7 @@ export function AgentsPanel() {
                 <span className={`live${running > 0 ? '' : ' warn'}`}>{running > 0 ? `${running} working` : 'Idle'}</span>
             </div>
             <div className="list">
-                {rows.map((r) => (
+                {shown.map((r) => (
                     <Link key={r.name} to={auditLink(r.name)} title="Open the audit log for this agent">
                         {r.name === 'orchestrator' ? <Tile icon="control" color="gray" /> : <Tile name={r.name} kind="agents" />}
                         <div className="grow">
@@ -86,7 +89,7 @@ export function AgentsPanel() {
             </div>
             <div className="card-foot">
                 <span>
-                    {rows.length} agents · {running} working · last 7 days
+                    {shown.length < rows.length ? `${shown.length} of ${rows.length} agents` : `${rows.length} agents`} · {running} working · last 7 days
                 </span>
                 <span className="row">
                     <Link to="/agents">Manage agents</Link>
