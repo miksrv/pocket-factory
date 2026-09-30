@@ -7,6 +7,7 @@ import {
     Gauge,
     LayoutDashboard,
     ListChecks,
+    KeyRound,
     type LucideIcon,
     MessageSquare,
     Package,
@@ -14,6 +15,7 @@ import {
     Settings,
     Trash2,
     TriangleAlert,
+    X,
     Zap
 } from 'lucide-react'
 
@@ -42,7 +44,9 @@ export const ICONS = {
     web: MessageSquare,
     /** Tiles of a confirmation window: a bin for a delete, a triangle for anything else destructive. */
     delete: Trash2,
-    warning: TriangleAlert
+    warning: TriangleAlert,
+    close: X,
+    key: KeyRound
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

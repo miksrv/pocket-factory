@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 
 import { Editor, Field, str } from '../components/Editor'
 import { Button, GrowingTextarea } from '../components/ui'
-import { api, type CatalogEntry } from '../lib/api'
+import { api, type CatalogEntry, type McpEntry } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 interface Host {
@@ -125,7 +125,7 @@ export function ProjectsPage() {
                                 </Field>
                             </>
                         )}
-                        <McpField slug={str(fm.slug)} allowed={Array.isArray(fm.mcp) ? (fm.mcp as string[]) : null} declared={mcp.data?.projects.find((p) => p.slug === str(fm.slug))?.servers ?? []} onChange={(next) => set({ mcp: next })} />
+                        <McpField slug={str(fm.slug)} allowed={Array.isArray(fm.mcp) ? (fm.mcp as string[]) : null} declared={mcp.data?.projects.find((p) => p.slug === str(fm.slug))?.servers ?? []} registry={mcp.data?.servers ?? []} onChange={(next) => set({ mcp: next })} />
                         <Field label="Checks (one per line)" hint="Run from the repository root before a PR is opened. All must pass." wide>
                             <LinesInput value={checks} onChange={(next) => set({ checks: next })} />
                         </Field>
@@ -157,7 +157,16 @@ export function ProjectsPage() {
  * toggling writes the allowlist, and the others are turned off with
  * `disabledMcpjsonServers` at spawn.
  */
-function McpField({ slug, allowed, declared, onChange }: { slug: string; allowed: string[] | null; declared: Array<{ name: string; type: string; target: string }>; onChange: (next: string[] | undefined) => void }) {
+/** The registry key of a server name, the way the CLI prefixes its tools (`mcp__<key>__`). */
+const mcpKey = (name: string) => name.replace(/[^A-Za-z0-9_-]/g, '_')
+
+/**
+ * The servers the checkout declares in `.mcp.json`, one row each like the agent
+ * form: a box for "sessions of this project load it" (the `mcp:` allowlist), the
+ * status the CLI last reported and how many tools it brings. Connectors and
+ * factory-wide servers are not listed: every session has them anyway.
+ */
+function McpField({ slug, allowed, declared, registry, onChange }: { slug: string; allowed: string[] | null; declared: Array<{ name: string; type: string; target: string; connector?: string | null }>; registry: McpEntry[]; onChange: (next: string[] | undefined) => void }) {
     if (!slug) return null
     const on = (name: string) => allowed === null || allowed.includes(name)
     const toggle = (name: string) => {
@@ -165,16 +174,33 @@ function McpField({ slug, allowed, declared, onChange }: { slug: string; allowed
         const next = current.includes(name) ? current.filter((n) => n !== name) : [...current, name]
         onChange(next.length === declared.length && declared.every((s) => next.includes(s.name)) ? undefined : next)
     }
+    const tone = (status: string) => (status === 'connected' ? 'done' : status === 'needs-auth' ? 'queued' : status === 'failed' ? 'failed' : 'cancelled')
     return (
-        <Field label="MCP servers from the repository" hint={declared.length ? 'Declared in the checkout\'s .mcp.json; a session bound to this project loads the ones switched on. Secrets stay in .env; OAuth logins are done once on the laptop.' : 'The checkout has no .mcp.json. Factory-wide servers (data/config/mcp.json) apply to every session; see Settings → MCP.'} wide>
-            <div className="row wrap" style={{ gap: 6 }}>
-                {declared.map((s) => (
-                    <Button key={s.name} className={`chip${on(s.name) ? ' on' : ''}`} onClick={() => toggle(s.name)} aria-pressed={on(s.name)} title={s.target}>
-                        {s.name}
-                    </Button>
-                ))}
-                {declared.length === 0 && <span className="dim small">none</span>}
-            </div>
+        <Field label="MCP servers from the repository" hint={declared.length ? 'Declared in the checkout\'s .mcp.json; a session bound to this project loads the ones switched on. Statuses come from the last sessions and Settings → MCP → Refresh, where a sign-in is done once (Authorize). claude.ai connectors and factory-wide servers apply to every session and are not listed here; a server with a connector\'s URL is that connector, and the entry adds nothing.' : 'The checkout has no .mcp.json. claude.ai connectors and factory-wide servers (Settings → MCP) apply to every session anyway.'} wide>
+            {declared.length === 0 ? (
+                <span className="dim small">none</span>
+            ) : (
+                <div className="mcp-servers">
+                    {declared.map((s) => {
+                        const entry = registry.find((e) => e.key === mcpKey(s.name))
+                        const status = entry?.status ?? 'unknown'
+                        return (
+                            <label key={s.name} className="mcp-server row" title={s.target}>
+                                <input type="checkbox" checked={on(s.name)} onChange={() => toggle(s.name)} />
+                                <span className="grow">
+                                    <strong>{s.name}</strong> <span className="dim">· {s.type}{entry?.tools ? ` · ${entry.tools} tools` : ''}</span>
+                                    {s.connector && <span className="dim"> · same server as the {s.connector} connector</span>}
+                                </span>
+                                {s.connector ? (
+                                    <span className="badge done" title="The connector with this URL is authorized for the account and loads in every session; the CLI drops this duplicate">via connector</span>
+                                ) : (
+                                    <span className={`badge ${tone(status)}`}>{status === 'needs-auth' ? 'needs authentication' : status === 'unknown' ? 'not seen yet' : status}</span>
+                                )}
+                            </label>
+                        )
+                    })}
+                </div>
+            )}
         </Field>
     )
 }

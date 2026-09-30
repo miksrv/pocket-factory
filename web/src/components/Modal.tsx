@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useId, useLayoutEffect, useRef,
 
 import type { IconName } from './Icon'
 import { Tile } from './Tile'
-import { Button } from './ui'
+import { Button, CloseButton } from './ui'
 
 /*
  * Modal windows on a native <dialog> in the top layer: the browser traps the
@@ -98,9 +98,7 @@ export function Modal({ open, onClose, title, description, icon, tone, footer, b
                     {children}
                 </div>
                 {closeButton && (
-                    <Button variant="ghost" size="sm" className="modal-close" aria-label="Close" onClick={dismiss} disabled={busy}>
-                        ×
-                    </Button>
+                    <CloseButton className="modal-close" label="Close" onClick={dismiss} disabled={busy} />
                 )}
             </div>
             {footer && <div className="modal-foot">{footer}</div>}

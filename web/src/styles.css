@@ -219,6 +219,7 @@ tr.click:hover td, tr.selected td { background: var(--surface-2); }
 .badge.done { background: var(--green-bg); color: var(--green); }
 .badge.failed { background: var(--red-bg); color: var(--red); }
 .badge.cancelled { background: var(--gray-bg); color: var(--gray); }
+.badge.unread { background: var(--green-bg); color: var(--green); font-weight: 600; }
 .badge.tag, .badge.plain { border-radius: var(--radius-sm); padding: 1px 7px; }
 .badge.tag::before, .badge.plain::before { display: none; }
 .badge.green { background: var(--green-bg); color: var(--green); }
@@ -265,7 +266,14 @@ tr.click:hover td, tr.selected td { background: var(--surface-2); }
 .preset-files { display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .agent-stats { display: flex; gap: 12px; flex-wrap: wrap; }
 .agent-card-foot, .preset-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
-.overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0 20px; align-items: start; }
+/* Overview panels: a row's cards share one height, the footer sits at the bottom, rows are one line — a summary, not a list. */
+.overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0 20px; align-items: stretch; }
+.overview-grid.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.overview-grid > div { display: flex; flex-direction: column; min-width: 0; }
+.overview-grid > div > .card { flex: 1; display: flex; flex-direction: column; }
+.overview-grid .card > .card-foot { margin-top: auto; }
+.overview-grid .list .title, .overview-grid .list .desc { -webkit-line-clamp: 1; }
+
 
 /* controls */
 /* Buttons: `components/ui.tsx` Button renders `.btn` for <button> and <a> alike; variants are classes. */
@@ -282,6 +290,14 @@ button:disabled, .btn:disabled { opacity: .45; cursor: default; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .btn.sm { padding: 3px 9px; font-size: 11.5px; }
 .icon-btn.btn { width: 34px; height: 34px; padding: 0; font-size: 15px; line-height: 1; }
+/* The × everywhere: a ghost square with an icon, hit area 28px, the phone-menu one 34px via .icon-btn. */
+.close-btn.btn { width: 28px; height: 28px; padding: 0; flex-shrink: 0; color: var(--text-dim); border-color: transparent; background: transparent; }
+.close-btn.btn:hover { color: var(--text); background: var(--surface-2); }
+.close-btn.btn > svg { width: 16px; height: 16px; }
+/* Key / value rows (headers, env) inside a server card: room between rows, the × at the end. */
+.pairs { display: grid; gap: 8px; }
+.pairs > .row { gap: 8px; }
+.pairs + div { margin-top: 8px; }
 .brand .icon-btn { margin-left: auto; }
 select.filter { width: auto; padding: 4px 8px; font-size: 12px; }
 a.quiet { color: var(--text); }
@@ -317,6 +333,18 @@ label.field > span:first-child { color: var(--text-2); }
 .btn.chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .btn.chip.on:hover { background: #333; }
 .tool-more summary { cursor: pointer; font-size: 11.5px; }
+/* MCP servers inside the tool picker: one fold per server, the box in the summary. */
+.mcp-servers { display: flex; flex-direction: column; gap: 6px; }
+/* Settings → MCP: one row per server the factory has seen. */
+.mcp-list { display: flex; flex-direction: column; }
+.mcp-row { display: flex; align-items: center; gap: 12px; padding: 7px 0; font-size: 12.5px; border-bottom: 1px dashed var(--border); }
+.mcp-row:last-child { border-bottom: 0; }
+.mcp-server { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface-2); }
+.mcp-server > summary { cursor: pointer; font-size: 12px; list-style: none; }
+.mcp-server > summary::-webkit-details-marker { display: none; }
+.mcp-server > summary > label { gap: 8px; cursor: pointer; }
+.mcp-server > summary input[type='checkbox'], label.mcp-server > input[type='checkbox'] { width: 15px; height: 15px; margin: 0; flex-shrink: 0; accent-color: var(--ink); }
+label.mcp-server { gap: 8px; cursor: pointer; font-size: 12px; }
 .editor-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
 /* The editor fills the viewport: header fixed, list and form scroll separately. */
 .editor-page { height: 100%; display: flex; flex-direction: column; padding-bottom: 20px; overflow: hidden; }
@@ -337,7 +365,10 @@ label.field > span:first-child { color: var(--text-2); }
 .list a { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
 .list a:last-child { border-bottom: none; }
 .list a:hover { background: var(--surface-2); text-decoration: none; }
+/* A reply the owner has not seen: the active stripe in green, plus a dot. The open thread is read at once, so `active` wins. */
+.list a.unread { box-shadow: inset 2px 0 0 var(--green); }
 .list a.active { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--ink); }
+.dot.unread { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); flex-shrink: 0; }
 .list .title { font-weight: 600; font-size: 12.5px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .list .desc { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .toolbar { display: flex; gap: 8px; align-items: center; }
@@ -358,7 +389,7 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
 .modal-text { color: var(--text-2); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
 .modal-text code { overflow-wrap: anywhere; }
 .modal-error { margin-top: 4px; }
-.modal-close.btn { margin: -6px -8px 0 0; width: 28px; height: 28px; padding: 0; font-size: 16px; line-height: 1; }
+.modal-close.btn { margin: -6px -8px 0 0; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface-2); }
 /* The confirming button of a destructive question is filled: the one red thing on the screen. */
 .modal-foot .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }

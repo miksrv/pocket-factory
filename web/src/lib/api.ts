@@ -88,6 +88,10 @@ export interface Conversation {
     created_at: string
     updated_at: string
     deleted_at: string | null
+    /** When the owner last opened it in the web UI; null = never. */
+    read_at: string | null
+    /** A task finished after `read_at`: its reply was neither opened here nor delivered to Telegram. */
+    unread: boolean
 }
 
 export interface ConversationHistory {
@@ -106,6 +110,10 @@ export interface Stats {
     failed_today: number
     tokens_today: number
     tokens_total: number
+    /** Conversations with a reply the owner has not seen. */
+    chat_unread: number
+    /** Queued or running tasks of conversations in the Chat list. */
+    chat_active: number
 }
 
 export interface RateLimitWindow {
@@ -136,6 +144,8 @@ export interface Status {
         max_budget_usd: number
         config_dir: string
         logged_in: boolean
+        /** `claude.ai (…)` for a full login in the container, `token` for CLAUDE_CODE_OAUTH_TOKEN, `none`. */
+        login: string
     }
     /** `token`: the fallback GH_TOKEN is set; `owners`: owners with a token of their own. */
     github: { cli: string | null; token: boolean; owners: string[] }
@@ -203,6 +213,8 @@ export interface McpServer {
     target: string
     /** `${VAR}` references in the server's config and whether each is set for the supervisor. */
     variables: Array<{ name: string; set: boolean }>
+    /** The claude.ai connector with the same URL, when there is one: that connector serves every session already. */
+    connector?: string | null
 }
 
 export interface McpStatus {
@@ -221,9 +233,50 @@ export interface McpServerConfig {
     env?: Record<string, string>
 }
 
+/** A server in the factory's registry: the claude.ai connectors, plugins, project servers and the owner's own, with the last status the CLI reported. */
+export interface McpEntry {
+    key: string
+    name: string
+    label: string
+    /** `connector`, `plugin`, `project:<slug>`, `factory`, or the CLI's own word. */
+    source: string | null
+    /** `connected`, `needs-auth`, `failed`, `unknown`. */
+    status: string
+    seen_at: string | null
+    /** The URL or command as `claude mcp list` printed it (null until a refresh). */
+    target: string | null
+    /** Number of tools the server exposes (0 while it needs authentication). */
+    tools: number
+    /** The key of the connector with the same URL: this entry is that server under a project's or the factory's name. */
+    duplicate_of: string | null
+}
+
+/** A sign-in to an MCP server started from the UI (`claude mcp login` in the factory). */
+export interface McpLogin {
+    id: string
+    name: string
+    /** `connector`: authorize on claude.ai, nothing to paste; `redirect`: paste the redirect URL back; null until known. */
+    mode: 'connector' | 'redirect' | null
+    state: 'starting' | 'waiting' | 'done' | 'failed' | 'cancelled'
+    url: string | null
+    message: string | null
+    started_at: string
+}
+
 export interface McpOverview {
-    global: { file: string; servers: McpServer[]; config: Record<string, McpServerConfig>; error: string | null; last_session: McpStatus[] | null }
-    projects: Array<{ slug: string; path: string; checkout: boolean; servers: Array<McpServer & { enabled: boolean }>; allowed: string[] | null; error: string | null; last_session: McpStatus[] | null }>
+    servers: McpEntry[]
+    /** What each project's checkout declares in `.mcp.json` (for the project form's `mcp:` allowlist). */
+    projects: Array<{ slug: string; servers: McpServer[]; error: string | null }>
+    global: { file: string; servers: McpServer[]; config: Record<string, McpServerConfig>; error: string | null }
+}
+
+/** Tool names for an agent's `tools:`: common ones, the rest the CLI reported, and MCP tools grouped by server. */
+export interface ToolList {
+    common: string[]
+    reported: string[]
+    /** One entry per MCP server the factory has seen (claude.ai connectors, plugins, project servers, the owner's own); `tools` are full names, empty while the server needs authentication. */
+    mcp: Array<{ server: string; label: string; source: string | null; status: string; tools: string[] }>
+    source: 'cli' | 'default'
 }
 
 export interface Preset {
@@ -291,13 +344,15 @@ export const api = {
     agentActivity: (period: AuditPeriod = '7d') => request<AgentActivity[]>(`/activity/agents?period=${period}`),
 
     /** Tool names the CLI offers (from its last session start), or a built-in default list. */
-    tools: () => request<{ common: string[]; reported: string[]; source: 'cli' | 'default' }>('/tools'),
+    tools: () => request<ToolList>('/tools'),
 
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 
     conversations: (before?: Cursor, limit = 50) => request<Conversation[]>(`/conversations?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
     conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
     deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
+    /** The conversation is on screen: clears its `unread` flag. */
+    markConversationRead: (id: string) => request<void>(`/conversations/${id}/read`, { method: 'POST' }),
     /** Tasks before the given one (the oldest shown), with their events. */
     conversationHistory: (id: string, before: Cursor) => request<ConversationHistory>(`/conversations/${id}/history?${cursorParams(new URLSearchParams(), before)}`),
     /** `project` binds the conversation to a checkout: its tasks run there, with the repository's MCP servers and agents. */
@@ -306,6 +361,12 @@ export const api = {
     /** Rebind (or unbind with null); refused while a task runs. The Claude Code session restarts in the new directory. */
     setConversationProject: (id: string, project: string | null) => request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ project }) }),
     mcp: () => request<McpOverview>('/mcp'),
+    /** Runs `claude mcp list` in the factory (about 15 s) and returns the registry with fresh statuses. */
+    refreshMcp: () => request<{ servers: McpEntry[] }>('/mcp/refresh', { method: 'POST' }),
+    startMcpLogin: (name: string) => request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
+    mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),
+    completeMcpLogin: (id: string, url: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify({ url }) }),
+    cancelMcpLogin: (id: string) => request<void>(`/mcp/login/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     saveMcp: (mcpServers: Record<string, McpServerConfig>) => request<{ saved: number }>('/mcp/global', { method: 'PUT', body: JSON.stringify({ mcpServers }) }),
     sendMessage: (id: string, prompt: string) =>
         request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt }) }),

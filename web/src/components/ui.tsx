@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { api, type TaskStatus } from '../lib/api'
+import { Icon } from './Icon'
 import { renderMarkdown } from '../lib/markdown'
 
 /*
@@ -37,6 +38,20 @@ export function Button({ variant, size, to, className, type = 'button', children
         <button type={type} className={buttonClass(variant, size, className)} {...rest}>
             {children}
         </button>
+    )
+}
+
+
+/**
+ * The one "×" button: closes a modal or the phone menu, removes a row in an
+ * editor. A ghost square with an icon, big enough to hit; the caller says
+ * what it closes in `aria-label`.
+ */
+export function CloseButton({ label, className, ...rest }: { label: string; className?: string } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'aria-label'>) {
+    return (
+        <Button variant="ghost" className={className ? `close-btn ${className}` : 'close-btn'} aria-label={label} title={rest.title ?? label} {...rest}>
+            <Icon name="close" size={16} />
+        </Button>
     )
 }
 
