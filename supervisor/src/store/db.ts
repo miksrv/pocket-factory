@@ -113,6 +113,37 @@ const MIGRATIONS: string[] = [
     // see `Ask`); null while nothing is pending.
     `
     ALTER TABLE tasks ADD COLUMN ask TEXT;
+    `,
+    // v9: schedules (Phase 5). A schedule is a Markdown file in
+    // data/config/schedules; the store keeps what a file cannot: each firing
+    // (skipped, empty, queued, error) and the prefilter items already handed
+    // to the agent, so an empty poll costs no tokens and a ticket is not
+    // brought up twice. A task remembers the schedule that queued it.
+    `
+    ALTER TABLE tasks ADD COLUMN schedule TEXT;
+    CREATE INDEX tasks_schedule ON tasks(schedule, created_at);
+
+    CREATE TABLE schedule_runs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule    TEXT NOT NULL,
+        fired_at    TEXT NOT NULL,
+        trigger     TEXT NOT NULL,                -- cron | manual
+        status      TEXT NOT NULL,                -- queued | empty | skipped | error
+        note        TEXT,                         -- why skipped, the error, or what was found
+        items       INTEGER NOT NULL DEFAULT 0,   -- new prefilter items handed to the task
+        task_id     TEXT,
+        duration_ms INTEGER NOT NULL DEFAULT 0    -- the prefilter's time
+    );
+    CREATE INDEX schedule_runs_schedule ON schedule_runs(schedule, id);
+
+    CREATE TABLE seen_items (
+        schedule   TEXT NOT NULL,
+        key        TEXT NOT NULL,                 -- the prefilter's key (ticket id + change time, PR + head sha, …)
+        title      TEXT,
+        first_seen TEXT NOT NULL,
+        task_id    TEXT,                          -- the task that got the item; null when the first run seeded it
+        PRIMARY KEY (schedule, key)
+    );
     `
 ]
 

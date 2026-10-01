@@ -82,6 +82,8 @@ export interface Task {
     restarts: number
     /** What the task waits for from the owner; null while nothing is pending (always null once finished). */
     ask: Ask | null
+    /** Name of the schedule that queued the task; null for the owner's own tasks. */
+    schedule: string | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -167,6 +169,24 @@ export interface TaskStats {
     chat_needs_reply: number
     /** Queued or running tasks of conversations in the Chat list. */
     chat_active: number
+}
+
+/**
+ * One firing of a schedule: what the scheduler decided at that minute.
+ * `queued` = a task was created (`task_id`), `empty` = the prefilter found
+ * nothing new, `skipped` = the run was not attempted (previous run still
+ * active, soft-stop), `error` = the prefilter failed.
+ */
+export interface ScheduleRun {
+    id: number
+    schedule: string
+    fired_at: string
+    trigger: 'cron' | 'manual'
+    status: 'queued' | 'empty' | 'skipped' | 'error'
+    note: string | null
+    items: number
+    task_id: string | null
+    duration_ms: number
 }
 
 /** A persisted rate-limit reading; see `RateLimits` for where it comes from. */
@@ -334,7 +354,7 @@ export class Store {
 
     // ---- tasks ------------------------------------------------------------
 
-    createTask(conversationId: string, source: TaskSource, prompt: string, project: string | null = null): Task {
+    createTask(conversationId: string, source: TaskSource, prompt: string, project: string | null = null, schedule: string | null = null): Task {
         const task: Task = {
             id: randomUUID(),
             conversation_id: conversationId,
@@ -355,16 +375,17 @@ export class Store {
             project,
             restarts: 0,
             ask: null,
+            schedule,
             created_at: now(),
             started_at: null,
             finished_at: null
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?, ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`
             )
-            .run(task.id, conversationId, source, prompt, project, task.created_at)
+            .run(task.id, conversationId, source, prompt, project, schedule, task.created_at)
         return task
     }
 
@@ -503,6 +524,66 @@ export class Store {
             tokens_today: row.tokens_today ?? 0,
             tokens_total: row.tokens_total ?? 0
         }
+    }
+
+    // ---- schedules --------------------------------------------------------
+
+    /** The task of a schedule that is still queued or running, if any (one run at a time per schedule). */
+    activeScheduleTask(schedule: string): Task | undefined {
+        const row = this.db
+            .prepare(`SELECT * FROM tasks WHERE schedule = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`)
+            .get(schedule) as TaskRow | undefined
+        return row && taskOf(row)
+    }
+
+    addScheduleRun(run: Omit<ScheduleRun, 'id'>): ScheduleRun {
+        const result = this.db
+            .prepare('INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .run(run.schedule, run.fired_at, run.trigger, run.status, run.note, run.items, run.task_id, run.duration_ms)
+        return { ...run, id: Number(result.lastInsertRowid) }
+    }
+
+    /** Newest first. */
+    listScheduleRuns(schedule: string, limit = 20): ScheduleRun[] {
+        return this.db.prepare('SELECT * FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?').all(schedule, limit) as unknown as ScheduleRun[]
+    }
+
+    /** The last firing of every schedule, by name. */
+    lastScheduleRuns(): Map<string, ScheduleRun> {
+        const rows = this.db
+            .prepare('SELECT r.* FROM schedule_runs r WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule)')
+            .all() as unknown as ScheduleRun[]
+        return new Map(rows.map((r) => [r.schedule, r]))
+    }
+
+    /** Of the given keys, the ones the schedule already handed to a task (or seeded). */
+    seenKeys(schedule: string, keys: string[]): Set<string> {
+        const seen = new Set<string>()
+        const stmt = this.db.prepare('SELECT 1 FROM seen_items WHERE schedule = ? AND key = ?')
+        for (const key of keys) if (stmt.get(schedule, key)) seen.add(key)
+        return seen
+    }
+
+    seenCount(schedule: string): number {
+        const row = this.db.prepare('SELECT COUNT(*) AS n FROM seen_items WHERE schedule = ?').get(schedule) as { n: number }
+        return row.n
+    }
+
+    markSeen(schedule: string, items: Array<{ key: string; title: string | null }>, taskId: string | null): void {
+        const stmt = this.db.prepare('INSERT OR IGNORE INTO seen_items (schedule, key, title, first_seen, task_id) VALUES (?, ?, ?, ?, ?)')
+        const ts = now()
+        for (const item of items) stmt.run(schedule, item.key, item.title, ts, taskId)
+    }
+
+    /** Forget what the schedule has seen: the next run treats every item as new. */
+    forgetSeen(schedule: string): number {
+        return Number(this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule).changes)
+    }
+
+    /** A schedule was deleted or renamed: its runs and seen items go with it. */
+    dropSchedule(schedule: string): void {
+        this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule)
+        this.db.prepare('DELETE FROM schedule_runs WHERE schedule = ?').run(schedule)
     }
 
     // ---- meta -------------------------------------------------------------
