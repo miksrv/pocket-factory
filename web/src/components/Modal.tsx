@@ -33,9 +33,11 @@ export interface ModalProps {
     /** `wide` for a window with a form in it (720px instead of 440px). */
     size?: 'wide'
     children?: ReactNode
+    /** Long content under the head, across the whole window (a preset's README): it scrolls, the head and the footer stay. */
+    content?: ReactNode
 }
 
-export function Modal({ open, onClose, title, description, icon, tone, footer, busy, closeButton = true, size, children }: ModalProps) {
+export function Modal({ open, onClose, title, description, icon, tone, footer, busy, closeButton = true, size, children, content }: ModalProps) {
     const ref = useRef<HTMLDialogElement>(null)
     const id = useId()
     const downOnBackdrop = useRef(false)
@@ -75,7 +77,7 @@ export function Modal({ open, onClose, title, description, icon, tone, footer, b
     return (
         <dialog
             ref={ref}
-            className={`modal${tone ? ` ${tone}` : ''}${size ? ` ${size}` : ''}`}
+            className={`modal${tone ? ` ${tone}` : ''}${size ? ` ${size}` : ''}${content ? ' has-content' : ''}`}
             aria-labelledby={`${id}-title`}
             aria-describedby={description ? `${id}-desc` : undefined}
             aria-busy={busy || undefined}
@@ -103,6 +105,7 @@ export function Modal({ open, onClose, title, description, icon, tone, footer, b
                     <CloseButton className="modal-close" label="Close" onClick={dismiss} disabled={busy} />
                 )}
             </div>
+            {content && <div className="modal-content">{content}</div>}
             {footer && <div className="modal-foot">{footer}</div>}
         </dialog>
     )

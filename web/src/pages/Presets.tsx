@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { useConfirm } from '../components/Modal'
+import { Modal, useConfirm } from '../components/Modal'
 import { Button, Empty, ErrorBox, Markdown, PageHead, useToast } from '../components/ui'
 import { api, fmt, type Preset } from '../lib/api'
 import { Tile } from '../components/Tile'
@@ -26,9 +26,14 @@ function PresetStatus({ preset }: { preset: Preset }) {
     )
 }
 
+/** The README without its first `# Title` line: the window's own title already says it. */
+const readmeBody = (readme: string) => readme.replace(/^\s*# [^\n]*\n+/, '')
+
 export function PresetsPage() {
     const presets = useAsync(() => api.presets(), [])
-    const [open, setOpen] = useState<Preset | null>(null)
+    // By name, so the window shows the fresh state after an install from it.
+    const [openName, setOpenName] = useState<string | null>(null)
+    const open = presets.data?.find((p) => p.name === openName) ?? null
     const [toast, showToast] = useToast()
     const [busy, setBusy] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
@@ -76,6 +81,17 @@ export function PresetsPage() {
         })
     }
 
+    const installButton = (preset: Preset, size?: 'sm') =>
+        preset.installed ? (
+            <Button size={size} onClick={() => reinstall(preset)} disabled={busy === preset.name}>
+                {busy === preset.name ? 'Installing…' : 'Reinstall'}
+            </Button>
+        ) : (
+            <Button size={size} variant="primary" onClick={() => install(preset)} disabled={busy === preset.name}>
+                {busy === preset.name ? 'Installing…' : 'Install'}
+            </Button>
+        )
+
     return (
         <div className="page">
             <PageHead title="Presets" sub="Ready-made bundles of agents, skills and project templates shipped with the repository. Install copies them onto the volume; from then on they are yours to edit." />
@@ -112,34 +128,34 @@ export function PresetsPage() {
                         <div className="preset-card-foot">
                             <div className="toolbar">
                                 {preset.readme && (
-                                    <Button size="sm" onClick={() => setOpen(preset)}>
+                                    <Button size="sm" onClick={() => setOpenName(preset.name)}>
                                         Details
                                     </Button>
                                 )}
-                                {preset.installed ? (
-                                    <Button size="sm" onClick={() => reinstall(preset)} disabled={busy === preset.name}>
-                                        {busy === preset.name ? 'Installing…' : 'Reinstall'}
-                                    </Button>
-                                ) : (
-                                    <Button size="sm" variant="primary" onClick={() => install(preset)} disabled={busy === preset.name}>
-                                        {busy === preset.name ? 'Installing…' : 'Install'}
-                                    </Button>
-                                )}
+                                {installButton(preset, 'sm')}
                             </div>
                         </div>
                     </div>
                 ))}
             </div>
             {open && (
-                <div className="card" style={{ marginTop: 16 }}>
-                    <div className="row between">
-                        <h3 style={{ margin: 0 }}>{open.title}</h3>
-                        <Button size="sm" onClick={() => setOpen(null)}>
-                            Close
-                        </Button>
-                    </div>
-                    <Markdown source={open.readme ?? ''} document />
-                </div>
+                <Modal
+                    open
+                    onClose={() => setOpenName(null)}
+                    title={open.title}
+                    description={<PresetStatus preset={open} />}
+                    icon="presets"
+                    size="wide"
+                    footer={
+                        <>
+                            <Button onClick={() => setOpenName(null)}>Close</Button>
+                            {installButton(open)}
+                        </>
+                    }
+                    content={<Markdown source={readmeBody(open.readme ?? '')} document />}
+                >
+                    <ErrorBox error={error ?? undefined} />
+                </Modal>
             )}
             {toast}
         </div>
