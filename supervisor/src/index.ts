@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     // Telegram is optional: without a token the factory is web-only (also
     // handy for a second dev instance next to the container, which would
     // otherwise fight over long polling).
-    const bot = config.telegram.botToken ? createBot(config, tasks, schedules) : null
+    const bot = config.telegram.botToken ? createBot(config, tasks, store, schedules) : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({

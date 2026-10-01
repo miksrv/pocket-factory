@@ -611,6 +611,45 @@ export class Store {
         this.db.prepare('DELETE FROM schedule_runs WHERE schedule = ?').run(schedule)
     }
 
+    // ---- telegram topics --------------------------------------------------
+
+    /** The conversation a Telegram chat talks to now, if the owner switched it (and it still exists). */
+    telegramTopic(chatId: number): Conversation | undefined {
+        const row = this.db
+            .prepare(`SELECT ${CONVERSATION} JOIN telegram_chats tc ON tc.conversation_id = c.id WHERE tc.chat_id = ? AND c.deleted_at IS NULL`)
+            .get(chatId) as ConversationRow | undefined
+        return row && conversationOf(row)
+    }
+
+    setTelegramTopic(chatId: number, conversationId: string): void {
+        this.db
+            .prepare('INSERT INTO telegram_chats (chat_id, conversation_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET conversation_id = excluded.conversation_id, updated_at = excluded.updated_at')
+            .run(chatId, conversationId, now())
+    }
+
+    clearTelegramTopic(chatId: number): void {
+        this.db.prepare('DELETE FROM telegram_chats WHERE chat_id = ?').run(chatId)
+    }
+
+    /** The chats whose topic is this conversation: where a reply of its tasks goes. */
+    telegramChatsFor(conversationId: string): number[] {
+        return (this.db.prepare('SELECT chat_id FROM telegram_chats WHERE conversation_id = ?').all(conversationId) as Array<{ chat_id: number }>).map((r) => r.chat_id)
+    }
+
+    /** The bot sent a message about a conversation (a reply, a question, an ack): a reply to it later names that conversation. */
+    rememberTelegramMessage(chatId: number, messageId: number, conversationId: string, taskId: string | null): void {
+        this.db
+            .prepare('INSERT OR REPLACE INTO telegram_messages (chat_id, message_id, conversation_id, task_id, sent_at) VALUES (?, ?, ?, ?, ?)')
+            .run(chatId, messageId, conversationId, taskId, now())
+        this.db.prepare('DELETE FROM telegram_messages WHERE sent_at < ?').run(new Date(Date.now() - 180 * 86_400_000).toISOString())
+    }
+
+    telegramMessage(chatId: number, messageId: number): { conversation_id: string; task_id: string | null } | undefined {
+        return this.db.prepare('SELECT conversation_id, task_id FROM telegram_messages WHERE chat_id = ? AND message_id = ?').get(chatId, messageId) as
+            | { conversation_id: string; task_id: string | null }
+            | undefined
+    }
+
     // ---- meta -------------------------------------------------------------
 
     getMeta<T>(key: string): T | undefined {

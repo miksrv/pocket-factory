@@ -144,7 +144,28 @@ const MIGRATIONS: string[] = [
         task_id    TEXT,                          -- the task that got the item; null when the first run seeded it
         PRIMARY KEY (schedule, key)
     );
+    `,
+    // v10: Telegram topics. A Telegram chat talks to one conversation at a
+    // time (its topic): its own by default, or any conversation the owner
+    // switched to by replying to a message of the bot — a schedule's report,
+    // a question. The bot remembers which conversation (and task) each
+    // message it sent belongs to, so a reply can be resolved.
     `
+    CREATE TABLE telegram_chats (
+        chat_id         INTEGER PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id),
+        updated_at      TEXT NOT NULL
+    );
+    CREATE TABLE telegram_messages (
+        chat_id         INTEGER NOT NULL,
+        message_id      INTEGER NOT NULL,
+        conversation_id TEXT NOT NULL,
+        task_id         TEXT,
+        sent_at         TEXT NOT NULL,
+        PRIMARY KEY (chat_id, message_id)
+    );
+    CREATE INDEX telegram_messages_sent ON telegram_messages(sent_at);
+    `,
 ]
 
 export function openDatabase(file: string): DatabaseSync {

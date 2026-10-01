@@ -2,7 +2,7 @@ import { Bot, type Context, InlineKeyboard } from 'grammy'
 
 import type { Config } from './config.js'
 import { createLogger } from './logger.js'
-import type { Ask, RateLimitSnapshot, Task, TaskEvent } from './store/index.js'
+import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import type { Schedules } from './schedules/service.js'
 import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
@@ -54,11 +54,13 @@ function retryAfter(error: unknown): number | null {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function sendOne(bot: Bot, chatId: number, part: string): Promise<void> {
+const cap = (s: string) => s.replace(/^./, (c) => c.toUpperCase())
+/** Sends one message; returns its id. */
+async function sendOne(bot: Bot, chatId: number, part: string): Promise<number> {
     for (let attempt = 0; ; attempt++) {
         try {
-            await bot.api.sendMessage(chatId, markdownToTelegramHtml(part), { parse_mode: 'HTML' })
-            return
+            const sent = await bot.api.sendMessage(chatId, markdownToTelegramHtml(part), { parse_mode: 'HTML' })
+            return sent.message_id
         } catch (error) {
             const wait = retryAfter(error)
             if (wait !== null && attempt < 3) {
@@ -67,18 +69,19 @@ async function sendOne(bot: Bot, chatId: number, part: string): Promise<void> {
             }
             // Telegram rejected the markup — better a plain message than none.
             log.warn(`html reply rejected, falling back to plain text: ${error instanceof Error ? error.message : error}`)
-            await bot.api.sendMessage(chatId, part)
-            return
+            const sent = await bot.api.sendMessage(chatId, part)
+            return sent.message_id
         }
     }
 }
 
-/** Every chunk is attempted: one failed chunk is logged, the rest still arrive. */
-async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<void> {
+/** Every chunk is attempted: one failed chunk is logged, the rest still arrive. Returns the ids of the messages sent. */
+async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<number[]> {
     let failed = 0
     for (const part of chunk(text || '(empty reply)')) {
+    const ids: number[] = []
         try {
-            await sendOne(bot, chatId, part)
+            ids.push(await sendOne(bot, chatId, part))
         } catch (error) {
             failed++
             log.error(`chunk to chat ${chatId} failed: ${error instanceof Error ? error.message : error}`)
@@ -86,6 +89,7 @@ async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<voi
     }
     if (failed) throw new Error(`${failed} chunk(s) not delivered`)
 }
+    return ids
 
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 const pct = (used: number) => `${Math.round(used * 100)}%`
@@ -151,9 +155,11 @@ function permissionSummary(input: Record<string, unknown>): string {
 /**
  * A question of the agent as a Telegram message: the question, its options
  * with their descriptions, and one button per option; free text is the
- * "Other" choice. A permission request gets Allow / Deny.
+ * "Other" choice — typed when the task is the chat's topic, as a reply to
+ * the question otherwise (a scheduled run's question, say). A permission
+ * request gets Allow / Deny.
  */
-function askMessage(task: Task, ask: Ask): { key: string; text: string; keyboard: InlineKeyboard } | null {
+function askMessage(task: Task, ask: Ask, inTopic: boolean): { key: string; text: string; keyboard: InlineKeyboard } | null {
     if (ask.kind === 'permission') {
         const text = [`🔐 The agent asks to run ${ask.tool_name}:`, '', permissionSummary(ask.input), '', 'Allow it or deny it below.'].join('\n')
         return { key: ask.request_id, text, keyboard: new InlineKeyboard().text('✅ Allow', `p|${task.id}|allow`).text('⛔ Deny', `p|${task.id}|deny`) }
@@ -168,25 +174,40 @@ function askMessage(task: Task, ask: Ask): { key: string; text: string; keyboard
         lines.push('')
         for (const option of options) lines.push(`• ${option.label}${option.description ? ` — ${option.description}` : ''}`)
     }
-    lines.push('', options.length ? (next.multiSelect ? 'Tap an option, or type your answer (several: comma-separated).' : 'Tap an option, or type your answer.') : 'Type your answer.')
+    const typed = inTopic ? 'type your answer' : 'reply to this message with your answer'
+    lines.push('', options.length ? (next.multiSelect ? `Tap an option, or ${typed} (several: comma-separated).` : `Tap an option, or ${typed}.`) : `${cap(typed)}.`)
     if (questions.length > 1) lines.push(`(question ${index + 1} of ${questions.length})`)
     const keyboard = new InlineKeyboard()
     options.forEach((option, i) => keyboard.text(option.label.slice(0, 60), `a|${task.id}|${index}|${i}`).row())
     return { key: `${ask.request_id}:${index}`, text: lines.join('\n'), keyboard }
 }
 
-export function createBot(config: Config, tasks: TaskService, schedules?: Schedules): Bot {
+export function createBot(config: Config, tasks: TaskService, store: Store, schedules?: Schedules): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
 
-    const conversationFor = (ctx: Context) => tasks.conversationFor('telegram', String(ctx.chat!.id))
+    // A chat talks to one conversation at a time — its topic: its own by
+    // default, or the one the owner switched to by replying to a message of
+    // the bot (a schedule's report, a question). `/new` switches back.
+    const topicFor = (chatId: number): Conversation => store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
+    const conversationFor = (ctx: Context) => topicFor(ctx.chat!.id)
+    const isTopic = (chatId: number, conversationId: string) => topicFor(chatId).id === conversationId
+    /** The bot sent a message about a conversation: a reply to it later continues that conversation. */
+    const remember = (chatId: number, messageIds: number | number[], conversationId: string, taskId: string | null = null) => {
+        for (const id of Array.isArray(messageIds) ? messageIds : [messageIds]) store.rememberTelegramMessage(chatId, id, conversationId, taskId)
+    }
+    const topicName = (conversation: Conversation) => conversation.title || (conversation.channel === 'telegram' ? 'this chat' : 'web conversation')
     // Where scheduled runs report and ask: the owner's private chat (a user's chat id is the user id).
     const ownerChat = [...config.telegram.allowedUserIds][0]
-    /** The chat a task talks to: its own for a Telegram task, the owner's for a scheduled one, none otherwise. */
+    /** The chat a task talks to: its own for a Telegram task, the owner's for a scheduled one or a topic's, none otherwise. */
     const chatFor = (task: Task): number | null => {
         if (task.source === 'cron') return task.schedule && schedules?.spec(task.schedule)?.notify === 'none' ? null : ownerChat ?? null
         const conversation = tasks.conversationOf(task)
-        return conversation?.channel === 'telegram' ? Number(conversation.external_id) || null : null
+        if (!conversation) return null
+        if (conversation.channel === 'telegram') return Number(conversation.external_id) || null
+        // A Telegram message into another conversation (a schedule's thread): the chat that has it as its topic.
+        if (task.source === 'telegram') return store.telegramChatsFor(conversation.id)[0] ?? ownerChat ?? null
+        return null
     }
 
     // Whitelist: the bot fronts an agent with repository access, so it must
@@ -208,6 +229,7 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
                 '/new [project] — start a fresh session, optionally inside a project checkout',
                 '/project <name> — bind this chat to a project (its MCP servers, agents and rules apply)',
+                'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
                 '/stop — cancel the running task',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)',
@@ -235,7 +257,9 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
         if (!name) return void (await ctx.reply('Usage: /run <schedule name>'))
         if (!schedules.get(name)) return void (await ctx.reply(`No schedule named "${name}". /schedules lists them.`))
         const run = await schedules.fire(name, 'manual')
-        await ctx.reply(run.status === 'queued' ? `▶️ ${name}: task queued (${run.note}). The report comes here when it is done.` : `${name}: ${run.status}${run.note ? ` — ${run.note}` : ''}`)
+        const sent = await ctx.reply(run.status === 'queued' ? `▶️ ${name}: task queued (${run.note}). The report comes here when it is done; reply to it to follow up.` : `${name}: ${run.status}${run.note ? ` — ${run.note}` : ''}`)
+        const task = run.task_id ? tasks.task(run.task_id) : undefined
+        if (task) remember(ctx.chat.id, sent.message_id, task.conversation_id, task.id)
     })
 
     // `/new` forgets the session; `/new <project>` also starts the next one inside that checkout.
@@ -245,7 +269,8 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
             await ctx.reply(`Unknown project "${project}". Projects are the files in /data/config/projects; say "onboard project ${project}" to create one.`)
             return
         }
-        tasks.newConversation('telegram', String(ctx.chat.id), null, project)
+        const fresh = tasks.newConversation('telegram', String(ctx.chat.id), null, project)
+        store.setTelegramTopic(ctx.chat.id, fresh.id)
         await ctx.reply(project ? `Fresh session in ${project}. Next message runs from its checkout.` : 'Fresh session. Next message starts from scratch.')
     })
 
@@ -298,6 +323,7 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
     }
 
     // `/usage` shows the last reading; `/usage refresh` spends one Haiku turn
+                `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
     // to get a fresh one.
     bot.command('usage', async (ctx) => {
         if (/^refresh\b/i.test(ctx.match)) {
@@ -319,13 +345,30 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
         await ctx.reply(`Unknown command ${ctx.message.text.split(/\s/)[0]}. See /start.`)
     })
 
-    // While the agent waits for an answer, the message is the answer (see TaskService.submit).
+    // A reply to a message of the bot switches the chat to that message's
+    // conversation (a schedule's thread, an older session) and stays there;
+    // then, while the agent waits for an answer, the message is the answer
+    // (see TaskService.submit), otherwise it is the next task.
     const submit = async (ctx: Context, prompt: string) => {
-        const conversation = conversationFor(ctx)
+        const chatId = ctx.chat!.id
+        let conversation = conversationFor(ctx)
+        let switched: Conversation | null = null
+        const replyTo = ctx.message?.reply_to_message
+        const target = replyTo?.from?.id === ctx.me.id ? store.telegramMessage(chatId, replyTo.message_id) : undefined
+        if (target && target.conversation_id !== conversation.id) {
+            const found = store.getConversation(target.conversation_id)
+            if (found && !found.deleted_at) {
+                store.setTelegramTopic(chatId, found.id)
+                conversation = found
+                switched = found
+            }
+        }
         const answering = Boolean(tasks.pendingAsk(conversation.id))
         const waits = !answering && tasks.willWait(conversation.id)
-        tasks.submit(conversation.id, 'telegram', prompt)
-        await ctx.reply(answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…')
+        const task = tasks.submit(conversation.id, 'telegram', prompt)
+        const head = switched ? `↪️ ${topicName(switched)} · ` : ''
+        const sent = await ctx.reply(`${head}${answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…'}`)
+        remember(chatId, sent.message_id, conversation.id, task.id)
     }
 
     // Buttons under a question or a permission request. The data names the
@@ -422,7 +465,7 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
             for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— withdrawn')
             return
         }
-        const message = askMessage(task, task.ask)
+        const message = askMessage(task, task.ask, isTopic(chatId, task.conversation_id))
         if (!message || sentAsks.has(message.key)) return
         const question = task.ask.kind === 'question' ? openQuestions(task.ask)[0]?.question ?? null : null
         sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question })
@@ -448,6 +491,7 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
     })
 
     // Deliver results of Telegram-originated tasks back to their chat, and of
+                remember(chatId, sent.message_id, task.conversation_id, task.id)
     // scheduled runs to the owner (unless the schedule says notify: none).
     tasks.on('task', (task) => {
         if ((task.source !== 'telegram' && task.source !== 'cron') || task.status === 'queued' || task.status === 'running') return
@@ -462,7 +506,10 @@ export function createBot(config: Config, tasks: TaskService, schedules?: Schedu
         const head = task.schedule ? `⏱ **${task.schedule}**\n\n` : ''
         // Delivered = seen: the web's "unread" mark goes; a failed delivery keeps it, so the reply is not lost.
         void sendMarkdown(bot, chatId, `${head}${body}\n\n${footer(task, tasks.limits())}`)
-            .then(() => tasks.markRead(task.conversation_id))
+            .then((ids) => {
+                remember(chatId, ids, task.conversation_id, task.id)
+                tasks.markRead(task.conversation_id)
+            })
             .catch((error) => log.error(`delivery to chat ${chatId} failed`, error))
     })
 
