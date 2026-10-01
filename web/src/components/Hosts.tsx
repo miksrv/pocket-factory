@@ -450,7 +450,7 @@ export function ProjectHosts({
                 </span>
             </div>
             <select
-                className="filter add-host"
+                className="add-host"
                 value=""
                 aria-label="Add host"
                 onChange={(e) => {
