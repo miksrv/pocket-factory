@@ -166,6 +166,10 @@ const MIGRATIONS: string[] = [
     );
     CREATE INDEX telegram_messages_sent ON telegram_messages(sent_at);
     `,
+    // v11: the model a task was queued with (a schedule's `model:`); null =
+    // the factory's current model, kept in `meta` (`claude.model`) since the
+    // owner picks it from Telegram or Settings, not from .env.
+    `ALTER TABLE tasks ADD COLUMN model TEXT`
 ]
 
 export function openDatabase(file: string): DatabaseSync {

@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     setLogLevel(config.logLevel)
 
     log.info(`workspaces: ${config.paths.workspacesRoot}`)
-    log.info(`claude: model=${config.claude.model ?? 'default'} permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns} budget=$${config.claude.maxBudgetUsd}`)
+    log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns} budget=$${config.claude.maxBudgetUsd}`)
 
     const store = new Store(openDatabase(config.paths.dbFile))
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)

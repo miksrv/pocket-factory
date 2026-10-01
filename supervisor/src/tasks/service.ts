@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 
 import { type McpLoginView, McpLogins } from '../claude/mcpLogin.js'
 import { type AskResponse, type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
+import { DEFAULT_MODEL, isModelAlias, MODEL_ALIASES, MODEL_META_KEY, type ModelAlias } from '../claude/models.js'
 import type { Config } from '../config.js'
 import { createLogger } from '../logger.js'
 import type { Ask, AskQuestion, Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
@@ -127,13 +128,25 @@ function sourceOf(name: string, cliSource: string | null, scope: string | null):
     return cliSource
 }
 
-function detectProject(input: unknown, workspaces: string[]): string | null {
+/**
+ * The workspace a tool call touches, by name in its input (a path, a `--repo
+ * owner/name`). Longest names first; `owner/name` where both are workspaces
+ * means the repository, not the owner's folder (`ServicePattern/UserManagement`
+ * is UserManagement); a name with a project file wins over a bare folder.
+ */
+export function detectProject(input: unknown, workspaces: string[], hasProject: (name: string) => boolean = () => false): string | null {
     const haystack = JSON.stringify(input ?? '')
+    const found: string[] = []
     for (const name of workspaces) {
         if (name.length < 3) continue
-        if (new RegExp(`(?:^|[\\s"'/=:(])${escapeRegExp(name)}(?=[\\s"'/):]|$)`).test(haystack)) return name
+        const m = new RegExp(`(?:^|[\\s"'/=:(])${escapeRegExp(name)}(?=[\\s"'/):]|$)`).exec(haystack)
+        if (!m) continue
+        const after = haystack.slice(m.index + m[0].length)
+        const repo = workspaces.find((other) => other !== name && other.length >= 3 && new RegExp(`^/${escapeRegExp(other)}(?=[\\s"'/):]|$)`).test(after))
+        found.push(repo ?? name)
     }
-    return null
+    if (!found.length) return null
+    return found.find(hasProject) ?? found[0]
 }
 
 /**
@@ -357,7 +370,21 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * for the first open question — the "Other" choice) and the task goes
      * on; otherwise a new task queues behind whatever runs.
      */
-    submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string } = {}): Task {
+    /** The orchestrator's model: the alias the owner picked (Telegram `/model`, Settings), else the default. Sub-agents follow their own files. */
+    model(): ModelAlias {
+        const stored = this.store.getMeta<string>(MODEL_META_KEY)
+        return isModelAlias(stored) ? stored : DEFAULT_MODEL
+    }
+
+    /** Picks the model for every task queued from now on, in every conversation; a running task keeps the one it started with. */
+    setModel(alias: string): ModelAlias {
+        if (!isModelAlias(alias)) throw new Error(`Unknown model alias "${alias}": one of ${MODEL_ALIASES.join(', ')}`)
+        this.store.setMeta(MODEL_META_KEY, alias)
+        log.info(`model: ${alias}`)
+        return alias
+    }
+
+    submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string; model?: string } = {}): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
         const asking = this.pendingAsk(conversationId)
@@ -367,7 +394,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         // The project is detected per task from its own tool calls, never inherited
         // from the conversation: one session may serve several projects in turn.
-        const task = this.store.createTask(conversationId, source, prompt, null, options.schedule ?? null)
+        const task = this.store.createTask(conversationId, source, prompt, null, options.schedule ?? null, options.model ?? null)
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
@@ -447,6 +474,35 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         log.info(`${taskId} answered: ${ask.kind} ${ask.tool_name} → ${response.behavior}`)
         this.emit('task', updated)
         return updated
+    }
+
+    /**
+     * A scheduled run must not hold its schedule (one run at a time) and a
+     * session slot for days because nobody answered: after
+     * `SCHEDULES_ASK_TIMEOUT_MIN` a permission is denied and a question gets
+     * "no answer", and the agent decides by the file's instructions.
+     */
+    private answerLater(taskId: string, ask: Ask): void {
+        const ms = this.config.schedules.askTimeoutMs
+        if (ms <= 0) return
+        const minutes = Math.round(ms / 60_000)
+        const timer = setTimeout(() => {
+            const task = this.store.getTask(taskId)
+            if (!task || task.status !== 'running' || task.ask?.request_id !== ask.request_id) return
+            const reason = `no answer from the owner within ${minutes} min`
+            try {
+                if (ask.kind === 'permission') this.answer(taskId, { behavior: 'deny', message: `${reason}; the scheduled run goes on without it, or reports what it needed and stops` })
+                else {
+                    const text = `(${reason}: decide by the schedule's instructions, or report what you needed and stop)`
+                    this.answer(taskId, { answers: Object.fromEntries(openQuestions(task.ask).map((q) => [q.question, text])) })
+                }
+                this.emit('event', this.store.addEvent(taskId, 'status', { status: 'running', note: `${ask.kind} answered for the owner: ${reason}` }))
+                log.warn(`${taskId}: ${ask.kind} ${ask.tool_name} answered by the timeout (${minutes} min)`)
+            } catch (error) {
+                log.warn(`${taskId}: could not settle the ${ask.kind} by the timeout: ${error instanceof Error ? error.message : error}`)
+            }
+        }, ms)
+        timer.unref()
     }
 
     /** Whether a task submitted now waits: this conversation is busy or queued, or every session slot is taken. */
@@ -691,6 +747,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         let project = task.project
         const resuming = Boolean(conversation.session_id)
         let sawOutput = false
+        const startedAt = Date.now()
+        const spent = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
 
         const handle = runClaude({
             prompt: task.prompt,
@@ -698,7 +756,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             resumeSessionId: conversation.session_id ?? undefined,
             mcpConfig: this.mcpConfigFile(),
             settings: this.sessionSettings(conversation.project),
-            model: this.config.claude.model,
+            // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
+            model: task.model ?? this.model(),
             maxTurns: this.config.claude.maxTurns,
             maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
@@ -733,6 +792,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     this.emit('event', this.store.addEvent(task.id, 'ask', { kind: ask.kind, request_id: ask.request_id, tool_name: ask.tool_name, input: ask.input }, origin))
                     this.emit('task', this.store.updateTask(task.id, { ask }))
                     log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name}`)
+                    if (task.schedule) this.answerLater(task.id, ask)
                     return
                 }
                 if (event.type === 'ask_cancelled') {
@@ -741,8 +801,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     return
                 }
                 const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
+                if (event.type === 'llm') {
+                    // The CLI's final result counts the orchestrator's own calls only; the sub-agents' calls arrive here too.
+                    spent.input += event.inputTokens
+                    spent.output += event.outputTokens
+                    spent.cacheRead += event.cacheReadTokens
+                    spent.cacheCreation += event.cacheCreationTokens
+                }
                 if (event.type === 'tool_use' && !project) {
-                    project = detectProject(event.input, this.workspaces())
+                    project = detectProject(event.input, this.workspaces(), (name) => this.workspace.projectPath(name) !== null)
                     if (project) {
                         this.store.updateTask(task.id, { project })
                         this.store.updateConversation(conversation.id, { project })
@@ -765,6 +832,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const last = result.rateLimits?.five_hour ?? null
             const before = previous && last && previous.resets_at === last.resets_at ? previous : first
             const delta = before && last && before.resets_at === last.resets_at ? Math.max(0, last.used - before.used) : null
+            // Every model call seen on the stream, sub-agents included, against the result's own figures (the orchestrator only, and only its last turn when sub-agents ran in the background): the larger reading is the truth.
+            const seen = spent.input + spent.output + spent.cacheRead + spent.cacheCreation
+            const counted = result.inputTokens + result.outputTokens + result.cacheReadTokens + result.cacheCreationTokens
+            const all = seen > counted
             this.finish(task.id, {
                 status: this.stopRequested.has(task.id) ? 'cancelled' : result.isError ? 'failed' : 'done',
                 session_id: result.sessionId || conversation.session_id,
@@ -773,11 +844,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 error: result.isError ? result.text || `claude stopped: ${result.subtype}` : null,
                 num_turns: result.numTurns,
                 cost_usd: result.costUsd,
-                duration_ms: result.durationMs,
-                input_tokens: result.inputTokens,
-                output_tokens: result.outputTokens,
-                cache_read_tokens: result.cacheReadTokens,
-                cache_creation_tokens: result.cacheCreationTokens,
+                // Wall clock: the result's duration stops at the orchestrator's last turn, before background sub-agents end.
+                duration_ms: Math.max(result.durationMs, Date.now() - startedAt),
+                input_tokens: all ? spent.input : result.inputTokens,
+                output_tokens: all ? spent.output : result.outputTokens,
+                cache_read_tokens: all ? spent.cacheRead : result.cacheReadTokens,
+                cache_creation_tokens: all ? spent.cacheCreation : result.cacheCreationTokens,
                 window_5h_delta: delta
             })
         } catch (error) {

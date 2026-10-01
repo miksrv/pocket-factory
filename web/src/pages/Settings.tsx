@@ -37,14 +37,14 @@ export function SettingsPage() {
     }, [hash, s, mcp.data])
     return (
         <div className="page">
-            <PageHead title="Settings" sub="Read-only view of the running configuration. Everything here comes from .env; edit it on the host and restart the container." />
+            <PageHead title="Settings" sub="The running configuration. The model is chosen here (or with /model in Telegram); the rest comes from .env — edit it on the host and restart the container." />
             <ErrorBox error={status.error} />
             {s && (
                 <div className="stack">
                     <Section id="claude" title="Claude Code">
                         <Row k="CLI" v={s.claude.version ?? 'not found'} />
                         <Row k="Login" v={s.claude.login === 'token' ? 'CLAUDE_CODE_OAUTH_TOKEN — model calls only, no claude.ai connectors' : s.claude.login === 'none' ? 'not logged in — docker compose run --rm -it supervisor claude auth login' : s.claude.login} />
-                        <Row k="Model" v={s.claude.model ?? 'CLI default'} />
+                        <ModelRow model={s.claude.model} onSaved={status.reload} />
                         <Row k="Permission mode" v={s.claude.permission_mode} />
                         <Row k="Caps per task" v={`${s.claude.max_turns} turns · $${s.claude.max_budget_usd} by the CLI's list-price estimate (a safety stop, not a bill)`} />
                         <Row k="Concurrent sessions" v={String(s.max_concurrent_sessions)} />
@@ -244,6 +244,55 @@ function Section({ id, title, children }: { id: string; title: string; children:
         </div>
     )
 }
+
+/**
+ * The orchestrator's model: one alias for the whole factory, applied to the next task in every
+ * conversation (a running task keeps its own); the same value Telegram `/model` sets. Sub-agents keep
+ * the `model:` of their files, `inherit` among them follows this one. The list is the CLI's aliases,
+ * which it resolves to the subscription's current model of that tier.
+ */
+function ModelRow({ model, onSaved }: { model: string; onSaved: () => void }) {
+    const [toast, showToast] = useToast()
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const change = async (value: string) => {
+        setBusy(true)
+        setError(null)
+        try {
+            const saved = await api.setModel(value)
+            showToast(`Model: ${saved.model} from the next task on`)
+            onSaved()
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e))
+        } finally {
+            setBusy(false)
+        }
+    }
+    return (
+        <div className="kv">
+            <span>Model</span>
+            <span className="row wrap" style={{ gap: 10 }}>
+                <select value={model} disabled={busy} onChange={(e) => void change(e.target.value)} aria-label="Orchestrator model">
+                    {MODEL_ALIASES.map((a) => (
+                        <option key={a.value} value={a.value}>
+                            {a.label}
+                        </option>
+                    ))}
+                </select>
+                <span className="dim small">the orchestrator, every next task in every chat; sub-agents keep their own</span>
+                {error && <span className="small" style={{ color: 'var(--red)' }}>{error}</span>}
+                {toast}
+            </span>
+        </div>
+    )
+}
+
+const MODEL_ALIASES: Array<{ value: string; label: string }> = [
+    { value: 'sonnet', label: 'sonnet — current Sonnet' },
+    { value: 'opus', label: 'opus — current Opus' },
+    { value: 'haiku', label: 'haiku — current Haiku' },
+    { value: 'fable', label: 'fable — current Fable (Max plans)' }
+]
 
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
     return (

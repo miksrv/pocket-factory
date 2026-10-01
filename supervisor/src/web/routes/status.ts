@@ -69,13 +69,26 @@ export function statusRoutes(): Hono<Env> {
                   }))
             : []
         const [claude, gh, git] = await toolVersions()
+        const schedules = c.get('app').schedules.list()
+        const upcoming = schedules.filter((s) => s.next_run).sort((a, b) => a.next_run!.localeCompare(b.next_run!))[0]
         return c.json({
-            stats: store.stats(startOfDay(new Date(), config.timezone).toISOString()),
+            stats: {
+                ...store.stats(startOfDay(new Date(), config.timezone).toISOString()),
+                schedules: {
+                    total: schedules.length,
+                    on: schedules.filter((s) => s.enabled && !s.errors.length).length,
+                    // What needs the owner: an invalid file, a prefilter that fails, a run the factory slept through.
+                    invalid: schedules.filter((s) => s.errors.length).length,
+                    failing: schedules.filter((s) => !s.errors.length && s.last_run?.status === 'error').map((s) => s.name),
+                    missed: schedules.filter((s) => s.last_run?.status === 'missed').map((s) => s.name),
+                    next: upcoming ? { name: upcoming.name, at: upcoming.next_run } : null
+                }
+            },
             running: tasks.runningTaskIds(),
             limits: tasks.limits() ?? null,
             claude: {
                 version: claude,
-                model: config.claude.model ?? null,
+                model: tasks.model(),
                 permission_mode: config.claude.permissionMode,
                 max_turns: config.claude.maxTurns,
                 max_budget_usd: config.claude.maxBudgetUsd,

@@ -8,7 +8,6 @@ export interface Config {
     }
     claude: {
         configDir: string
-        model: string | undefined
         maxTurns: number
         maxBudgetUsd: number
         permissionMode: string
@@ -43,6 +42,10 @@ export interface Config {
     schedules: {
         /** Cron firings are skipped while the 5-hour or weekly window is at or above this share (0..1); 0 = never. */
         softStop: number
+        /** A firing the factory slept through still runs when it is at most this many minutes late; older ones are recorded as missed. */
+        lateMinutes: number
+        /** A scheduled run's question or permission request unanswered for this long is answered for the owner (deny / "no answer"); 0 = wait forever. */
+        askTimeoutMs: number
     }
 }
 
@@ -92,7 +95,6 @@ export function loadConfig(): Config {
             // Also used outside Docker: with CLAUDE_CODE_OAUTH_TOKEN in .env the
             // CLI is logged in there too, and the UI edits the same files.
             configDir: optional('CLAUDE_CONFIG_DIR') ?? path.join(dataRoot, 'claude'),
-            model: optional('CLAUDE_MODEL'),
             maxTurns: number('CLAUDE_MAX_TURNS', 50),
             maxBudgetUsd: number('CLAUDE_MAX_BUDGET_USD', 5),
             permissionMode: optional('CLAUDE_PERMISSION_MODE') ?? 'acceptEdits',
@@ -129,7 +131,9 @@ export function loadConfig(): Config {
         logLevel: logLevel(optional('LOG_LEVEL')),
         timezone: timeZone(optional('TIMEZONE') ?? 'UTC'),
         schedules: {
-            softStop: share('SCHEDULES_SOFT_STOP', 0.85)
+            softStop: share('SCHEDULES_SOFT_STOP', 0.85),
+            lateMinutes: Math.max(0, Math.floor(number('SCHEDULES_LATE_MIN', 5))),
+            askTimeoutMs: Math.max(0, number('SCHEDULES_ASK_TIMEOUT_MIN', 120)) * 60_000
         }
     }
 }

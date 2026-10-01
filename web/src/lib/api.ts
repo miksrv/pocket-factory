@@ -151,6 +151,17 @@ export interface Stats {
     /** The newest conversation in each state: where a notification click lands. */
     chat_unread_latest: { id: string; title: string | null } | null
     chat_needs_reply_latest: { id: string; title: string | null } | null
+    schedules: {
+        total: number
+        on: number
+        /** Files that cannot fire (bad cron, unknown project). */
+        invalid: number
+        /** Schedules whose last firing was a prefilter error. */
+        failing: string[]
+        /** Schedules whose last firing was a minute the factory slept through. */
+        missed: string[]
+        next: { name: string; at: string } | null
+    }
 }
 
 export interface RateLimitWindow {
@@ -175,7 +186,8 @@ export interface Status {
     limits: RateLimits | null
     claude: {
         version: string | null
-        model: string | null
+        /** The orchestrator's model alias, one for the whole factory (Settings, Telegram `/model`). */
+        model: string
         permission_mode: string
         max_turns: number
         max_budget_usd: number
@@ -403,12 +415,14 @@ export interface ScheduleRun {
     schedule: string
     fired_at: string
     trigger: 'cron' | 'manual'
-    /** `queued`: a task was created; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: the prefilter failed. */
-    status: 'queued' | 'empty' | 'skipped' | 'error'
+    /** `queued`: a task was created; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: the prefilter failed; `missed`: the factory was off at the minute. */
+    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed'
     note: string | null
     items: number
     task_id: string | null
     duration_ms: number
+    /** How the task ended (or where it is), when the run queued one. */
+    task_status: TaskStatus | null
 }
 
 /** What the scheduler knows about a schedule file beyond its text. */
@@ -426,8 +440,14 @@ export interface ScheduleView {
     prefilter: string | null
     notify: 'telegram' | 'none' | null
     session: 'fresh' | 'continue' | null
+    /** Switches itself off after queueing one task. */
+    once: boolean
+    /** Pinned model alias for the runs; null = the factory's current one. */
+    model: string | null
     next_run: string | null
     last_run: ScheduleRun | null
+    /** The last firing that queued a task, with that task's status. */
+    last_task: ScheduleRun | null
     active_task: { id: string; status: TaskStatus; created_at: string } | null
     conversation_id: string | null
     /** Prefilter items handed over (or seeded) so far. */
@@ -441,6 +461,8 @@ export interface PrefilterItem {
     title: string
     text?: string
     url?: string
+    /** An earlier version of the item was handed over then; it is back because it changed. */
+    seen_before?: string
 }
 
 export interface SchedulePreview {
@@ -542,13 +564,15 @@ export const api = {
     mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),
     completeMcpLogin: (id: string, url: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify({ url }) }),
     cancelMcpLogin: (id: string) => request<void>(`/mcp/login/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    /** The orchestrator's model for every next task, in every conversation; sub-agents keep the `model:` of their files. */
+    setModel: (model: string) => request<{ model: string; aliases: string[] }>('/settings/model', { method: 'PUT', body: JSON.stringify({ model }) }),
     saveMcp: (mcpServers: Record<string, McpServerConfig>) => request<{ saved: number }>('/mcp/global', { method: 'PUT', body: JSON.stringify({ mcpServers }) }),
     sendMessage: (id: string, prompt: string) =>
         request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt }) }),
 
     list: (kind: Kind) => request<CatalogEntry[]>(`/${kind}`),
-    /** `create` refuses to replace a file that already exists (409). */
-    save: (kind: Kind, name: string, doc: { frontmatter: Record<string, unknown>; body: string }, create = false) =>
+    /** `create` refuses to replace a file that already exists (409); `updated_at` (the version the form edited) refuses to overwrite a newer file (409). */
+    save: (kind: Kind, name: string, doc: { frontmatter: Record<string, unknown>; body: string; updated_at?: string }, create = false) =>
         request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(doc) }),
     remove: (kind: Kind, name: string) => request<void>(`/${kind}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
@@ -578,7 +602,8 @@ export const api = {
     /** A cron expression read back: valid or not, in words, next firing in the factory's zone. */
     checkCron: (expr: string) => request<CronCheck>(`/schedules/cron?expr=${encodeURIComponent(expr)}`),
     schedule: (name: string) => request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/status`),
-    scheduleRuns: (name: string, limit = 30) => request<ScheduleRun[]>(`/schedules/${encodeURIComponent(name)}/runs?limit=${limit}`),
+    /** The firings that mattered (a task, an error, a missed minute); `all` adds the empty polls and skips. */
+    scheduleRuns: (name: string, limit = 30, all = false) => request<ScheduleRun[]>(`/schedules/${encodeURIComponent(name)}/runs?limit=${limit}${all ? '&all=1' : ''}`),
     /** Fire now: ignores the cron, the window and the soft-stop; never overlaps a run in progress. */
     runSchedule: (name: string) => request<ScheduleRun>(`/schedules/${encodeURIComponent(name)}/run`, { method: 'POST' }),
     /** Run the prefilter and show what it finds without marking anything. */

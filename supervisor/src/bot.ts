@@ -7,6 +7,7 @@ import { transcribe } from './stt/groq.js'
 import type { Schedules } from './schedules/service.js'
 import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
+import { MODEL_ALIASES } from './claude/models.js'
 
 const log = createLogger('bot')
 
@@ -53,8 +54,8 @@ function retryAfter(error: unknown): number | null {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
 const cap = (s: string) => s.replace(/^./, (c) => c.toUpperCase())
+
 /** Sends one message; returns its id. */
 async function sendOne(bot: Bot, chatId: number, part: string): Promise<number> {
     for (let attempt = 0; ; attempt++) {
@@ -78,8 +79,8 @@ async function sendOne(bot: Bot, chatId: number, part: string): Promise<number> 
 /** Every chunk is attempted: one failed chunk is logged, the rest still arrive. Returns the ids of the messages sent. */
 async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<number[]> {
     let failed = 0
-    for (const part of chunk(text || '(empty reply)')) {
     const ids: number[] = []
+    for (const part of chunk(text || '(empty reply)')) {
         try {
             ids.push(await sendOne(bot, chatId, part))
         } catch (error) {
@@ -88,8 +89,8 @@ async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<num
         }
     }
     if (failed) throw new Error(`${failed} chunk(s) not delivered`)
-}
     return ids
+}
 
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 const pct = (used: number) => `${Math.round(used * 100)}%`
@@ -228,8 +229,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 '',
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
                 '/new [project] — start a fresh session, optionally inside a project checkout',
-                '/project <name> — bind this chat to a project (its MCP servers, agents and rules apply)',
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
+                '/project <name> — bind this chat to a project (its MCP servers, agents and rules apply)',
+                '/model [sonnet|opus|haiku|fable] — the orchestrator\'s model for every next task, in every chat',
                 '/stop — cancel the running task',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)',
@@ -290,6 +292,21 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         }
     })
 
+    // One model for the whole factory, applied to the next task everywhere; sub-agents keep the `model:` of their files.
+    bot.command('model', async (ctx) => {
+        const alias = ctx.match.trim().toLowerCase()
+        if (!alias) {
+            await ctx.reply(`Model: ${tasks.model()}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; sub-agents keep their own.`)
+            return
+        }
+        try {
+            const model = tasks.setModel(alias)
+            await ctx.reply(`Model: ${model} from the next task on, in every chat. A running task keeps the one it started with.`)
+        } catch (error) {
+            await ctx.reply(`❌ ${error instanceof Error ? error.message : error}`)
+        }
+    })
+
     bot.command('stop', async (ctx) => {
         const active = tasks.activeTask(conversationFor(ctx).id)
         if (!active) {
@@ -306,11 +323,12 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         const windows = limitsLine(tasks.limits())
         await ctx.reply(
             [
+                `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
                 `Running task: ${active ? 'yes' : 'no'}`,
                 `Project: ${conversation.project ?? 'none (workspaces root)'}`,
                 `Session: ${conversation.session_id ?? 'none'}`,
                 `Workspaces: ${config.paths.workspacesRoot}`,
-                `Model: ${config.claude.model ?? 'CLI default'}`,
+                `Model: ${tasks.model()} (/model to switch)`,
                 `Limits: ${windows ?? 'unknown (see /usage)'}`
             ].join('\n')
         )
@@ -323,7 +341,6 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     }
 
     // `/usage` shows the last reading; `/usage refresh` spends one Haiku turn
-                `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
     // to get a fresh one.
     bot.command('usage', async (ctx) => {
         if (/^refresh\b/i.test(ctx.match)) {
@@ -474,6 +491,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
             .then((sent) => {
                 const entry = sentAsks.get(message.key)
                 if (entry) entry.messageId = sent.message_id
+                remember(chatId, sent.message_id, task.conversation_id, task.id)
             })
             .catch((error) => {
                 sentAsks.delete(message.key)
@@ -491,7 +509,6 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     })
 
     // Deliver results of Telegram-originated tasks back to their chat, and of
-                remember(chatId, sent.message_id, task.conversation_id, task.id)
     // scheduled runs to the owner (unless the schedule says notify: none).
     tasks.on('task', (task) => {
         if ((task.source !== 'telegram' && task.source !== 'cron') || task.status === 'queued' || task.status === 'running') return
@@ -514,17 +531,32 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     })
 
     // A prefilter that breaks (credentials expired, a host down) would
-    // otherwise fail silently every hour: say so once per distinct error.
-    const lastError = new Map<string, string>()
+    // otherwise fail silently every hour: say so once per distinct error. A
+    // minute the factory slept through, and a firing skipped because the
+    // previous run still waits, are told the same way (the note names the
+    // minute or the task, so each is told once).
+    const lastNotice = new Map<string, string>()
     schedules?.on('run', (run) => {
         if (!ownerChat) return
-        if (run.status !== 'error') {
-            lastError.delete(run.schedule)
+        const stuck = run.status === 'skipped' && (run.note ?? '').startsWith('the previous run is still')
+        if (run.status !== 'error' && run.status !== 'missed' && !stuck) {
+            if (run.status !== 'skipped') lastNotice.delete(run.schedule)
             return
         }
-        if (lastError.get(run.schedule) === run.note) return
-        lastError.set(run.schedule, run.note ?? '')
-        void sendMarkdown(bot, ownerChat, `⚠️ Schedule **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`).catch((error) => log.error('schedule error notice failed', error))
+        if (lastNotice.get(run.schedule) === run.note) return
+        lastNotice.set(run.schedule, run.note ?? '')
+        const text =
+            run.status === 'missed'
+                ? `⏭ Schedule **${run.schedule}** ${run.note ?? 'missed a firing'}. /run ${run.schedule} starts it now.`
+                : stuck
+                  ? `⏸ Schedule **${run.schedule}** skipped a firing: ${run.note}. It waits for your answer or for the task to end.`
+                  : `⚠️ Schedule **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`
+        void sendMarkdown(bot, ownerChat, text)
+            .then((ids) => {
+                const conversation = store.findConversation('web', `schedule:${run.schedule}`)
+                if (conversation) remember(ownerChat, ids, conversation.id, run.task_id)
+            })
+            .catch((error) => log.error('schedule notice failed', error))
     })
 
     bot.catch((err) => {

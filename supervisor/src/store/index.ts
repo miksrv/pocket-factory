@@ -84,6 +84,8 @@ export interface Task {
     ask: Ask | null
     /** Name of the schedule that queued the task; null for the owner's own tasks. */
     schedule: string | null
+    /** CLI model alias the task was queued with (a schedule's `model:`); null = the factory's current model at start. */
+    model: string | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -169,8 +171,6 @@ export interface TaskStats {
     chat_needs_reply: number
     /** Queued or running tasks of conversations in the Chat list. */
     chat_active: number
-}
-
     /** The conversation whose reply landed last / whose question opened last: where a notification click should land. */
     chat_unread_latest: ChatRef | null
     chat_needs_reply_latest: ChatRef | null
@@ -179,24 +179,31 @@ export interface TaskStats {
 export interface ChatRef {
     id: string
     title: string | null
+}
+
 /**
  * One firing of a schedule: what the scheduler decided at that minute.
  * `queued` = a task was created (`task_id`), `empty` = the prefilter found
  * nothing new, `skipped` = the run was not attempted (previous run still
- * active, soft-stop), `error` = the prefilter failed.
+ * active, soft-stop), `error` = the prefilter failed, `missed` = the minute
+ * passed while the factory was off (nothing was run).
  */
 export interface ScheduleRun {
     id: number
     schedule: string
     fired_at: string
     trigger: 'cron' | 'manual'
-    status: 'queued' | 'empty' | 'skipped' | 'error'
+    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed'
     note: string | null
     items: number
     task_id: string | null
     duration_ms: number
+    /** How the task ended (or where it is), when the run queued one. */
+    task_status: TaskStatus | null
 }
 
+/** Runs kept per schedule; older firings are pruned on insert. */
+const SCHEDULE_RUNS_KEPT = 1000
 /** A persisted rate-limit reading; see `RateLimits` for where it comes from. */
 export interface RateLimitSnapshot extends RateLimits {
     id: number
@@ -275,6 +282,8 @@ const NEEDS_REPLY = `EXISTS (
     SELECT 1 FROM tasks t WHERE t.conversation_id = c.id AND t.status = 'running' AND t.ask IS NOT NULL
 )`
 const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply FROM conversations c`
+/** A schedule run with the status of the task it queued, if any. */
+const SCHEDULE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
 
 type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply'> & { unread: number; needs_reply: number }
 const conversationOf = (row: ConversationRow): Conversation => ({ ...row, unread: Boolean(row.unread), needs_reply: Boolean(row.needs_reply) })
@@ -362,7 +371,7 @@ export class Store {
 
     // ---- tasks ------------------------------------------------------------
 
-    createTask(conversationId: string, source: TaskSource, prompt: string, project: string | null = null, schedule: string | null = null): Task {
+    createTask(conversationId: string, source: TaskSource, prompt: string, project: string | null = null, schedule: string | null = null, model: string | null = null): Task {
         const task: Task = {
             id: randomUUID(),
             conversation_id: conversationId,
@@ -384,16 +393,17 @@ export class Store {
             restarts: 0,
             ask: null,
             schedule,
+            model,
             created_at: now(),
             started_at: null,
             finished_at: null
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
             )
-            .run(task.id, conversationId, source, prompt, project, schedule, task.created_at)
+            .run(task.id, conversationId, source, prompt, project, schedule, model, task.created_at)
         return task
     }
 
@@ -521,16 +531,6 @@ export class Store {
                       WHERE c.deleted_at IS NULL AND t.status IN ('queued', 'running')) AS chat_active`
             )
             .get() as { chat_unread: number; chat_needs_reply: number; chat_active: number }
-        return {
-            queued: row.queued ?? 0,
-            running: row.running ?? 0,
-            done_today: row.done_today ?? 0,
-            failed_today: row.failed_today ?? 0,
-            chat_unread: chat.chat_unread,
-            chat_needs_reply: chat.chat_needs_reply,
-            chat_active: chat.chat_active,
-            tokens_today: row.tokens_today ?? 0,
-            tokens_total: row.tokens_total ?? 0
         // The newest conversation in each state, so a notification can open the right thread.
         const unreadLatest = this.db
             .prepare(
@@ -546,6 +546,18 @@ export class Store {
                  LIMIT 1`
             )
             .get() as ChatRef | undefined
+        return {
+            queued: row.queued ?? 0,
+            running: row.running ?? 0,
+            done_today: row.done_today ?? 0,
+            failed_today: row.failed_today ?? 0,
+            chat_unread: chat.chat_unread,
+            chat_needs_reply: chat.chat_needs_reply,
+            chat_active: chat.chat_active,
+            chat_unread_latest: unreadLatest ?? null,
+            chat_needs_reply_latest: askLatest ?? null,
+            tokens_today: row.tokens_today ?? 0,
+            tokens_total: row.tokens_total ?? 0
         }
     }
 
@@ -554,33 +566,55 @@ export class Store {
     /** The task of a schedule that is still queued or running, if any (one run at a time per schedule). */
     activeScheduleTask(schedule: string): Task | undefined {
         const row = this.db
-            chat_unread_latest: unreadLatest ?? null,
-            chat_needs_reply_latest: askLatest ?? null,
             .prepare(`SELECT * FROM tasks WHERE schedule = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`)
             .get(schedule) as TaskRow | undefined
         return row && taskOf(row)
     }
 
-    addScheduleRun(run: Omit<ScheduleRun, 'id'>): ScheduleRun {
+    addScheduleRun(run: Omit<ScheduleRun, 'id' | 'task_status'>): ScheduleRun {
         const result = this.db
             .prepare('INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
             .run(run.schedule, run.fired_at, run.trigger, run.status, run.note, run.items, run.task_id, run.duration_ms)
-        return { ...run, id: Number(result.lastInsertRowid) }
+        this.db
+            .prepare('DELETE FROM schedule_runs WHERE schedule = ? AND id NOT IN (SELECT id FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?)')
+            .run(run.schedule, run.schedule, SCHEDULE_RUNS_KEPT)
+
+        return { ...run, task_status: null, id: Number(result.lastInsertRowid) }
     }
 
-    /** Newest first. */
-    listScheduleRuns(schedule: string, limit = 20): ScheduleRun[] {
-        return this.db.prepare('SELECT * FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?').all(schedule, limit) as unknown as ScheduleRun[]
+    /** Newest first. By default only the firings that mattered (a task, an error, a missed minute); `all` adds the empty polls and skips. */
+    listScheduleRuns(schedule: string, limit = 20, all = false): ScheduleRun[] {
+        const filter = all ? '' : "AND r.status NOT IN ('empty', 'skipped')"
+        return this.db
+            .prepare(`SELECT ${SCHEDULE_RUN} WHERE r.schedule = ? ${filter} ORDER BY r.id DESC LIMIT ?`)
+            .all(schedule, limit) as unknown as ScheduleRun[]
     }
 
-    /** The last firing of every schedule, by name. */
-    lastScheduleRuns(): Map<string, ScheduleRun> {
+    /** The last firing of every schedule, by name; with `withTask`, the last one that queued a task. */
+    lastScheduleRuns(withTask = false): Map<string, ScheduleRun> {
+        const filter = withTask ? 'AND task_id IS NOT NULL' : ''
         const rows = this.db
-            .prepare('SELECT r.* FROM schedule_runs r WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule)')
+            .prepare(`SELECT ${SCHEDULE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`)
             .all() as unknown as ScheduleRun[]
         return new Map(rows.map((r) => [r.schedule, r]))
     }
 
+    /** Every schedule name the store remembers (runs or seen items), for cleaning up after a deleted file. */
+    scheduleNames(): string[] {
+        return (this.db.prepare('SELECT schedule FROM schedule_runs UNION SELECT schedule FROM seen_items').all() as Array<{ schedule: string }>).map((r) => r.schedule)
+    }
+
+    /**
+     * Earlier versions of an item whose key changes with the item (`<id>@<change time>`,
+     * `<pr>@<head sha>`): the schedule handed `<base>@…` over before, so the
+     * item is back because it changed — maybe by the agent's own doing.
+     */
+    seenVariants(schedule: string, base: string): Array<{ key: string; first_seen: string; task_id: string | null }> {
+        const escaped = base.replace(/[\\%_]/g, (c) => `\\${c}`)
+        return this.db
+            .prepare("SELECT key, first_seen, task_id FROM seen_items WHERE schedule = ? AND key LIKE ? ESCAPE '\\' ORDER BY first_seen DESC")
+            .all(schedule, `${escaped}@%`) as Array<{ key: string; first_seen: string; task_id: string | null }>
+    }
     /** Of the given keys, the ones the schedule already handed to a task (or seeded). */
     seenKeys(schedule: string, keys: string[]): Set<string> {
         const seen = new Set<string>()
@@ -605,10 +639,11 @@ export class Store {
         return Number(this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule).changes)
     }
 
-    /** A schedule was deleted or renamed: its runs and seen items go with it. */
+    /** A schedule was deleted or renamed: its runs, seen items and marks go with it. */
     dropSchedule(schedule: string): void {
         this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule)
         this.db.prepare('DELETE FROM schedule_runs WHERE schedule = ?').run(schedule)
+        this.db.prepare('DELETE FROM meta WHERE key LIKE ?').run(`schedule:${schedule}:%`)
     }
 
     // ---- telegram topics --------------------------------------------------
