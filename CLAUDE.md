@@ -55,7 +55,15 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     `event` for Telegram delivery and SSE
   - `claude/runner.ts` spawns `claude -p --output-format stream-json`, surfaces text / tool_use /
     tool_result blocks and the final `result`
-  - `bot.ts` grammY bot (text + voice), `stt/groq.ts` Whisper, `telegram/format.ts` Markdown → HTML
+  - `bot.ts` grammY bot (text + voice), `stt/groq.ts` Whisper, `telegram/format.ts` Markdown → HTML.
+    **Topics** (2026-10-01): a chat talks to one conversation at a time (`telegram_chats`,
+    migration v10): its own by default, or any conversation the owner switched to by replying
+    to a message of the bot (a schedule's report, a question, an ack; `telegram_messages`
+    remembers which conversation and task every sent message belongs to, 180 days). The
+    switch sticks until the next reply elsewhere or `/new [project]`, which also resets it;
+    `/status` names the current one. A Telegram task in a web conversation (a schedule's
+    thread) reports back to the chat whose topic it is. A question from a task that is not
+    the chat's topic says "reply to this message with your answer"
   - `files/catalog.ts` agents / skills / projects / schedules as Markdown+frontmatter; `files/hosts.ts` the
     shared SSH hosts (`data/config/hosts.yaml`, see below); `sessions/transcripts.ts`
     indexes Claude Code JSONL; `presets/`
@@ -74,7 +82,27 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     `status` is not a file name); the file itself goes through the generic
     `/api/schedules/:name`. The bot delivers a `cron` task's report and questions to the
     owner's chat (first allowed id) unless `notify: none`, tells about a failed prefilter once
-    per distinct error, and has `/schedules` and `/run <name>`. The dispatcher rules
+    per distinct error, and has `/schedules` and `/run <name>`. **Review pass 2026-10-01**
+    (committed 2026-10-01): the ticker sweeps every minute since its last look (`schedules:last_tick`
+    in `meta`, so a restart knows too): a firing the factory slept through runs late within
+    `SCHEDULES_LATE_MIN` (default 5), an older one is a run row with status `missed` (one row
+    per sweep, told in Telegram, never caught up: the owner's call, a laptop host). The
+    first-run seeding is remembered in `meta` (`schedule:<name>:seeded`), so "Forget seen
+    items" really hands everything over next time. An item whose key changed since an earlier
+    handover (`id@changetime`, `pr@sha`) is marked `seen_before` (prompt: "seen before,
+    changed since", maybe by the agent's own comment or push; Preview badges it `changed`).
+    `once: true` switches the file off after queueing its task. A `cron` task's ask is answered
+    for the owner after `SCHEDULES_ASK_TIMEOUT_MIN` (default 120; permission → deny, question
+    → "no answer, decide by the instructions"), and a firing skipped because the previous run
+    still waits is told once per task. `schedule_runs` carry the task's status (`task_status`,
+    LEFT JOIN) and keep the last 1000 rows per schedule; `/:name/runs` returns only the
+    firings that mattered (task, error, missed) unless `all=1`; the view has `last_task`
+    besides `last_run`. Runs and seen items of a file that no longer exists are dropped at
+    start. `/api/status` `stats.schedules` (`total`, `on`, `invalid`, `failing`, `missed`,
+    `next`) feeds the Overview Health line and an amber count on the sidebar's Schedules item.
+    The file routes refuse a save whose `updated_at` is older than the file (409, "changed
+    on disk"): the editor sends the version it opened and offers "Reload from disk", since
+    the agent edits a schedule's notes every run. The dispatcher rules
     (`templates/claude/CLAUDE.md`) tell the agent what a "Scheduled run" prompt is and that
     its memory is the file's body, never the frontmatter. The form asks for one cron field only
     (2026-09-30, owner's call): `GET /api/schedules/cron?expr=` reads it back in words with the next
@@ -114,7 +142,18 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   conversation row (a `done` / `failed` task finished after `read_at`); `/api/status` `stats`
   carries `chat_unread` / `chat_active`. The sidebar's Chat item shows a green count while
   something is unread (blue count while a task runs), the tab title gets `(N)`, the Chat list
-  draws a green stripe + dot. The open thread posts `/read` when it loads, when a reply lands
+  draws a green stripe + dot. **Tab signals** (2026-10-01): the favicon carries the same badge as
+  the Chat item (`lib/favicon.ts`, canvas over the PNG icon: a count on green / amber, a blue dot while running;
+  visible on a pinned tab where the title is not), and a bell in the sidebar foot opts into
+  desktop notifications (`lib/notify.ts`, Web Notifications API, permission asked on the
+  click, choice in `localStorage` `pf.notify`; one notification per rise of the unread / waiting
+  count, only while the tab is hidden, `tag` so they replace instead of stacking; the notification
+  is titled with the thread it is about and a click focuses the tab and opens that thread,
+  `/api/status` `stats.chat_unread_latest` / `chat_needs_reply_latest` name it (2026-10-01); the API exists only on https or localhost, so the bell is disabled
+  elsewhere). No blinking title: background tabs throttle timers and it reads as an alarm.
+  External links in rendered Markdown open in a new tab (`rel="noopener noreferrer"`, set in a
+  DOMPurify hook since `target` is not in its default attribute list); links into the factory
+  stay in this tab. The open thread posts `/read` when it loads, when a reply lands
   and when the tab becomes visible again (a reply that arrives in a hidden tab stays unread);
   the bot marks a conversation read once its reply is delivered to Telegram, so a failed
   delivery keeps it lit. **Questions and permissions** (2026-09-30): the runner speaks
@@ -141,6 +180,12 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   **Drafts**: an unsent message is kept in `localStorage` per conversation
   (`lib/drafts.ts`, `pf.chat.draft.<id>`), restored with the caret at its end when the
   thread reopens, removed on send or delete
+- **Brand** (2026-10-01): the logo is `docs/brand/logo.png` (ChatGPT's render, the only source; no
+  hand-drawn SVG). `web/public/` holds the cuts made from it with Pillow (`favicon-32`, `icon-64` for
+  the badge, `icon-192` for the sidebar and notifications, `icon-512`, `apple-touch-icon` on an opaque
+  ink square since iOS paints transparent corners black, `icon-maskable-512` with the tile in the 80 %
+  safe zone) and `manifest.webmanifest`, so the UI installs as a PWA from the phone's "Add to Home
+  Screen"; `index.html` carries the icon, manifest, theme-color and apple-mobile-web-app tags
 - `templates/claude/` — seeded into `data/claude/` on **every** container start with `cp -n`: new
   files appear, edited files are never overwritten. On the host, copy by hand the same way.
   Prose in agent / skill / project Markdown is not hard-wrapped (one line per paragraph or
@@ -260,12 +305,33 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   only ever reported the connector's tools, and the `.mcp.json` entry adds nothing.
 - Token hygiene: `Explore` is overridden in `templates/claude/agents/Explore.md` with `model:
   haiku`; agents carry `maxTurns`, read-only ones `effort: medium`, `devops-engineer` also
-  `omitClaudeMd`. The dispatcher suggests `/new` after a finished task.
+  `omitClaudeMd`. The dispatcher suggests `/new` after a finished task. **Budget rules**
+  (2026-10-01, from the audit log of the first `pr-review` runs: a sub-agent's cost is its
+  turn count times its growing context, ~95 % of recorded tokens are cache reads, and the
+  orchestrator re-read what the reviewer had cited): `pr-reviewer` has `maxTurns: 40`, every
+  reviewer / triager / email sub-agent `omitClaudeMd: true` and a "Budget" section (group reads
+  into one Bash call, read a region once, never build / test / worktree in the PR reviewer since
+  the factory has no toolchains); the `pr-review` skill saves the diff to a file and passes the
+  path, one reviewer per PR started together, posts the findings without reopening the files;
+  the dispatcher rules say the same for every task (bulky input by path, a sub-agent's report
+  is the result, sub-agents only for multi-step work). Reviewer `effort` stays default on
+  purpose: the verification pass is where quality comes from.
 - GitHub auth = fine-grained PATs, never mounted SSH keys. One per repository owner:
   `GH_TOKEN_<OWNER>` (login upper-cased, `-` → `_`), `GH_TOKEN` as the fallback. In the image
   `docker/gh` (a wrapper ahead of the real `gh` on PATH) and `docker/git-credential-owner`
   resolve the owner from the checkout's `origin` / the URL and call `docker/gh-token`.
-- Default model `sonnet`; cheaper models only for mechanical sub-agents later.
+- **The orchestrator's model is a run-time setting, not `.env`** (2026-10-01, owner's call:
+  `CLAUDE_MODEL` removed from `.env` / `.env.example`): one CLI alias for the whole factory in
+  `meta` (`claude.model`, `supervisor/src/claude/models.ts`: `sonnet` / `opus` / `haiku` /
+  `fable`, default `sonnet`), set from Telegram `/model <alias>` or Settings → Claude Code →
+  Model (`PUT /api/settings/model`), shown by `/status` and `/api/status` `claude.model`. It
+  applies to the next task in every conversation (each task is its own `claude -p`, a resume
+  with another model works); a running task keeps the one it started with. Sub-agents keep the
+  `model:` of their files, `inherit` follows the orchestrator (the owner sets reviewers to it
+  when running Fable). A schedule may pin `model:` in its frontmatter (form field after Agent,
+  `inherit` = empty = the factory's current one; `tasks.model`, migration v11, records it on the
+  queued task). The probe for limits stays on `haiku`. Cheaper models only for mechanical
+  sub-agents.
 - Agents, skills and projects live only in `data/` (gitignored); `templates/` and `presets/` are the
   install-time seed. There is no config git history any more: what an agent did, including edits
   to its own files or to a repository, is the Audit log (built live from stream-json, never from
@@ -342,7 +408,7 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
 ## Status (2026-09-29, review pass)
 
 Phases 0–4 of the spec are implemented and the container runs with the web UI (see git log for
-the history up to the evening of 2026-09-28). Since then, uncommitted at the time of writing:
+the history up to the evening of 2026-09-28). Since then (all committed by 2026-10-01):
 
 - Review pass 2026-09-29 (three reviewers + landscape survey, `docs/LANDSCAPE.md`): orphaned /
   interrupted tasks re-queued once and resumed (migration v6 `restarts`); Origin check in both auth
@@ -397,15 +463,22 @@ Not done / next:
    Telegram. Connectors also close the Trac gap (ferret) and give UserManagement ClickUp without
    a `.mcp.json`. A project form section for extra MCP servers was dropped: projects inherit
    their checkout's `.mcp.json`, roles own theirs in the agent form.
-5. ~~Phase 5: schedules + prefilters~~ — implemented 2026-09-30 (uncommitted): schedule files,
+5. ~~Phase 5: schedules + prefilters~~ — implemented 2026-09-30: schedule files,
    scheduler, `command` / `github-prs` / `trac` prefilters, soft-stop, Schedules page, Telegram
    `/schedules` `/run`. Verified on the host through the API (create, validate, preview, toggle,
-   run now → task queued → run row + task linked); the CLI itself is not logged in from `yarn dev`
-   on macOS, so the first real end-to-end run is `docker compose up -d --build` and Run now from
-   the UI. Still needed: Trac credentials in `.env` (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or
-   `TRAC_COOKIE`; whether the server wants the `/login` path is unverified), the owner's answers
-   on PR scope (review requests only vs every open PR) and mail cadence; an IMAP prefilter for
-   mail; `/api/status` stats for schedules on the Overview.
+   run now → task queued → run row + task linked); `inbox-morning` ran twice from Run now in the
+   container (2026-09-30 / 10-01). Review pass 2026-10-01 (see `schedules/` above): missed
+   firings, seeding mark, changed items, `once`, ask timeout, task status in the history,
+   Overview / sidebar, save conflicts, Telegram topics. Same day, after the owner's first
+   `pr-review` runs: a task's tokens are the sum of its `llm` events when that exceeds the CLI's
+   `result` (which counts the orchestrator only, and only its last turn when sub-agents ran in
+   the background: 95k recorded vs 3.6M real), duration is wall-clock; `detectProject` reads
+   `owner/name` as the repository and prefers a name with a project file (`--repo
+   ServicePattern/UserManagement` used to bind the chat to the `ServicePattern` folder).
+   Still needed: Trac credentials in `.env`
+   (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`; whether the server wants the
+   `/login` path is unverified), the owner's answers on PR scope (review requests only vs every
+   open PR) and mail cadence; an IMAP prefilter for mail.
 6. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram;
    README for forkers.
 7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
