@@ -173,6 +173,7 @@ export function HostDialog({
     title,
     initial,
     editing,
+    taken = [],
     keys,
     project,
     onClose,
@@ -183,6 +184,8 @@ export function HostDialog({
     initial?: Partial<SharedHost>
     /** The saved name of the host being edited; absent when creating. */
     editing?: string
+    /** Names of the shared hosts that exist: a new host may not take one (it would replace that host's connection in every project). */
+    taken?: string[]
     keys: SshKeys | undefined
     /** Present = moving an inline host: the project's path and notes come along and stay with the project. */
     project?: { path?: string; notes?: string }
@@ -204,19 +207,26 @@ export function HostDialog({
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open])
+    // A new host, or an edit renamed onto another host's name: refused here and by the server alike.
+    const nameTaken = taken.includes(host.name.trim()) && host.name.trim() !== editing
     const save = async () => {
         const name = host.name.trim()
         if (!name || !host.ssh.trim()) {
             setError('a name and an SSH target are required')
             return
         }
+        if (nameTaken) return
         setBusy(true)
         try {
-            const saved = await api.saveHost(editing ?? name, {
-                name,
-                ssh: host.ssh,
-                key: host.key
-            })
+            const saved = await api.saveHost(
+                editing ?? name,
+                {
+                    name,
+                    ssh: host.ssh,
+                    key: host.key
+                },
+                !editing
+            )
             setError(null)
             onSaved(saved, {
                 path: own.path.trim() || undefined,
@@ -251,7 +261,7 @@ export function HostDialog({
                     <Button onClick={onClose} disabled={busy}>
                         Cancel
                     </Button>
-                    <Button variant="primary" onClick={save} disabled={busy || !host.name.trim() || !host.ssh.trim()}>
+                    <Button variant="primary" onClick={save} disabled={busy || !host.name.trim() || !host.ssh.trim() || nameTaken}>
                         {busy ? 'Saving…' : editing ? 'Save' : 'Save host'}
                     </Button>
                 </>
@@ -259,6 +269,7 @@ export function HostDialog({
         >
             <div className="stack">
                 <HostFields value={host} onChange={(patch) => setHost((h) => ({ ...h, ...patch }))} keys={keys} autoFocus compact />
+                {nameTaken && <div className="error small">{`A shared host named "${host.name.trim()}" already exists — pick another name, or open that host from Settings → Hosts to edit it.`}</div>}
                 {project && (
                     <div className="host-card compact">
                         <div className="wide dim small">Stays with this project:</div>
@@ -381,6 +392,7 @@ export function HostsSection() {
                 title={dialog?.editing ? `Edit host ${dialog.editing.name}` : 'New shared host'}
                 initial={dialog?.editing}
                 editing={dialog?.editing?.name}
+                taken={(overview?.hosts ?? []).filter((h) => h.ssh).map((h) => h.name)}
                 keys={keys.data}
                 onClose={() => setDialog(null)}
                 onSaved={() => {
@@ -491,6 +503,7 @@ export function ProjectHosts({
                 open={dialog !== null}
                 title={dialog?.index === null ? 'New shared host' : 'Move host to the shared list'}
                 initial={dialog?.initial}
+                taken={(shared?.hosts ?? []).filter((h) => h.ssh).map((h) => h.name)}
                 keys={keys}
                 project={dialog?.project}
                 onClose={() => setDialog(null)}

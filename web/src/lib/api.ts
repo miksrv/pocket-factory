@@ -509,8 +509,9 @@ export const api = {
         request<{ file: string }>('/hosts/trust', { method: 'POST', body: JSON.stringify({ ...targetBody(target), lines, replace }) }),
     /** The shared hosts with the projects using each, plus hosts still written inside project files. */
     hosts: () => request<HostsOverview>('/hosts'),
-    /** Create or update a shared host; a different `name` in the body renames it and the projects follow. */
-    saveHost: (name: string, host: Omit<SharedHost, 'name'> & { name?: string }) => request<HostView>(`/hosts/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(host) }),
+    /** Create or update a shared host; a different `name` in the body renames it and the projects follow. `create` refuses to replace an existing name (409). */
+    saveHost: (name: string, host: Omit<SharedHost, 'name'> & { name?: string }, create = false) =>
+        request<HostView>(`/hosts/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(host) }),
     /** Remove a shared host; `detach` also drops it from the projects that use it (refused otherwise). */
     deleteHost: (name: string, detach = false) => request<void>(`/hosts/${encodeURIComponent(name)}${detach ? '?detach=1' : ''}`, { method: 'DELETE' }),
 

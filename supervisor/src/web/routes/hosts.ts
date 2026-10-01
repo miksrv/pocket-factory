@@ -90,7 +90,11 @@ export function hostRoutes(): Hono<Env> {
     /** The shared hosts with the projects that use each, plus hosts still written inside project files. */
     app.get('/', (c) => c.json(c.get('app').hosts.list()))
 
-    /** Create or update a shared host; a different `name` in the body renames it and the projects follow. */
+    /**
+     * Create or update a shared host; a different `name` in the body renames it
+     * and the projects follow. With `?create=1` the request is a new host and
+     * must not replace one of that name (same guard as the file routes).
+     */
     app.put('/:name', async (c) => {
         const { hosts } = c.get('app')
         const body = (await c.req.json().catch(() => null)) as { name?: unknown; ssh?: unknown; key?: unknown } | null
@@ -99,6 +103,7 @@ export function hostRoutes(): Hono<Env> {
             if (body[field] !== undefined && body[field] !== null && typeof body[field] !== 'string') return c.json({ error: `${field} must be a string` }, 400)
         }
         const before = hosts.get(c.req.param('name'))
+        if (before && c.req.query('create')) return c.json({ error: `a host named "${before.name}" already exists — open it from the list to edit it` }, 409)
         try {
             const saved = hosts.save(c.req.param('name'), { name: body.name as string | undefined, ssh: body.ssh, key: (body.key as string) || undefined })
             if (before && before.ssh.trim() !== saved.ssh) await forgetIfUnused(hosts, c.get('app').knownHosts, before.ssh)
