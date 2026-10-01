@@ -32,8 +32,8 @@ export interface EditorProps {
 }
 
 const MODES = [
-    { value: 'edit', label: 'Edit' },
-    { value: 'preview', label: 'Preview' }
+    { value: 'preview', label: 'Preview' },
+    { value: 'edit', label: 'Edit' }
 ] as const
 
 /**
@@ -170,7 +170,9 @@ function Form({
     const [name, setName] = useState(entry?.name ?? '')
     const [fm, setFm] = useState<Record<string, unknown>>(entry?.frontmatter ?? defaults)
     const [body, setBody] = useState(entry?.body ?? template)
-    const [mode, setMode] = useState<'edit' | 'preview'>('edit')
+    // An existing file opens to be read, a new one to be written.
+    const [mode, setMode] = useState<'edit' | 'preview'>(entry ? 'preview' : 'edit')
+    const focusBody = useRef(false)
     const [error, setError] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const confirm = useConfirm()
@@ -203,6 +205,12 @@ function Form({
     useLayoutEffect(() => {
         const el = textarea.current
         if (!el) return
+        if (focusBody.current) {
+            // From a double-click on the preview: the caret goes to the end, the pane stays where it was.
+            focusBody.current = false
+            el.focus({ preventScroll: true })
+            el.setSelectionRange(el.value.length, el.value.length)
+        }
         el.style.height = 'auto'
         el.style.height = `${el.scrollHeight + 2}px`
     }, [body, mode])
@@ -318,7 +326,16 @@ function Form({
                 {mode === 'edit' ? (
                     <textarea ref={textarea} className="mono body" value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={onBodyKey} spellCheck={false} />
                 ) : (
-                    <Markdown className="preview" source={body} document />
+                    <div
+                        className="preview-wrap"
+                        title="Double-click to edit"
+                        onDoubleClick={() => {
+                            focusBody.current = true
+                            setMode('edit')
+                        }}
+                    >
+                        {body.trim() ? <Markdown className="preview" source={body} document /> : <div className="md preview dim">Empty. Double-click to write.</div>}
+                    </div>
                 )}
             </div>
         </div>
