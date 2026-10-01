@@ -200,11 +200,5 @@ class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, 
 }
 
 function Logo() {
-    return (
-        <span className="tile">
-            <svg viewBox="0 0 100 100" aria-hidden>
-                <path d="M18 78V38l18-12v16l18-12v16l18-12v44H18z" fill="#fff" />
-            </svg>
-        </span>
-    )
+    return <img className="logo" src="/icon-192.png" alt="" width={30} height={30} />
 }
