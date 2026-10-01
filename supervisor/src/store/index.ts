@@ -171,6 +171,14 @@ export interface TaskStats {
     chat_active: number
 }
 
+    /** The conversation whose reply landed last / whose question opened last: where a notification click should land. */
+    chat_unread_latest: ChatRef | null
+    chat_needs_reply_latest: ChatRef | null
+}
+
+export interface ChatRef {
+    id: string
+    title: string | null
 /**
  * One firing of a schedule: what the scheduler decided at that minute.
  * `queued` = a task was created (`task_id`), `empty` = the prefilter found
@@ -523,6 +531,21 @@ export class Store {
             chat_active: chat.chat_active,
             tokens_today: row.tokens_today ?? 0,
             tokens_total: row.tokens_total ?? 0
+        // The newest conversation in each state, so a notification can open the right thread.
+        const unreadLatest = this.db
+            .prepare(
+                `SELECT c.id, c.title FROM conversations c WHERE c.deleted_at IS NULL AND ${UNREAD}
+                 ORDER BY (SELECT MAX(t.finished_at) FROM tasks t WHERE t.conversation_id = c.id AND t.status IN ('done', 'failed')) DESC
+                 LIMIT 1`
+            )
+            .get() as ChatRef | undefined
+        const askLatest = this.db
+            .prepare(
+                `SELECT c.id, c.title FROM conversations c WHERE c.deleted_at IS NULL AND ${NEEDS_REPLY}
+                 ORDER BY (SELECT MAX(t.created_at) FROM tasks t WHERE t.conversation_id = c.id AND t.status = 'running' AND t.ask IS NOT NULL) DESC
+                 LIMIT 1`
+            )
+            .get() as ChatRef | undefined
         }
     }
 
@@ -531,6 +554,8 @@ export class Store {
     /** The task of a schedule that is still queued or running, if any (one run at a time per schedule). */
     activeScheduleTask(schedule: string): Task | undefined {
         const row = this.db
+            chat_unread_latest: unreadLatest ?? null,
+            chat_needs_reply_latest: askLatest ?? null,
             .prepare(`SELECT * FROM tasks WHERE schedule = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`)
             .get(schedule) as TaskRow | undefined
         return row && taskOf(row)

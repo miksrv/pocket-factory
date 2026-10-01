@@ -1,4 +1,4 @@
-import { Activity, Bot, CalendarClock, ClipboardList, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, MessageSquare, Package, Send, Server, Settings, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
+import { Activity, Bell, BellOff, Bot, CalendarClock, ClipboardList, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, MessageSquare, Package, Send, Server, Settings, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
 
 /**
  * One icon per concept, used by the sidebar, tiles and card heads alike so
@@ -30,6 +30,9 @@ export const ICONS = {
     warning: TriangleAlert,
     close: X,
     key: KeyRound,
+    /** The sidebar's switch for desktop notifications. */
+    bell: Bell,
+    bellOff: BellOff,
     host: Server
 } satisfies Record<string, LucideIcon>
 

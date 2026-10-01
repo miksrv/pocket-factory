@@ -148,6 +148,9 @@ export interface Stats {
     chat_needs_reply: number
     /** Queued or running tasks of conversations in the Chat list. */
     chat_active: number
+    /** The newest conversation in each state: where a notification click lands. */
+    chat_unread_latest: { id: string; title: string | null } | null
+    chat_needs_reply_latest: { id: string; title: string | null } | null
 }
 
 export interface RateLimitWindow {

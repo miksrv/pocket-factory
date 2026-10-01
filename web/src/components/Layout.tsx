@@ -1,7 +1,9 @@
 import { Component, type ErrorInfo, type ReactNode, useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { api } from '../lib/api'
+import { setFaviconBadge } from '../lib/favicon'
+import { notificationsBlocked, notificationsEnabled, notificationsSupported, notify, toggleNotifications } from '../lib/notify'
 import { useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { Icon, type IconName } from './Icon'
@@ -49,11 +51,11 @@ export function Layout() {
     // replies not seen yet, then questions waiting for an answer, then work in progress.
     const chatBadge =
         unread > 0
-            ? { kind: 'unread', count: unread, title: `${unread} unread` }
+            ? { kind: 'unread' as const, count: unread, title: `${unread} unread` }
             : needsReply > 0
-              ? { kind: 'ask', count: needsReply, title: `${needsReply} waiting for your answer` }
+              ? { kind: 'ask' as const, count: needsReply, title: `${needsReply} waiting for your answer` }
               : chatActive > 0
-                ? { kind: 'running', count: chatActive, title: `${chatActive} working` }
+                ? { kind: 'running' as const, count: chatActive, title: `${chatActive} working` }
                 : null
 
     // A page that changed what the badges show (the Chat marking a thread read) asks for a fresh reading at once.
@@ -62,12 +64,50 @@ export function Layout() {
         return () => window.removeEventListener(STATUS_CHANGED, status.reload)
     }, [status.reload])
 
-    // The browser tab counts unread replies too: that is where the owner looks when the app is in another tab.
+    // The browser tab tells too: that is where the owner looks when the app is in another tab.
+    // The title counts unread replies (truncated once many tabs are open), the icon carries the
+    // same badge as the Chat item (visible even on a pinned tab).
     useEffect(() => {
         document.title = unread > 0 ? `(${unread}) Pocket Factory` : 'Pocket Factory'
     }, [unread])
     const [collapsed, setCollapsed] = useState(readCollapsed)
     const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === 'open') // mobile drawer
+    useEffect(() => {
+        setFaviconBadge(chatBadge ? (chatBadge.kind === 'running' ? { kind: 'running' } : { kind: chatBadge.kind, count: chatBadge.count }) : null)
+    }, [chatBadge?.kind, chatBadge?.count]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // A desktop notification when a reply lands or a question opens while the tab is hidden
+    // (notify() does nothing while it is visible). Only on a rise: a count that stays is old news.
+    const navigate = useNavigate()
+    const seen = useRef<{ unread: number; ask: number } | null>(null)
+    useEffect(() => {
+        if (!status.data) return
+        const prev = seen.current
+        seen.current = { unread, ask: needsReply }
+        if (!prev) return // the first reading after a load is not news
+        // Titled with the thread it is about and opening it on click; the others, if any, are one line in the body.
+        const { chat_unread_latest: unreadLatest, chat_needs_reply_latest: askLatest } = status.data.stats
+        if (unread > prev.unread) {
+            const more = unread > 1 ? ` · ${unread - 1} more unread` : ''
+            notify(unreadLatest?.title ?? 'Pocket Factory', `A task finished — reply to read${more}`, 'pf-unread', () =>
+                navigate(unreadLatest ? `/chat/${unreadLatest.id}` : '/chat')
+            )
+        }
+        if (needsReply > prev.ask) {
+            const more = needsReply > 1 ? ` · ${needsReply - 1} more waiting` : ''
+            notify(askLatest?.title ?? 'Pocket Factory', `A task is waiting for your answer${more}`, 'pf-ask', () =>
+                navigate(askLatest ? `/chat/${askLatest.id}` : '/chat')
+            )
+        }
+    }, [status.data, unread, needsReply, navigate])
+    const [notifyOn, setNotifyOn] = useState(notificationsEnabled)
+    const notifyTitle = !notificationsSupported
+        ? 'Desktop notifications need https (or localhost)'
+        : notificationsBlocked()
+          ? 'Notifications are blocked for this site in the browser'
+          : notifyOn
+            ? 'Desktop notifications on — click to turn off'
+            : 'Notify me when a task finishes while this tab is hidden'
     const location = useLocation()
     const { guard } = useLeaveGuard()
 
@@ -136,8 +176,21 @@ export function Layout() {
                     ))}
                 </nav>
                 <div className="foot">
-                    <div className={`live${live}`} title={liveText}>
-                        <span className="label">{liveText}</span>
+                    <div className="foot-row">
+                        <div className={`live${live}`} title={liveText}>
+                            <span className="label">{liveText}</span>
+                        </div>
+                        <Button
+                            variant="ghost"
+                            className={`notify-toggle${notifyOn ? ' on' : ''}`}
+                            title={notifyTitle}
+                            aria-label={notifyTitle}
+                            aria-pressed={notifyOn}
+                            disabled={!notificationsSupported || notificationsBlocked()}
+                            onClick={() => toggleNotifications().then(setNotifyOn)}
+                        >
+                            <Icon name={notifyOn ? 'bell' : 'bellOff'} size={14} />
+                        </Button>
                     </div>
                     <div className="label" style={{ marginTop: 4 }}>
                         {status.data?.claude.version ?? ''}

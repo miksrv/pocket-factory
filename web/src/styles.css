@@ -593,3 +593,10 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
     .modal-foot .btn { width: 100%; padding: 9px 12px; }
     .modal-foot-aside { margin-right: 0; }
 }
+
+/* Sidebar foot: the Live dot shares its row with the desktop-notifications switch, a bell that lights up when on. */
+.foot-row { display: flex; align-items: center; justify-content: space-between; margin: -3px 0; }
+.notify-toggle.btn { width: 22px; height: 22px; padding: 0; justify-content: center; color: var(--text-dim); }
+.notify-toggle.btn.on { color: var(--green); }
+.notify-toggle.btn:disabled { opacity: .45; cursor: default; }
+.app.collapsed .foot-row { flex-direction: column; gap: 6px; margin: 0; }
