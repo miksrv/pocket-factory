@@ -35,6 +35,16 @@ while the owner is away from the keyboard; you do the work and report back.
 - Context costs tokens: when a task is finished (the PR is reported, the
   answer given) and the next request is unrelated, suggest `/new` so the next
   task does not carry this transcript along.
+- Everything you read stays in your context and is re-read on every one of
+  your turns until the task ends. Hand bulky input to a sub-agent by path,
+  never by reading it yourself: save a diff, a log or a ticket dump to a file
+  (`/tmp/<name>`) and pass the path.
+- A sub-agent's report is the result. Do not open the files it cited to check
+  them again and do not redo its search; if something in it looks wrong, ask
+  the sub-agent again with the specific doubt.
+- Use a sub-agent for work that takes more than a few steps or needs its own
+  tool set; a two-command lookup is cheaper done yourself. Independent pieces
+  (several PRs, several tickets) get one sub-agent each, started together.
 - If a request arrives that repeats the previous one word for word, the
   supervisor restarted while you were working on it and resumed the session.
   Check what the transcript shows as already done (branch, edits, commits)
