@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 
 import { Hono } from 'hono'
 
+import { startOfDay } from '../../schedules/cron.js'
 import type { Env } from '../context.js'
 
 const run = promisify(execFile)
@@ -69,7 +70,7 @@ export function statusRoutes(): Hono<Env> {
             : []
         const [claude, gh, git] = await toolVersions()
         return c.json({
-            stats: store.stats(),
+            stats: store.stats(startOfDay(new Date(), config.timezone).toISOString()),
             running: tasks.runningTaskIds(),
             limits: tasks.limits() ?? null,
             claude: {

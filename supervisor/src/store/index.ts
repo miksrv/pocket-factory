@@ -487,23 +487,23 @@ export class Store {
         return { requeued: tasksOf(requeued), failed: tasksOf(failed) }
     }
 
-    stats(): TaskStats {
-        const today = new Date().toISOString().slice(0, 10)
+    /** `dayStart`: when "today" began (ISO), the owner's midnight, not UTC's. */
+    stats(dayStart: string): TaskStats {
         const row = this.db
             .prepare(
                 `SELECT
                     SUM(status = 'queued')  AS queued,
                     SUM(status = 'running') AS running,
-                    SUM(status = 'done'   AND substr(finished_at, 1, 10) = ?) AS done_today,
-                    SUM(status = 'failed' AND substr(finished_at, 1, 10) = ?) AS failed_today,
-                    SUM(CASE WHEN substr(created_at, 1, 10) = ? THEN tokens ELSE 0 END) AS tokens_today,
+                    SUM(status = 'done'   AND finished_at >= ?) AS done_today,
+                    SUM(status = 'failed' AND finished_at >= ?) AS failed_today,
+                    SUM(CASE WHEN created_at >= ? THEN tokens ELSE 0 END) AS tokens_today,
                     SUM(tokens) AS tokens_total
                  FROM (
                     SELECT *, input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens AS tokens
                     FROM tasks
                  )`
             )
-            .get(today, today, today) as Record<keyof TaskStats, number | null>
+            .get(dayStart, dayStart, dayStart) as Record<keyof TaskStats, number | null>
         const chat = this.db
             .prepare(
                 `SELECT

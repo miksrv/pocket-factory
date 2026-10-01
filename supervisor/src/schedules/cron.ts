@@ -128,6 +128,23 @@ export function localTime(date: Date, tz: string): LocalTime {
     }
 }
 
+/**
+ * The instant the local day of `date` began in `tz` (its midnight), for
+ * "today" counters. The zone's offset is read twice, so a day that starts
+ * on a DST change still lands on the right side of it.
+ */
+export function startOfDay(date: Date, tz: string): Date {
+    const wall = (ms: number) => {
+        const t = localTime(new Date(ms), tz)
+        const [y, m, d] = t.key.slice(0, 10).split('-').map(Number)
+        return Date.UTC(y, m - 1, d, t.hour, t.minute)
+    }
+    const offset = (ms: number) => wall(ms) - Math.floor(ms / 60_000) * 60_000
+    const [y, m, d] = localTime(date, tz).key.slice(0, 10).split('-').map(Number)
+    const midnight = Date.UTC(y, m - 1, d)
+    return new Date(midnight - offset(midnight - offset(midnight)))
+}
+
 function dayMatches(cron: Cron, t: LocalTime): boolean {
     if (!cron.month.has(t.month)) return false
     if (cron.domAny && cron.dowAny) return true
