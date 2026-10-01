@@ -320,6 +320,9 @@ input[list] { padding-right: 30px; background-image: var(--chevron); background-
 input[list]::-webkit-calendar-picker-indicator { opacity: 0; width: 16px; height: 16px; margin: 0 -22px 0 0; cursor: pointer; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--text-dim); box-shadow: 0 0 0 3px var(--surface-3); }
 input:disabled { background: var(--surface-2); color: var(--text-dim); }
+/* A control that says it is invalid (aria-invalid, set by the form's own check) is red, focused or not; the reason is the .error line under it. */
+[aria-invalid='true']:is(input, textarea, select) { border-color: var(--red); }
+[aria-invalid='true']:is(input, textarea, select):focus { border-color: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
 textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 /* A one-sentence field that may wrap: a couple of lines, not a whole editor. */
 textarea.short { min-height: 0; resize: none; overflow: hidden; }

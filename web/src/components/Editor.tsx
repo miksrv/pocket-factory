@@ -27,7 +27,7 @@ export interface EditorProps {
     newLabel?: string
     /** Rendered above the form for an existing entry: live state that is not in the file (a schedule's runs). */
     aside?: (entry: CatalogEntry) => ReactNode
-    /** Why the frontmatter must not be saved as it is (an invalid cron), or null; shown next to Save, which is disabled meanwhile. */
+    /** Why the frontmatter must not be saved as it is (an invalid cron), or null. The field itself shows the reason (aria-invalid + an .error line); the header shows only an Invalid badge with it as the tooltip, and Save is disabled meanwhile. */
     validate?: (fm: Record<string, unknown>) => string | null
 }
 
@@ -290,7 +290,7 @@ function Form({
                         </label>
                     )}
                 </div>
-                {invalid ? <span className="badge failed" title={invalid}>{invalid}</span> : <span className={`badge ${dirty ? 'queued' : 'done'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>}
+                {invalid ? <span className="badge failed" title={invalid}>Invalid</span> : <span className={`badge ${dirty ? 'queued' : 'done'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>}
                 <div className="toolbar">
                     {entry && (
                         <Button variant="danger" onClick={remove}>
