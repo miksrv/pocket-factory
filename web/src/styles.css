@@ -112,7 +112,7 @@ p { margin: 6px 0; }
 
 /* collapsed rail: icons only */
 .app.collapsed .sidebar { width: 58px; padding-left: 8px; padding-right: 8px; }
-.app.collapsed .label { display: none; }
+.app.collapsed .sidebar .label { display: none; }
 .app.collapsed .brand { padding: 6px 4px 18px; justify-content: center; }
 .app.collapsed .nav a { justify-content: center; padding: 8px 0; gap: 0; position: relative; }
 .app.collapsed .nav a .icon { width: auto; }
@@ -144,6 +144,9 @@ p { margin: 6px 0; }
 .live::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
 .live.off::before { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
 .live.warn::before { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-bg); }
+.live.idle::before { background: var(--text-dim); box-shadow: 0 0 0 3px var(--surface-3); }
+/* The dot alone in front of a line of text (a schedule's on / off in the list). */
+.live.state { margin: 0 9px 0 3px; vertical-align: 1px; }
 
 /* cards & tables */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
@@ -322,10 +325,19 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 textarea.short { min-height: 0; resize: none; overflow: hidden; }
 label.field, div.field.group { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-dim); }
 label.field > span:first-child, div.field.group > span:first-child { color: var(--text-2); }
+/* A checkbox with its caption in a flex row: the global 100 % input width would otherwise push the caption into a sliver. */
+label.row > input[type='checkbox'] { width: 15px; height: 15px; margin: 0; flex-shrink: 0; accent-color: var(--ink); }
+/* The schedule's live state above its form: the pane's flex column must not squeeze it under the growing textarea. */
+.schedule-status { flex-shrink: 0; }
+.schedule-status .stat .value .badge { vertical-align: middle; }
+/* The on / off badge leads the button row; a wider gap keeps it from reading as one of the buttons. */
+.schedule-status .state-gap { width: 8px; }
+/* Show runs scrolls inside the card on a desktop; on a phone the page scrolls as a whole (see the media query). */
+.schedule-runs { border-top: 1px solid var(--border); max-height: 320px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px 16px; align-items: start; }
 /* Label, control and hint line up across a row whatever their lengths (subgrid; older engines fall back to top alignment). */
-.form-grid > label.field { display: grid; grid-template-rows: subgrid; grid-row: span 3; gap: 4px; align-content: start; }
-.form-grid > label.field > span:first-child { align-self: end; }
+.form-grid > label.field, .form-grid > div.field.group { display: grid; grid-template-rows: subgrid; grid-row: span 3; gap: 4px; align-content: start; }
+.form-grid > label.field > span:first-child, .form-grid > div.field.group > span:first-child { align-self: end; }
 .form-grid > .field.wide { grid-column: 1 / -1; }
 .tool-picker { display: flex; flex-direction: column; gap: 8px; }
 /* Hosts: one card per server inside the project form. */
@@ -545,6 +557,7 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
     /* Nested scrolling leaves no room for rows on a phone: fill pages scroll as a whole here, like the editor. */
     .page.fill { height: auto; overflow: visible; padding-bottom: 40px; }
     .card-scroll { overflow: visible; }
+    .schedule-runs { max-height: none; }
     th, td { padding: 8px 10px; white-space: nowrap; }
     td.col-main, td.col-wrap { white-space: normal; }
     .card-foot { flex-direction: column; gap: 4px; }

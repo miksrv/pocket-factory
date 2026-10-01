@@ -26,7 +26,7 @@ export function TasksPage() {
 
     return (
         <div className="page fill">
-            <PageHead title="Tasks" sub="Every task from every channel — Telegram, web, later cron and webhooks." />
+            <PageHead title="Tasks" sub="Every task from every channel — Telegram, web, schedules." />
             <ErrorBox error={tasks.error} />
             <div className="card pad0">
                 <div className="audit-bar">
@@ -62,7 +62,13 @@ export function TasksPage() {
                                         </td>
                                         <td>{task.project ? <span className="badge plain">{task.project}</span> : <span className="dim">—</span>}</td>
                                         <td>
-                                            <span className="badge plain">{task.source}</span>
+                                            {task.schedule ? (
+                                                <Link to={`/schedules/${task.schedule}`} className="badge plain" title="Queued by this schedule">
+                                                    ⏱ {task.schedule}
+                                                </Link>
+                                            ) : (
+                                                <span className="badge plain">{task.source}</span>
+                                            )}
                                         </td>
                                         <td>{task.num_turns}</td>
                                         <td className="nowrap">{fmt.tokens(taskTokens(task))}</td>

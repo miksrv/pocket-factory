@@ -1,4 +1,4 @@
-import { Activity, Bot, ClipboardList, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, MessageSquare, Package, Send, Server, Settings, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
+import { Activity, Bot, CalendarClock, ClipboardList, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, MessageSquare, Package, Send, Server, Settings, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
 
 /**
  * One icon per concept, used by the sidebar, tiles and card heads alike so
@@ -17,6 +17,8 @@ export const ICONS = {
     skills: Zap,
     projects: FolderGit2,
     presets: Package,
+    /** Recurring tasks: a calendar with a clock, in the sidebar, the tile and the Chat list alike. */
+    schedules: CalendarClock,
     settings: Settings,
     control: Activity,
     limits: Gauge,
@@ -38,12 +40,12 @@ export function Icon({ name, size, className }: { name: IconName; size?: number;
     return <Component size={size} strokeWidth={1.75} className={className} aria-hidden />
 }
 
-/** Inline "icon + word" for a conversation's channel. */
-export function Channel({ channel }: { channel: 'telegram' | 'web' }) {
+/** Inline "icon + word" for a conversation's channel; a schedule's conversation says so instead of "web". */
+export function Channel({ channel, schedule }: { channel: 'telegram' | 'web'; schedule?: boolean }) {
     return (
         <span className="channel">
-            <Icon name={channel} size={12} />
-            {channel}
+            <Icon name={schedule ? 'schedules' : channel} size={12} />
+            {schedule ? 'schedule' : channel}
         </span>
     )
 }

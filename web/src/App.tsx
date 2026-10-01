@@ -9,6 +9,7 @@ import { ChatPage } from './pages/Chat'
 import { OverviewPage } from './pages/Overview'
 import { PresetsPage } from './pages/Presets'
 import { ProjectsPage } from './pages/Projects'
+import { SchedulesPage } from './pages/Schedules'
 import { SessionPage, SessionsPage } from './pages/Sessions'
 import { SettingsPage } from './pages/Settings'
 import { SkillsPage } from './pages/Skills'
@@ -39,6 +40,8 @@ export function App() {
                     <Route path="skills/:name" element={<SkillsPage />} />
                     <Route path="projects" element={<ProjectsPage />} />
                     <Route path="projects/:name" element={<ProjectsPage />} />
+                    <Route path="schedules" element={<SchedulesPage />} />
+                    <Route path="schedules/:name" element={<SchedulesPage />} />
                     <Route path="presets" element={<PresetsPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />

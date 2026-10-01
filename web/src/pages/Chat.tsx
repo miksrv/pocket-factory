@@ -72,7 +72,7 @@ export function ChatPage() {
                             <div className="grow">
                                 <div className="title" title={c.title ?? undefined}>{c.title ?? 'Untitled'}</div>
                                 <div className="desc">
-                                    <Channel channel={c.channel} />
+                                    <Channel channel={c.channel} schedule={Boolean(c.external_id?.startsWith('schedule:'))} />
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
                                 </div>
                             </div>
@@ -365,7 +365,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     <div>
                         <strong title={conversation?.title ?? undefined}>{conversation ? (conversation.title ?? 'New conversation') : '…'}</strong>
                         <div className="dim small row" style={{ gap: 6 }}>
-                            {conversation && <Channel channel={conversation.channel} />}
+                            {conversation && <Channel channel={conversation.channel} schedule={Boolean(conversation.external_id?.startsWith('schedule:'))} />}
                             <span>·</span>
                             <ProjectSelect value={conversation?.project ?? ''} onChange={rebind} projects={projects} disabled={!conversation || active} />
                             <span>· session {conversation?.session_id ? <Link to={`/sessions/${conversation.session_id}`}>{conversation.session_id.slice(0, 8)}</Link> : 'none yet'}</span>

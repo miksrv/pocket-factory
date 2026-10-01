@@ -51,6 +51,8 @@ export interface Task {
     restarts: number
     /** What the task waits for from the owner; null while nothing is pending. */
     ask: Ask | null
+    /** The schedule that queued the task; null for the owner's own tasks. */
+    schedule: string | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -189,7 +191,7 @@ export interface Status {
     workspaces: Array<{ name: string; git: boolean }>
 }
 
-export type Kind = 'agents' | 'skills' | 'projects'
+export type Kind = 'agents' | 'skills' | 'projects' | 'schedules'
 
 export interface CatalogEntry {
     kind: Kind
@@ -340,8 +342,10 @@ export type ProjectHost = HostRef | InlineHost
 
 export const isHostRef = (h: ProjectHost): h is HostRef => typeof (h as HostRef).host === 'string'
 
+/** A project or schedule file that refers to a shared host, with what it adds there. */
 export interface HostUsage {
     project: string
+    kind: 'project' | 'schedule'
     path?: string
     notes?: string
 }
@@ -389,6 +393,58 @@ export interface HostTest {
 }
 
 export type HostTarget = { ssh: string; key?: string } | { name: string }
+
+/** One firing of a schedule, as the scheduler recorded it. */
+export interface ScheduleRun {
+    id: number
+    schedule: string
+    fired_at: string
+    trigger: 'cron' | 'manual'
+    /** `queued`: a task was created; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: the prefilter failed. */
+    status: 'queued' | 'empty' | 'skipped' | 'error'
+    note: string | null
+    items: number
+    task_id: string | null
+    duration_ms: number
+}
+
+/** What the scheduler knows about a schedule file beyond its text. */
+export interface ScheduleView {
+    name: string
+    enabled: boolean
+    /** What stops it from firing (bad cron, unknown project, …). */
+    errors: string[]
+    warnings: string[]
+    cron: string | null
+    cron_text: string | null
+    tz: string | null
+    window: { days: number[] | null; hours: string | null } | null
+    project: string | null
+    prefilter: string | null
+    notify: 'telegram' | 'none' | null
+    session: 'fresh' | 'continue' | null
+    next_run: string | null
+    last_run: ScheduleRun | null
+    active_task: { id: string; status: TaskStatus; created_at: string } | null
+    conversation_id: string | null
+    /** Prefilter items handed over (or seeded) so far. */
+    seen: number
+}
+
+export type CronCheck = { ok: true; text: string; next: string | null; tz: string } | { ok: false; error: string; tz: string }
+
+export interface PrefilterItem {
+    key: string
+    title: string
+    text?: string
+    url?: string
+}
+
+export interface SchedulePreview {
+    items: PrefilterItem[]
+    new_keys: string[]
+    ms: number
+}
 
 export interface Preset {
     name: string
@@ -514,6 +570,18 @@ export const api = {
         request<HostView>(`/hosts/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(host) }),
     /** Remove a shared host; `detach` also drops it from the projects that use it (refused otherwise). */
     deleteHost: (name: string, detach = false) => request<void>(`/hosts/${encodeURIComponent(name)}${detach ? '?detach=1' : ''}`, { method: 'DELETE' }),
+
+    schedules: () => request<ScheduleView[]>('/schedules/status'),
+    /** A cron expression read back: valid or not, in words, next firing in the factory's zone. */
+    checkCron: (expr: string) => request<CronCheck>(`/schedules/cron?expr=${encodeURIComponent(expr)}`),
+    schedule: (name: string) => request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/status`),
+    scheduleRuns: (name: string, limit = 30) => request<ScheduleRun[]>(`/schedules/${encodeURIComponent(name)}/runs?limit=${limit}`),
+    /** Fire now: ignores the cron, the window and the soft-stop; never overlaps a run in progress. */
+    runSchedule: (name: string) => request<ScheduleRun>(`/schedules/${encodeURIComponent(name)}/run`, { method: 'POST' }),
+    /** Run the prefilter and show what it finds without marking anything. */
+    previewSchedule: (name: string) => request<SchedulePreview>(`/schedules/${encodeURIComponent(name)}/preview`, { method: 'POST' }),
+    enableSchedule: (name: string, enabled: boolean) => request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
+    forgetScheduleSeen: (name: string) => request<{ forgotten: number }>(`/schedules/${encodeURIComponent(name)}/seen`, { method: 'DELETE' }),
 
     presets: () => request<Preset[]>('/presets'),
     installPreset: (name: string, overwrite = false) =>

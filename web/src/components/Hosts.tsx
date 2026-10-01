@@ -176,6 +176,7 @@ export function HostDialog({
     taken = [],
     keys,
     project,
+    owner = 'project',
     onClose,
     onSaved
 }: {
@@ -189,6 +190,8 @@ export function HostDialog({
     keys: SshKeys | undefined
     /** Present = moving an inline host: the project's path and notes come along and stay with the project. */
     project?: { path?: string; notes?: string }
+    /** Whose form opened the dialog; wording only. */
+    owner?: 'project' | 'schedule'
     onClose: () => void
     onSaved: (host: HostView, project: { path?: string; notes?: string }) => void
 }) {
@@ -247,7 +250,7 @@ export function HostDialog({
             size="wide"
             description={
                 project
-                    ? 'The connection goes into the shared list (Settings → Hosts) and this project refers to it by name; the path and notes stay with the project.'
+                    ? `The connection goes into the shared list (Settings → Hosts) and this ${owner} refers to it by name; the path and notes stay with the ${owner}.`
                     : editing
                       ? 'The connection every project on this server uses. A new name renames it in those projects too.'
                       : 'The connection is saved to Settings → Hosts; any project can pick it and add its own path and notes.'
@@ -272,13 +275,13 @@ export function HostDialog({
                 {nameTaken && <div className="error small">{`A shared host named "${host.name.trim()}" already exists — pick another name, or open that host from Settings → Hosts to edit it.`}</div>}
                 {project && (
                     <div className="host-card compact">
-                        <div className="wide dim small">Stays with this project:</div>
+                        <div className="wide dim small">Stays with this {owner}:</div>
                         <label className="field">
-                            <span>Path for this project</span>
+                            <span>Path for this {owner}</span>
                             <input className="mono" placeholder="/srv/app" value={own.path} onChange={(e) => setOwn((o) => ({ ...o, path: e.target.value }))} />
                         </label>
                         <label className="field wide">
-                            <span>Notes for this project</span>
+                            <span>Notes for this {owner}</span>
                             <GrowingTextarea
                                 placeholder="what runs there for this project, how deploys work, where the logs are, what never to touch"
                                 value={own.notes}
@@ -342,9 +345,10 @@ export function HostsSection() {
                                 {h.key && <span className="badge plain">key {h.key}</span>}
                             </span>
                             <span className="host-projects">
-                                {h.projects.length === 0 && <span className="dim small">no project yet</span>}
+                                {h.projects.length === 0 && <span className="dim small">not used yet</span>}
                                 {h.projects.map((p) => (
-                                    <Link key={p.project} to={`/projects/${encodeURIComponent(p.project)}`} className="badge plain" title={p.path ? `path ${p.path}` : undefined}>
+                                    <Link key={`${p.kind}-${p.project}`} to={`/${p.kind === 'schedule' ? 'schedules' : 'projects'}/${encodeURIComponent(p.project)}`} className="badge plain" title={[p.kind === 'schedule' ? 'schedule' : 'project', p.path ? `path ${p.path}` : null].filter(Boolean).join(' · ')}>
+                                        {p.kind === 'schedule' ? '⏱ ' : ''}
                                         {p.project}
                                     </Link>
                                 ))}
@@ -417,13 +421,16 @@ export function ProjectHosts({
     onChange,
     shared,
     onSharedChanged,
-    keys
+    keys,
+    owner = 'project'
 }: {
     value: ProjectHost[]
     onChange: (next: ProjectHost[]) => void
     shared: HostsOverview | undefined
     onSharedChanged: () => void
     keys: SshKeys | undefined
+    /** Whose file the list belongs to: the wording says "this project" or "this schedule". */
+    owner?: 'project' | 'schedule'
 }) {
     const [dialog, setDialog] = useState<{
         index: number | null
@@ -438,8 +445,8 @@ export function ProjectHosts({
         <div className="field wide hosts">
             <div className="field-head">
                 <span>
-                    Hosts — servers this project runs on
-                    <span className="dim"> · the connection is shared across projects (Settings → Hosts); path and notes are this project's</span>
+                    Hosts — servers this {owner} {owner === 'project' ? 'runs' : 'works'} on
+                    <span className="dim"> · the connection is shared (Settings → Hosts); path and notes are this {owner}'s</span>
                 </span>
             </div>
             <select
@@ -465,6 +472,7 @@ export function ProjectHosts({
                 isHostRef(h) ? (
                     <SharedHostCard
                         key={`ref-${h.host}`}
+                        owner={owner}
                         entry={h}
                         host={shared?.hosts.find((s) => s.name === h.host)}
                         onChange={(patch) => update(i, { ...h, ...patch })}
@@ -505,6 +513,7 @@ export function ProjectHosts({
                 initial={dialog?.initial}
                 taken={(shared?.hosts ?? []).filter((h) => h.ssh).map((h) => h.name)}
                 keys={keys}
+                owner={owner}
                 project={dialog?.project}
                 onClose={() => setDialog(null)}
                 onSaved={(saved, own) => {
@@ -528,12 +537,14 @@ function SharedHostCard({
     entry,
     host,
     onChange,
-    onRemove
+    onRemove,
+    owner
 }: {
     entry: { host: string; path?: string; notes?: string }
     host: HostView | undefined
     onChange: (patch: { path?: string; notes?: string }) => void
     onRemove: () => void
+    owner: 'project' | 'schedule'
 }) {
     return (
         <div className="host-card shared">
@@ -555,13 +566,13 @@ function SharedHostCard({
                 </Link>
             </div>
             <label className="field wide">
-                <span>Path for this project</span>
+                <span>Path for this {owner}</span>
                 <input className="mono" placeholder="/srv/app" value={entry.path ?? ''} onChange={(e) => onChange({ path: e.target.value || undefined })} />
             </label>
             <label className="field wide">
-                <span>Notes for this project</span>
+                <span>Notes for this {owner}</span>
                 <GrowingTextarea
-                    placeholder="what runs there for this project, how deploys work, where the logs are, what never to touch"
+                    placeholder={`what runs there for this ${owner}, how deploys work, where the logs are, what never to touch`}
                     value={entry.notes ?? ''}
                     onChange={(e) => onChange({ notes: e.target.value || undefined })}
                 />

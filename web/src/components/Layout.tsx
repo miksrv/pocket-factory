@@ -17,6 +17,7 @@ const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }
     { to: '/agents', label: 'Agents', icon: 'agents', section: 'Factory' },
     { to: '/skills', label: 'Skills', icon: 'skills' },
     { to: '/projects', label: 'Projects', icon: 'projects' },
+    { to: '/schedules', label: 'Schedules', icon: 'schedules' },
     { to: '/presets', label: 'Presets', icon: 'presets' },
     { to: '/settings', label: 'Settings', icon: 'settings', section: 'System' }
 ]
