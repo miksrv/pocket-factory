@@ -4,6 +4,7 @@ import type { Config } from './config.js'
 import { createLogger } from './logger.js'
 import type { Ask, RateLimitSnapshot, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
+import type { Schedules } from './schedules/service.js'
 import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 
@@ -98,6 +99,14 @@ function resetsIn(iso: string): string {
     return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
+function resetsAgo(iso: string): string {
+    const ms = Date.now() - new Date(iso).getTime()
+    if (ms < 60_000) return 'just now'
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h ago`
+    return `${Math.floor(ms / 86_400_000)} d ago`
+}
+
 /** One line: how full the subscription windows are, e.g. "5h 12% · week 31%". */
 function limitsLine(limits: RateLimitSnapshot | undefined): string | null {
     if (!limits) return null
@@ -166,11 +175,19 @@ function askMessage(task: Task, ask: Ask): { key: string; text: string; keyboard
     return { key: `${ask.request_id}:${index}`, text: lines.join('\n'), keyboard }
 }
 
-export function createBot(config: Config, tasks: TaskService): Bot {
+export function createBot(config: Config, tasks: TaskService, schedules?: Schedules): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
 
     const conversationFor = (ctx: Context) => tasks.conversationFor('telegram', String(ctx.chat!.id))
+    // Where scheduled runs report and ask: the owner's private chat (a user's chat id is the user id).
+    const ownerChat = [...config.telegram.allowedUserIds][0]
+    /** The chat a task talks to: its own for a Telegram task, the owner's for a scheduled one, none otherwise. */
+    const chatFor = (task: Task): number | null => {
+        if (task.source === 'cron') return task.schedule && schedules?.spec(task.schedule)?.notify === 'none' ? null : ownerChat ?? null
+        const conversation = tasks.conversationOf(task)
+        return conversation?.channel === 'telegram' ? Number(conversation.external_id) || null : null
+    }
 
     // Whitelist: the bot fronts an agent with repository access, so it must
     // ignore everyone who is not the owner.
@@ -193,9 +210,32 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 '/project <name> — bind this chat to a project (its MCP servers, agents and rules apply)',
                 '/stop — cancel the running task',
                 '/status — what is going on',
-                '/usage — subscription limits (5-hour and weekly windows)'
+                '/usage — subscription limits (5-hour and weekly windows)',
+                '/schedules — recurring tasks and their last runs',
+                '/run <name> — fire a schedule now'
             ].join('\n')
         )
+    })
+
+    bot.command('schedules', async (ctx) => {
+        const list = schedules?.list() ?? []
+        if (!list.length) return void (await ctx.reply('No schedules yet — create one in the web UI (Schedules).'))
+        const lines = list.map((s) => {
+            const state = s.errors.length ? '⚠️ invalid' : s.enabled ? '🟢 on' : '⚪️ off'
+            const last = s.last_run ? `last ${s.last_run.status}${s.last_run.note ? ` (${s.last_run.note})` : ''} ${resetsAgo(s.last_run.fired_at)}` : 'never ran'
+            const next = s.next_run ? `next in ${resetsIn(s.next_run)}` : null
+            return `${state} ${s.name} — ${s.cron_text ?? s.cron ?? '?'}${s.project ? ` · ${s.project}` : ''}\n    ${[last, next].filter(Boolean).join(' · ')}`
+        })
+        await ctx.reply(lines.join('\n'))
+    })
+
+    bot.command('run', async (ctx) => {
+        const name = ctx.match.trim()
+        if (!schedules) return void (await ctx.reply('Schedules are not available.'))
+        if (!name) return void (await ctx.reply('Usage: /run <schedule name>'))
+        if (!schedules.get(name)) return void (await ctx.reply(`No schedule named "${name}". /schedules lists them.`))
+        const run = await schedules.fire(name, 'manual')
+        await ctx.reply(run.status === 'queued' ? `▶️ ${name}: task queued (${run.note}). The report comes here when it is done.` : `${name}: ${run.status}${run.note ? ` — ${run.note}` : ''}`)
     })
 
     // `/new` forgets the session; `/new <project>` also starts the next one inside that checkout.
@@ -375,9 +415,7 @@ export function createBot(config: Config, tasks: TaskService): Bot {
             for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— the task ended before an answer')
             return
         }
-        const conversation = tasks.conversationOf(task)
-        if (conversation?.channel !== 'telegram') return
-        const chatId = Number(conversation.external_id)
+        const chatId = chatFor(task)
         if (!chatId) return
         if (!task.ask) {
             // Answered from the web (the `answer` event settled it already) or withdrawn by the CLI.
@@ -409,10 +447,11 @@ export function createBot(config: Config, tasks: TaskService): Bot {
         }
     })
 
-    // Deliver results of Telegram-originated tasks back to their chat.
+    // Deliver results of Telegram-originated tasks back to their chat, and of
+    // scheduled runs to the owner (unless the schedule says notify: none).
     tasks.on('task', (task) => {
-        if (task.source !== 'telegram' || task.status === 'queued' || task.status === 'running') return
-        const chatId = Number(tasks.conversationOf(task)?.external_id)
+        if ((task.source !== 'telegram' && task.source !== 'cron') || task.status === 'queued' || task.status === 'running') return
+        const chatId = chatFor(task)
         if (!chatId) return
         const body =
             task.status === 'done'
@@ -420,10 +459,25 @@ export function createBot(config: Config, tasks: TaskService): Bot {
                 : task.status === 'cancelled'
                   ? '⏹ Stopped.'
                   : `❌ ${task.error || 'failed'}`
+        const head = task.schedule ? `⏱ **${task.schedule}**\n\n` : ''
         // Delivered = seen: the web's "unread" mark goes; a failed delivery keeps it, so the reply is not lost.
-        void sendMarkdown(bot, chatId, `${body}\n\n${footer(task, tasks.limits())}`)
+        void sendMarkdown(bot, chatId, `${head}${body}\n\n${footer(task, tasks.limits())}`)
             .then(() => tasks.markRead(task.conversation_id))
             .catch((error) => log.error(`delivery to chat ${chatId} failed`, error))
+    })
+
+    // A prefilter that breaks (credentials expired, a host down) would
+    // otherwise fail silently every hour: say so once per distinct error.
+    const lastError = new Map<string, string>()
+    schedules?.on('run', (run) => {
+        if (!ownerChat) return
+        if (run.status !== 'error') {
+            lastError.delete(run.schedule)
+            return
+        }
+        if (lastError.get(run.schedule) === run.note) return
+        lastError.set(run.schedule, run.note ?? '')
+        void sendMarkdown(bot, ownerChat, `⚠️ Schedule **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`).catch((error) => log.error('schedule error notice failed', error))
     })
 
     bot.catch((err) => {

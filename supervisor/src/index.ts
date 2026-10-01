@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     // Telegram is optional: without a token the factory is web-only (also
     // handy for a second dev instance next to the container, which would
     // otherwise fight over long polling).
-    const bot = config.telegram.botToken ? createBot(config, tasks) : null
+    const bot = config.telegram.botToken ? createBot(config, tasks, schedules) : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({
@@ -133,7 +133,9 @@ async function main(): Promise<void> {
             { command: 'project', description: 'Bind this chat to a project: /project <name>' },
             { command: 'stop', description: 'Cancel the running task' },
             { command: 'status', description: 'What is going on' },
-            { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' }
+            { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },
+            { command: 'schedules', description: 'Recurring tasks and their last runs' },
+            { command: 'run', description: 'Fire a schedule now: /run <name>' }
         ])
     } catch (error) {
         log.warn(`could not register Telegram commands: ${error instanceof Error ? error.message : error}`)
