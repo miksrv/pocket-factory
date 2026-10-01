@@ -19,12 +19,16 @@ export interface EditorProps {
     /** Default body for a new entry. */
     template: string
     bodyLabel?: string
-    describe?: (entry: CatalogEntry) => string
+    describe?: (entry: CatalogEntry) => ReactNode
     /** Where the page's back link goes (the agents grid, for instance). */
     backTo?: { to: string; label: string }
     /** What the empty form pane says before an entry is picked, and the label of its create button. */
     intro?: string
     newLabel?: string
+    /** Rendered above the form for an existing entry: live state that is not in the file (a schedule's runs). */
+    aside?: (entry: CatalogEntry) => ReactNode
+    /** Why the frontmatter must not be saved as it is (an invalid cron), or null; shown next to Save, which is disabled meanwhile. */
+    validate?: (fm: Record<string, unknown>) => string | null
 }
 
 const MODES = [
@@ -38,7 +42,7 @@ const MODES = [
  * The frontmatter form is kind-specific; the Markdown body is a plain
  * textarea — the same text the agent reads — with a preview.
  */
-export function Editor({ kind, title, sub, form, defaults, template, bodyLabel = 'Instructions (Markdown)', describe, backTo, intro = 'Select an entry or create a new one.', newLabel = 'New' }: EditorProps) {
+export function Editor({ kind, title, sub, form, defaults, template, bodyLabel = 'Instructions (Markdown)', describe, backTo, intro = 'Select an entry or create a new one.', newLabel = 'New', aside, validate }: EditorProps) {
     const { name } = useParams()
     const navigate = useNavigate()
     const list = useAsync(() => api.list(kind), [kind])
@@ -108,6 +112,8 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                         defaults={defaults}
                         template={template}
                         form={form}
+                        aside={aside}
+                        validate={validate}
                         bodyLabel={bodyLabel}
                         taken={names}
                         onDirty={setDirty}
@@ -139,6 +145,8 @@ function Form({
     defaults,
     template,
     form,
+    aside,
+    validate,
     bodyLabel,
     taken,
     onDirty,
@@ -150,6 +158,8 @@ function Form({
     defaults: Record<string, unknown>
     template: string
     form: EditorProps['form']
+    aside?: EditorProps['aside']
+    validate?: EditorProps['validate']
     bodyLabel: string
     /** Names that exist already: a new entry may not take one (the agent's file would be replaced). */
     taken: Set<string>
@@ -172,7 +182,8 @@ function Form({
     const dirty = entry ? body !== entry.body || !same(fm, entry.frontmatter) : Boolean(name.trim()) || body !== template || !same(fm, defaults)
     const trimmed = name.trim()
     const nameTaken = !entry && taken.has(trimmed)
-    const canSave = !busy && Boolean(trimmed) && !nameTaken && dirty
+    const invalid = validate?.(fm) ?? null
+    const canSave = !busy && Boolean(trimmed) && !nameTaken && !invalid && dirty
 
     useEffect(() => {
         onDirty(dirty)
@@ -279,7 +290,7 @@ function Form({
                         </label>
                     )}
                 </div>
-                <span className={`badge ${dirty ? 'queued' : 'done'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>
+                {invalid ? <span className="badge failed" title={invalid}>{invalid}</span> : <span className={`badge ${dirty ? 'queued' : 'done'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>}
                 <div className="toolbar">
                     {entry && (
                         <Button variant="danger" onClick={remove}>
@@ -293,6 +304,7 @@ function Form({
             </div>
             <div className="form-body">
                 <ErrorBox error={error ?? undefined} />
+                {entry && aside?.(entry)}
                 <div className="form-grid">{form(fm, (patch) => setFm((prev) => ({ ...prev, ...patch })))}</div>
                 <div className="field-head">
                     <div>
@@ -318,7 +330,7 @@ function Form({
  * a <label> around several inputs would forward every click on the caption,
  * the hint or the gaps to its first input, so a group is a <div>.
  */
-export function Field({ label, hint, wide, group, children }: { label: string; hint?: string; wide?: boolean; group?: boolean; children: ReactNode }) {
+export function Field({ label, hint, wide, group, children }: { label: string; hint?: ReactNode; wide?: boolean; group?: boolean; children: ReactNode }) {
     const className = `field${wide ? ' wide' : ''}${group ? ' group' : ''}`
     const body = (
         <>
