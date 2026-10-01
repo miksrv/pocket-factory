@@ -56,9 +56,33 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   - `claude/runner.ts` spawns `claude -p --output-format stream-json`, surfaces text / tool_use /
     tool_result blocks and the final `result`
   - `bot.ts` grammY bot (text + voice), `stt/groq.ts` Whisper, `telegram/format.ts` Markdown → HTML
-  - `files/catalog.ts` agents / skills / projects as Markdown+frontmatter; `files/hosts.ts` the
+  - `files/catalog.ts` agents / skills / projects / schedules as Markdown+frontmatter; `files/hosts.ts` the
     shared SSH hosts (`data/config/hosts.yaml`, see below); `sessions/transcripts.ts`
     indexes Claude Code JSONL; `presets/`
+  - `schedules/` — **Phase 5** (2026-09-30): `spec.ts` parses and validates a schedule file's
+    frontmatter, `cron.ts` is a dependency-free five-field cron matcher with time zones, an
+    active window (`days`, `hours`) and `nextRun`, `prefilters.ts` the deterministic pollers
+    (`command`: bash, one item per output line or a JSON array; `github-prs`: `gh pr list`,
+    key = PR + head sha; `trac`: `/query?format=csv` with `TRAC_USER` / `TRAC_PASSWORD` basic
+    auth or `TRAC_COOKIE`, key = id + changetime), `service.ts` the scheduler (20 s tick, fires
+    each allowed minute once, remembers the fired minute across a restart, one run at a time
+    per schedule, soft-stop from the last `rate_limit` snapshot, prefilter → minus `seen_items`
+    → task in the schedule's own conversation `web` / `schedule:<name>` with a fresh session,
+    prompt = frame + file body + new items). Store: migration v9 (`schedule_runs`,
+    `seen_items`, `tasks.schedule`). Routes `web/routes/schedules.ts` (`/api/schedules/status`,
+    `/:name/status|runs|run|preview|enabled|seen`, mounted before the file routes so
+    `status` is not a file name); the file itself goes through the generic
+    `/api/schedules/:name`. The bot delivers a `cron` task's report and questions to the
+    owner's chat (first allowed id) unless `notify: none`, tells about a failed prefilter once
+    per distinct error, and has `/schedules` and `/run <name>`. The dispatcher rules
+    (`templates/claude/CLAUDE.md`) tell the agent what a "Scheduled run" prompt is and that
+    its memory is the file's body, never the frontmatter. The form asks for one cron field only
+    (2026-09-30, owner's call): `GET /api/schedules/cron?expr=` reads it back in words with the next
+    firing, the Editor's `validate` blocks Save on a bad one; the zone is `TIMEZONE` in `.env`
+    (the owner's zone, renamed from `SCHEDULES_TZ` 2026-09-30; empty = UTC, the container's own;
+    `.env.example` says America/Los_Angeles), which is also where "today" starts for the
+    `done_today` / `failed_today` / `tokens_today` stats (`startOfDay` in `cron.ts`), `tz:` and `window:` in a
+    file are honoured but not offered — weekdays and hours belong in the cron itself
   - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`
     (sub-agent started / completed, from the CLI's `task_started` / `task_notification` system
@@ -66,7 +90,10 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     workspace names in tool-call inputs
   - `web/` Hono server: basic auth, `/api/*` routes, serves `web/dist`
 - `web/src/` — Vite + React SPA, no UI framework, one `styles.css`; `lib/api.ts` typed client,
-  `components/Editor.tsx` shared list+form for agents/skills/projects, pages per screen.
+  `components/Editor.tsx` shared list+form for agents/skills/projects/schedules (an `aside`
+  slot renders live state above the form: `pages/Schedules.tsx` puts the schedule's state, Run
+  now, Preview prefilter, Switch on / off, Forget seen items and the run history there), pages
+  per screen.
   `components/ui.tsx` is the shared vocabulary and the only place markup for it lives: `Button`
   (every button and button-styled link, `variant` / `size` / `to`), `Stat`, `Tabs`,
   `FilterSelect`, `Intro` (empty pane with one action), `Markdown`, `StopButton`, `Empty`,
@@ -277,6 +304,9 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   list or a new one, a shared host's card edits only the project's part and links to Settings, a host
   still written inline (the pre-2026-09-30 form) shows "Move to shared hosts" (a dialog with Test
   connection that keeps the path and notes with the project) or "Link to shared host X" when an identical target exists.
+  Schedule files list hosts the same way (`hosts: [{ host, path?, notes? }]`, the form reuses the
+  project's host cards; bare names still parse) and count as usage: Settings → Hosts shows them
+  with a clock, a rename or a detach rewrites them too.
   `/api/hosts` (list with usage + inline ones), `PUT/DELETE /api/hosts/:name`, `/api/hosts/keys`
   lists key names, `/api/hosts/test` runs `ssh -o BatchMode=yes` for a target or a shared host by
   name. Keys are never read by the API. **Host keys** (2026-09-30): the factory's `known_hosts` is
@@ -291,6 +321,21 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   shared or inline host still points at it. No shell on the factory box is needed to add a host. Passwords are not supported on purpose. Agents resolve
   `host:` from hosts.yaml (dispatcher rules, `onboard-project`, `devops-check`, `devops-engineer`). Branches are `feature/…` / `fix/…` by task kind; `branch_prefix` is no
   longer a form field (an existing value still overrides). GitHub still goes through the PAT, never SSH.
+- **Schedules are files, not rows** (2026-09-30, Phase 5): `data/config/schedules/<name>.md`,
+  because the body is both the instruction for every run and the agent's memory between runs
+  (deferred tickets, PRs skipped on purpose), which the agent edits itself and the Audit log
+  shows as a file event. The store keeps only runs and seen items. A firing without a
+  prefilter always starts a task; with one, only new items do (zero tokens on an empty poll).
+  A poller's first cron firing marks what exists as seen (`first_run: skip`; `command`
+  prefilters default to `process`); Run now always hands over. A waiting or running run
+  blocks the next firing; cron firings yield to the owner's windows (`SCHEDULES_SOFT_STOP`,
+  default 85 %), manual ones do not. Missed minutes while the supervisor was down are not
+  caught up. Mail has no deterministic prefilter yet (the Gmail connector lives in the
+  session): a mail schedule is a prompt-type one at a coarse cadence; an IMAP prefilter is
+  the follow-up. Trac access is HTTP from the supervisor (`TRAC_URL`, credentials in `.env`),
+  the agent still reads full tickets through ferret. Host work in a schedule stays under the
+  read-only rule unless the file's instructions allow specific commands; start every schedule
+  with `action: report` and graduate it.
 - The owner decides when to commit — never commit unprompted. When asked to commit: no
   `Co-Authored-By` lines.
 
@@ -352,10 +397,15 @@ Not done / next:
    Telegram. Connectors also close the Trac gap (ferret) and give UserManagement ClickUp without
    a `.mcp.json`. A project form section for extra MCP servers was dropped: projects inherit
    their checkout's `.mcp.json`, roles own theirs in the agent form.
-5. Phase 5: schedules + prefilters (TRAC poller, GitHub review requests) — `source: cron` is
-   already in the tasks table; UC-4 staging access is settled (SPEC open question 8, 2026-09-29: SSH via
-   the project's `hosts:`, read-only, code-only reproduction without hosts). Still needed: Trac
-   credentials in `.env` for the LLM-free poller.
+5. ~~Phase 5: schedules + prefilters~~ — implemented 2026-09-30 (uncommitted): schedule files,
+   scheduler, `command` / `github-prs` / `trac` prefilters, soft-stop, Schedules page, Telegram
+   `/schedules` `/run`. Verified on the host through the API (create, validate, preview, toggle,
+   run now → task queued → run row + task linked); the CLI itself is not logged in from `yarn dev`
+   on macOS, so the first real end-to-end run is `docker compose up -d --build` and Run now from
+   the UI. Still needed: Trac credentials in `.env` (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or
+   `TRAC_COOKIE`; whether the server wants the `/login` path is unverified), the owner's answers
+   on PR scope (review requests only vs every open PR) and mail cadence; an IMAP prefilter for
+   mail; `/api/status` stats for schedules on the Overview.
 6. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram;
    README for forkers.
 7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,

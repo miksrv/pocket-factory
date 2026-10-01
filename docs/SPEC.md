@@ -4,7 +4,7 @@
 >
 > Status: Draft v1.4 · Date: 2026-09-30 · Author: Misha Topchilo (with Claude)
 >
-> **v1.4 changes:** decisions recorded 2026-09-29/30. Claude auth is a full claude.ai login **inside the container** (`claude auth login`, URL + code), which brings the account's connectors and plugins into every session; the setup-token is the fallback. Questions and permissions reach the owner over stream-json on stdin (`AskUserQuestion`, `--permission-prompt-tool stdio`) and are answered from the web or Telegram inside the same run; the idle-timeout model is gone for good. MCP is three layers (repository `.mcp.json`, owner `config/mcp.json`, role-owned servers in agent frontmatter) with a registry, status refresh and browser-driven sign-in in Settings. SSH hosts are a shared registry (`config/hosts.yaml`) referenced from project files; host keys are trusted from the UI. Unread replies and drafts in the chat.
+> **v1.4 changes:** decisions recorded 2026-09-29/30. Phase 5 implemented: schedules as Markdown files with a cron, an active window, a deterministic prefilter (`command`, `github-prs`, `trac`) and instructions the agent edits to remember decisions; soft-stop for background work (§4.3). Claude auth is a full claude.ai login **inside the container** (`claude auth login`, URL + code), which brings the account's connectors and plugins into every session; the setup-token is the fallback. Questions and permissions reach the owner over stream-json on stdin (`AskUserQuestion`, `--permission-prompt-tool stdio`) and are answered from the web or Telegram inside the same run; the idle-timeout model is gone for good. MCP is three layers (repository `.mcp.json`, owner `config/mcp.json`, role-owned servers in agent frontmatter) with a registry, status refresh and browser-driven sign-in in Settings. SSH hosts are a shared registry (`config/hosts.yaml`) referenced from project files; host keys are trusted from the UI. Unread replies and drafts in the chat.
 >
 > **v1.3 changes:** the concept is stated as a self-hosted layer over Claude Code for developers with four pillars — autonomy, control over what agents do, management of agents / skills / projects, pipelines. Money is gone from the product (tokens and subscription windows instead); the config git history is replaced by the Audit log built live from stream-json; every list pages dynamically; agents are a card roster with live activity; models and tools come from the subscription and the CLI.
 >
@@ -185,16 +185,33 @@ Rules:
 
 ### 4.3 Schedules
 
-```
-schedules (id, name, cron_expr, active_window,   -- e.g. Mon–Fri 09:00–18:00 TZ
-           type,          -- 'prompt' | 'prefilter'
-           prefilter_ref, -- script to run first (poll → diff → maybe create task)
-           prompt, skill, project, enabled, last_run_at)
+> **As implemented (v1.4, 2026-09-30):** a schedule is a Markdown file, `data/config/schedules/<name>.md`, not a table row — because its body is the instruction the agent reads every run *and* the agent's memory between runs (deferred tickets, PRs skipped on purpose), which the agent edits itself; that edit is a file event in the Audit log like any other. The store keeps only what a file cannot: `schedule_runs` (every firing and why it did or did not start a task) and `seen_items` (prefilter items already handed over). `tasks.schedule` names the schedule a task came from.
+
+```yaml
+---
+cron: "0 * * * *"                  # five fields; @hourly / @daily also work
+# tz: Europe/Warsaw                # by hand only: the form reads the cron in TIMEZONE (the container runs in UTC)
+# window: { days: mon-fri, hours: "09:30-17:45" }   # by hand only, for bounds a cron cannot say; weekdays and whole hours belong in the cron
+enabled: true
+project: GlobalNavigation          # the task runs from its checkout; or `hosts:` as in a project file (`- host: <name>` + path, notes)
+skill: tracker-defect-fix          # optional; `agent:` hands the work to a sub-agent
+action: report                     # free text the agent gets as the mode: report | fix | comment …
+prefilter:                         # optional, runs without the model on every firing
+  kind: trac                       # command | github-prs | trac
+  query: "status=new&component=GlobalNavigation"
+notify: telegram                   # or none (web thread only)
+session: fresh                     # or continue (one transcript across runs)
+first_run: skip                    # a poller starts from now; `process` hands existing items over
+max_items: 10
+---
+Instructions for every run, in prose. ## Notes: what the agent decided last time (it edits this).
 ```
 
-- Type **prompt**: fire → create an agent task directly.
-- Type **prefilter**: fire → run a deterministic script (e.g. TRAC poller or GitHub review-request poller with `seen_items` diff); a task is created only when the script emits one. This is the default pattern for all polling-style automations.
-- Fully managed in the UI: create, edit, enable/disable, "run now", last-run status.
+- **Firing.** The scheduler ticks every 20 s; a schedule fires at each minute its cron and window allow (in its zone), once. A minute already fired before a restart is not repeated; minutes missed while the supervisor was down are not caught up (a poller catches up by itself on the next firing). "Run now" (UI, Telegram `/run <name>`) ignores cron, window and soft-stop but never overlaps a run in progress.
+- **Prefilter before LLM.** `command` (a bash command; its output lines or a JSON array are the items), `github-prs` (`gh pr list` of a repository: every open PR, those requesting the owner's review, or those mentioning the owner; key = PR + head commit, so a new push resurfaces it), `trac` (a Trac query as CSV; key = ticket id + change time, so a deferred ticket resurfaces when it changes). Items minus `seen_items` = the run's work; nothing new = no task, zero tokens. The first cron firing of a poller marks what already exists as seen unless `first_run: process`.
+- **The task.** One conversation per schedule (`web` channel, `schedule:<name>`, shown with a clock in the Chat list), a fresh session per run by default, source `cron`. The prompt frames the run (started by the scheduler, nobody at the keyboard, report at the end, memory in the file's body), then the file's body, then the new items. The report and any `AskUserQuestion` go to the owner's Telegram chat unless `notify: none`.
+- **Guards.** One run at a time per schedule (a firing while the previous task is queued or running is skipped); **soft-stop** (`SCHEDULES_SOFT_STOP`, default 85 %): cron firings are skipped while the 5-hour or the weekly window is at or above the share, the owner's own tasks are never held back; a prefilter that fails is a run with status `error`, reported to Telegram once per distinct error.
+- **UI.** Schedules: the same list + form editor as projects, with the live state above the form (valid / on / off, next run, last run and its note, seen items, the thread), Run now, Preview prefilter (what it finds, which items are new, marking nothing), Switch on / off, Forget seen items, the run history. Telegram: `/schedules`, `/run <name>`.
 
 ### 4.4 Session lifecycle
 
@@ -273,7 +290,7 @@ Screens (v1):
 3. **Agents** — list + Markdown editor with frontmatter form (name, description/trigger, tools/MCP allowlist, model).
 4. **Skills** — same editor pattern; show which skills reference which.
 5. **Projects** — knowledge-base editor; onboarding wizard (drives the `onboard-project` skill).
-6. **Schedules** — CRUD for cron entries, active windows, prefilter binding, enable/disable, run-now, last result.
+6. **Schedules** — the schedule files (cron, window, project or hosts, skill / agent, mode, prefilter, instructions) with their live state: valid / on / off, next run, last run and why, run history, seen items; Run now, Preview prefilter, Switch on / off, Forget seen items.
 7. **Quota dashboard** — the 5-hour and weekly windows as the CLI reports them (`rate_limit_event`), with reset times and a history of readings; tokens per day/project/agent/task-type; forecast to limit. No money anywhere: the owner pays a subscription, so the unit is tokens and window share.
 8. **Settings** — MCP: the registry of servers the sessions have seen (connectors first, then plugins, project and factory servers; duplicates by URL folded into the connector's row), Refresh (`claude mcp list` in the factory), Authorize for a server that needs sign-in (the CLI's `claude mcp login --no-browser` under a pseudo-terminal; the dialog shows the link and, for a redirect-style server, takes the redirect URL back), and the editor for `config/mcp.json`. Hosts: the shared SSH registry with the projects on each, test connection, host-key trust. Presets install. Shows the Claude login status (`claude.ai (team, connectors)` / `token` / `none`) but never performs the login. Telegram whitelist, concurrency, timeouts and budget policies stay in `.env`.
 9. **Audit log** — every model call (model, tokens), tool call, file edit, sub-agent start / end, task lifecycle and rate-limit reading, each attributed to the agent that produced it (orchestrator or sub-agent type) and the project the task worked in. Period selector, filter by kind / agent / project, expandable details. Built live from the stream-json events; there is no separate config git history (dropped in v1.3: the owner's repositories are on GitHub, and self-edits of agents / skills show up here as file events).
@@ -353,7 +370,7 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 | **2. Lifecycle & persistence** ✅ | Task queue in SQLite, session manager (`/new`, `/stop`, `--resume`, one-shot runs), HITL questions via Telegram and the web (`AskUserQuestion` / permission prompts over stream-json since 2026-09-30, earlier the agent's final message ↔ owner's reply), crash recovery (running tasks re-queued once and resumed) | UC-2 and UC-8: a conversation survives a supervisor restart; a pending question is asked again |
 | **3. Web UI (read)** ✅ | Task feed + session view (transcript rendering, SSE live feed), overview with spend from the tasks table, **chat with Claude Code from the browser** | Owner can watch a live run and see spend without SSH |
 | **4. Factory CRUD** ✅ | Agent/skill/project editors (projects incl. tracker + hosts), audit log, presets install, `onboard-project`, correction-to-file loop via CLAUDE.md rule | UC-5, UC-6, UC-7 work from both TG and UI; every agent self-edit is a file event in the Audit log |
-| **5. Schedules** | `schedules` table + UI, prefilter pattern, TRAC poller, GitHub review-request poller | UC-3 and UC-4: zero tokens on empty polls |
+| **5. Schedules** ✅ (code) | Schedule files + UI, prefilter pattern (`command`, `github-prs`, `trac`), soft-stop, Telegram `/schedules` `/run` | UC-3 and UC-4: zero tokens on empty polls — **the Trac poller still needs the owner's credentials in `.env` and a first real run in the container** |
 | **6. Hardening** | Budgets/soft-stop, quota estimate, backups of `/data`, template-ization (README for forkers with the conditions from §1.7), optional webhook ingress | Quota forecast visible; fork-and-run documented and tested on a fresh account |
 
 Phase 1 is deliberately the whole "driving to a conference" story: if it works, everything after is refinement.
@@ -400,11 +417,10 @@ pocket-factory/
 ├── docker-compose.yml
 ├── Dockerfile                # node 22 + @anthropic-ai/claude-code (pinned) + git + gh
 ├── .env.example
-├── supervisor/               # telegram bot, STT, queue / session manager, HTTP API (TypeScript)
+├── supervisor/               # telegram bot, STT, queue / session manager, scheduler + prefilters, HTTP API (TypeScript)
 ├── web/                      # Vite + React admin UI, served by the supervisor
 ├── templates/claude/         # seeded into data/claude (CLAUDE.md, agents/, skills/)
 ├── presets/                  # shareable agent + skill bundles, installable from the UI
-├── prefilters/               # (Phase 5) deterministic pollers (trac.ts, github-reviews.ts, …)
 └── data/                     # → mounted volume in production
     ├── claude/               # CLAUDE_CONFIG_DIR — owned by Claude Code
     │   ├── CLAUDE.md         #   dispatcher rules
@@ -414,6 +430,7 @@ pocket-factory/
     │   └── (credentials)     #   never touched by the tool
     ├── config/               # the supervisor's own files
     │   ├── projects/         #   photos.md, global-navigation.md, … (frontmatter: repo, branches, tracker, hosts, mcp, checks)
+    │   ├── schedules/        #   recurring tasks (cron, prefilter, instructions + the agent's notes)
     │   ├── hosts.yaml        #   shared SSH hosts (name, ssh target, key file name)
     │   ├── known_hosts       #   host keys the owner trusted from the UI
     │   └── mcp.json          #   the owner's MCP servers, passed to every session

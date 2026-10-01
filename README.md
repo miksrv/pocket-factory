@@ -18,7 +18,8 @@ leave alone and still trust:
   UI or by the agent itself; presets bundle them for sharing; models and tools are picked from what
   your subscription and CLI actually offer.
 - **Pipelines** — skills such as `feature-to-pr` and `onboard-project` chain sub-agents (developer,
-  reviewer, …) into repeatable task flows; schedules and tracker pollers are next.
+  reviewer, …) into repeatable task flows; **schedules** fire tasks on a cron behind a deterministic
+  prefilter (a shell command, a GitHub or Trac query), so an empty poll costs no tokens.
 
 Single-owner by design. You log in to Claude Code with **your own subscription**, create **your own**
 Telegram bot, use **your own** GitHub token, point it at **your own** repositories. Nothing is shared,
