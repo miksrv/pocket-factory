@@ -7,6 +7,7 @@ import { Hosts } from './files/hosts.js'
 import { KnownHosts } from './files/knownHosts.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
+import { Schedules } from './schedules/service.js'
 import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
@@ -76,6 +77,19 @@ async function main(): Promise<void> {
         sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null
     }
     const tasks = new TaskService(store, config, workspace)
+    // Recurring tasks: files in data/config/schedules, fired by the scheduler through the same queue.
+    const schedules = new Schedules(store, catalog, tasks, config, {
+        projectExists: (slug) => workspace.projectPath(slug) !== null,
+        projectPath: workspace.projectPath,
+        projectRepo: (slug) => {
+            const repo = projectEntry(slug)?.frontmatter.repo
+            return typeof repo === 'string' && repo ? repo : null
+        },
+        hostExists: (name) => hosts.get(name) !== undefined,
+        skillExists: (name) => catalog.exists('skills', name),
+        agentExists: (name) => catalog.exists('agents', name),
+        agentEnv: () => tasks.agentEnv()
+    })
     // Telegram is optional: without a token the factory is web-only (also
     // handy for a second dev instance next to the container, which would
     // otherwise fight over long polling).
@@ -90,11 +104,13 @@ async function main(): Promise<void> {
         hosts,
         knownHosts,
         transcripts,
-        presets: new Presets(config.presetsDir)
+        presets: new Presets(config.presetsDir),
+        schedules
     })
 
     const shutdown = (signal: string) => {
         log.info(`${signal} received, stopping`)
+        schedules.stop()
         void bot?.stop()
         void tasks.shutdown().then(() => process.exit(0))
     }
@@ -103,6 +119,7 @@ async function main(): Promise<void> {
 
     // Now that the channels listen, tell them about tasks lost to the restart.
     tasks.announceOrphans()
+    schedules.start()
 
     if (!bot) return
 

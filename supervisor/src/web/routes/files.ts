@@ -3,9 +3,9 @@ import { Hono } from 'hono'
 import type { Kind } from '../../files/catalog.js'
 import type { Env } from '../context.js'
 
-const KINDS: Kind[] = ['agents', 'skills', 'projects']
+const KINDS: Kind[] = ['agents', 'skills', 'projects', 'schedules']
 
-/** CRUD for agents, skills and projects — the same files the agent edits. */
+/** CRUD for agents, skills, projects and schedules — the same files the agent edits. */
 export function fileRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 

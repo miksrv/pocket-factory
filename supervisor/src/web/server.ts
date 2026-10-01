@@ -18,6 +18,7 @@ import { activityRoutes } from './routes/activity.js'
 import { auditRoutes } from './routes/audit.js'
 import { toolRoutes } from './routes/models.js'
 import { presetRoutes } from './routes/presets.js'
+import { scheduleRoutes } from './routes/schedules.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { statusRoutes } from './routes/status.js'
 import { taskRoutes } from './routes/tasks.js'
@@ -99,6 +100,8 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/tools', toolRoutes())
     api.route('/hosts', hostRoutes())
     api.route('/mcp', mcpRoutes())
+    // Before the file routes: /schedules/status and /schedules/:name/… must not be taken for a file name.
+    api.route('/schedules', scheduleRoutes())
     api.route('/', fileRoutes())
     api.notFound((c) => c.json({ error: 'not found' }, 404))
     hono.route('/api', api)

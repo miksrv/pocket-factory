@@ -43,8 +43,11 @@ export type ProjectHost = HostRef | InlineHost
 
 export const isHostRef = (h: ProjectHost): h is HostRef => typeof (h as HostRef).host === 'string'
 
+/** Who refers to a shared host: a project or a schedule file, with what it adds to the host. */
 export interface HostUsage {
+    /** The file's name (a project slug or a schedule name). */
     project: string
+    kind: 'project' | 'schedule'
     path?: string
     notes?: string
 }
@@ -114,27 +117,39 @@ export class Hosts {
         return this.read().hosts.find((h) => h.name === name)
     }
 
-    /** Every project's `hosts:` list, as written. */
-    private projectHosts(): Array<{ slug: string; hosts: ProjectHost[] }> {
-        return this.catalog.list('projects').map((entry) => ({
-            slug: entry.name,
-            hosts: (Array.isArray(entry.frontmatter.hosts) ? entry.frontmatter.hosts : []).filter((h): h is ProjectHost => Boolean(h) && typeof h === 'object')
-        }))
+    /**
+     * Every project's and schedule's `hosts:` list, as written. A schedule
+     * may still hold bare names (the first form of 2026-09-30): read as
+     * references, written back as `- host: <name>` when rewritten.
+     */
+    private projectHosts(): Array<{ kind: 'projects' | 'schedules'; slug: string; hosts: ProjectHost[] }> {
+        return (['projects', 'schedules'] as const).flatMap((kind) =>
+            this.catalog.list(kind).map((entry) => ({
+                kind,
+                slug: entry.name,
+                hosts: (Array.isArray(entry.frontmatter.hosts) ? entry.frontmatter.hosts : []).flatMap((h): ProjectHost[] =>
+                    h && typeof h === 'object' ? [h as ProjectHost] : kind === 'schedules' && typeof h === 'string' && h.trim() ? [{ host: h.trim() }] : []
+                )
+            }))
+        )
     }
 
     list(): HostsOverview {
         const { hosts, error } = this.read()
         const views: HostView[] = hosts.map((h) => ({ ...h, projects: [] }))
         const inline: InlineHostView[] = []
-        for (const { slug, hosts: list } of this.projectHosts()) {
+        for (const { kind, slug, hosts: list } of this.projectHosts()) {
+            const usageKind = kind === 'projects' ? 'project' : 'schedule'
             list.forEach((h, index) => {
                 if (isHostRef(h)) {
                     const view = views.find((v) => v.name === h.host)
                     // A dangling reference still shows, so the owner sees the broken link and can fix it.
-                    if (view) view.projects.push(clean({ project: slug, path: str(h.path), notes: str(h.notes) }))
-                    else views.push({ name: h.host, ssh: '', projects: [{ project: slug }] })
+                    if (view) view.projects.push(clean({ project: slug, kind: usageKind, path: str(h.path), notes: str(h.notes) }))
+                    else views.push({ name: h.host, ssh: '', projects: [{ project: slug, kind: usageKind }] })
                     return
                 }
+                // Only a project file may carry a host written out; anything else in a schedule is ignored.
+                if (kind !== 'projects') return
                 const twin = hosts.find((s) => s.ssh === (h.ssh ?? '').trim() && (s.key ?? '') === (h.key ?? ''))
                 inline.push({ project: slug, index, host: h, same_as: twin?.name ?? null })
             })
@@ -175,18 +190,18 @@ export class Hosts {
         this.write(hosts.filter((h) => h.name !== name))
     }
 
-    /** Rewrite every project's reference to `name`: a replacement entry, or null to drop it. */
+    /** Rewrite every project's and schedule's reference to `name`: a replacement entry, or null to drop it. */
     private rewriteRefs(name: string, map: (ref: HostRef) => HostRef | null): void {
-        for (const { slug, hosts } of this.projectHosts()) {
+        for (const { kind, slug, hosts } of this.projectHosts()) {
             if (!hosts.some((h) => isHostRef(h) && h.host === name)) continue
-            const entry = this.catalog.get('projects', slug)
+            const entry = this.catalog.get(kind, slug)
             if (entry.frontmatter_error) continue
             const next = hosts.flatMap((h) => {
                 if (!isHostRef(h) || h.host !== name) return [h]
                 const mapped = map(h)
                 return mapped ? [mapped] : []
             })
-            this.catalog.save('projects', slug, { frontmatter: { ...entry.frontmatter, hosts: next }, body: entry.body })
+            this.catalog.save(kind, slug, { frontmatter: { ...entry.frontmatter, hosts: next }, body: entry.body })
         }
     }
 }

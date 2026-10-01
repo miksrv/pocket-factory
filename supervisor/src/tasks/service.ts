@@ -357,17 +357,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * for the first open question — the "Other" choice) and the task goes
      * on; otherwise a new task queues behind whatever runs.
      */
-    submit(conversationId: string, source: TaskSource, prompt: string): Task {
+    submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string } = {}): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
         const asking = this.pendingAsk(conversationId)
-        if (asking) {
+        if (asking && !options.schedule) {
             const question = openQuestions(asking.ask!)[0]
             if (question) return this.answer(asking.id, { answers: { [question.question]: prompt } })
         }
         // The project is detected per task from its own tool calls, never inherited
         // from the conversation: one session may serve several projects in turn.
-        const task = this.store.createTask(conversationId, source, prompt)
+        const task = this.store.createTask(conversationId, source, prompt, null, options.schedule ?? null)
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
@@ -552,8 +552,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.probe
     }
 
-    /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. */
-    private agentEnv(): NodeJS.ProcessEnv {
+    /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. Prefilters run with the same one. */
+    agentEnv(): NodeJS.ProcessEnv {
         const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CONFIG_DIR: this.config.claude.configDir }
         for (const name of PRIVATE_ENV) delete env[name]
         return env

@@ -8,9 +8,10 @@ import { type MarkdownDoc, parseMarkdown, serializeMarkdown } from './markdown.j
  *   agents   → <claude>/agents/<name>.md          (Claude Code sub-agents)
  *   skills   → <claude>/skills/<name>/SKILL.md    (Claude Code skills)
  *   projects → <config>/projects/<slug>.md        (knowledge base)
+ *   schedules → <config>/schedules/<name>.md      (recurring tasks: cron, prefilter, instructions)
  * The UI, the owner and the agent itself edit the same files.
  */
-export type Kind = 'agents' | 'skills' | 'projects'
+export type Kind = 'agents' | 'skills' | 'projects' | 'schedules'
 
 export interface CatalogEntry {
     kind: Kind
@@ -44,6 +45,8 @@ export class Catalog {
                 return path.join(this.claudeDir, 'skills')
             case 'projects':
                 return path.join(this.configDir, 'projects')
+            case 'schedules':
+                return path.join(this.configDir, 'schedules')
         }
     }
 
@@ -94,7 +97,7 @@ export class Catalog {
         const file = this.fileFor(kind, name)
         fs.mkdirSync(path.dirname(file), { recursive: true })
         const frontmatter = { ...doc.frontmatter }
-        // Claude Code requires `name` in agent and skill frontmatter and it must match the file.
+        // Claude Code requires `name` in agent and skill frontmatter and it must match the file; a schedule is named the same way.
         if (kind !== 'projects') frontmatter.name = name
         if (kind === 'projects' && !frontmatter.slug) frontmatter.slug = name
         fs.writeFileSync(file, serializeMarkdown({ frontmatter, body: doc.body }))

@@ -38,6 +38,12 @@ export interface Config {
     presetsDir: string
     maxConcurrentSessions: number
     logLevel: 'debug' | 'info' | 'warn' | 'error'
+    /** The owner's zone (`TIMEZONE`, UTC without it): cron expressions are read in it, and "today" starts at its midnight. */
+    timezone: string
+    schedules: {
+        /** Cron firings are skipped while the 5-hour or weekly window is at or above this share (0..1); 0 = never. */
+        softStop: number
+    }
 }
 
 function required(name: string): string {
@@ -120,8 +126,29 @@ export function loadConfig(): Config {
         },
         presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),
         maxConcurrentSessions: Math.max(1, Math.floor(number('MAX_CONCURRENT_SESSIONS', 2))),
-        logLevel: logLevel(optional('LOG_LEVEL'))
+        logLevel: logLevel(optional('LOG_LEVEL')),
+        timezone: timeZone(optional('TIMEZONE') ?? 'UTC'),
+        schedules: {
+            softStop: share('SCHEDULES_SOFT_STOP', 0.85)
+        }
     }
+}
+
+function timeZone(tz: string): string {
+    try {
+        Intl.DateTimeFormat('en-US', { timeZone: tz })
+        return tz
+    } catch {
+        throw new Error(`TIMEZONE must be an IANA time zone name (Europe/Warsaw), got "${tz}"`)
+    }
+}
+
+/** A share 0..1, also accepted as a percentage (85 → 0.85). */
+function share(name: string, fallback: number): number {
+    const value = number(name, fallback)
+    const normalized = value > 1 ? value / 100 : value
+    if (normalized < 0 || normalized > 1) throw new Error(`${name} must be between 0 and 1 (or 0 and 100), got "${value}"`)
+    return normalized
 }
 
 function logLevel(raw: string | undefined): Config['logLevel'] {
