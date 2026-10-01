@@ -28,7 +28,14 @@ export function fileRoutes(): Hono<Env> {
             if (current?.frontmatter_error) {
                 return c.json({ error: `${kind}/${name} has invalid YAML frontmatter on disk (${current.frontmatter_error}); fix the file by hand before saving from the UI, or it would lose its frontmatter` }, 409)
             }
-            const entry = catalog.save(kind, name, { frontmatter: frontmatter as Record<string, unknown>, body: body.body ?? '' })
+            const fm = { ...(frontmatter as Record<string, unknown>) }
+            // A schedule is switched on and off by PUT /api/schedules/:name/enabled, never by the form,
+            // whose copy of the frontmatter predates the switch: the file on disk keeps its say.
+            if (kind === 'schedules' && current) {
+                if (current.frontmatter.enabled === undefined) delete fm.enabled
+                else fm.enabled = current.frontmatter.enabled
+            }
+            const entry = catalog.save(kind, name, { frontmatter: fm, body: body.body ?? '' })
             return c.json(entry, created ? 201 : 200)
         })
 
