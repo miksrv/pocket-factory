@@ -1,6 +1,6 @@
 ---
 name: email-reply
-description: Prepare a reply to a letter as a Gmail draft, or report what is new in the inbox — through the email-assistant agent, which reads and drafts but never sends. Use when the owner mentions mail, a letter, an inbox, a sender, a reply or a draft ("answer X about Y", "what came in today", "draft a reply to the invoice mail").
+description: Prepare a reply to a letter as a Gmail draft, or report what is new in the inbox — always through the email-assistant agent, which reads and drafts but never sends; the orchestrator does not touch the Gmail tools itself. Use when the owner mentions mail, a letter, an inbox, a sender, a reply or a draft, also as a short follow-up in a conversation that already dealt with mail ("answer X about Y", "what came in today", "anything new?", "any letters to answer?", "draft a reply to the invoice mail", "shorter").
 ---
 
 # email-reply

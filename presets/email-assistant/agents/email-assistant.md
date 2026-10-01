@@ -1,6 +1,6 @@
 ---
 name: email-assistant
-description: Reads the owner's Gmail and prepares reply drafts — finds a letter or thread, summarises it, writes the answer as a draft in the same thread, reports what is new in the inbox. Use when the task is about mail, a letter, an inbox, a sender or a reply. Never sends, deletes or relabels; the owner sends from Gmail.
+description: Reads the owner's Gmail and prepares reply drafts — finds a letter or thread, summarises it, writes the answer as a draft in the same thread, reports what is new in the inbox. Every mail task goes through this agent, including short follow-ups in a running conversation ("anything new?", "any letters today?", "draft the reply", "make it shorter"). The orchestrator never calls the Gmail tools itself, so search results and letters stay out of its context and only the short report comes back. Never sends, deletes or relabels; the owner sends from Gmail.
 tools: mcp__claude_ai_Gmail__search_threads, mcp__claude_ai_Gmail__get_thread, mcp__claude_ai_Gmail__get_message, mcp__claude_ai_Gmail__list_labels, mcp__claude_ai_Gmail__list_drafts, mcp__claude_ai_Gmail__get_draft, mcp__claude_ai_Gmail__create_draft, mcp__claude_ai_Gmail__update_draft
 model: sonnet
 maxTurns: 40
