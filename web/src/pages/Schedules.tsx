@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
 import { useConfirm } from '../components/Modal'
-import { Button, ErrorBox, useToast } from '../components/ui'
+import { Button, ErrorBox, StatusBadge, useToast } from '../components/ui'
 import { api, type CatalogEntry, type CronCheck, fmt, type ProjectHost, type SchedulePreview, type ScheduleRun, type ScheduleView } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
@@ -12,7 +12,7 @@ const TEMPLATE = `What to do on every run, in plain words: what counts, what to 
 
 ## Notes
 
-Decisions the agent keeps between runs (it edits this section itself): tickets deferred and why, PRs skipped on purpose, anything the next run should know.
+Decisions the agent keeps between runs (it edits this section itself): tickets deferred and why, PRs skipped on purpose, anything the next run should know. Lines about items that are gone (merged, closed) are removed on the next run.
 `
 
 const PREFILTERS = [
@@ -38,7 +38,13 @@ function dayList(days: number[]): string {
 
 /** Show runs lists this many, newest first; older firings are not shown anywhere. */
 const RUNS_SHOWN = 20
-const runTone = (status: ScheduleRun['status']) => (status === 'queued' ? 'done' : status === 'error' ? 'failed' : status === 'skipped' ? 'queued' : 'cancelled')
+const runTone = (status: ScheduleRun['status']) => (status === 'queued' ? 'done' : status === 'error' ? 'failed' : status === 'skipped' ? 'queued' : status === 'missed' ? 'amber' : 'cancelled')
+
+/** A run's outcome: the task's status when it queued one (that is what the owner wants to know), else what the scheduler decided. */
+function RunBadge({ run }: { run: ScheduleRun }) {
+    if (run.task_id && run.task_status) return <StatusBadge status={run.task_status} />
+    return <span className={`badge ${runTone(run.status)}`}>{run.status}</span>
+}
 
 export function SchedulesPage() {
     const status = useAsync(() => api.schedules(), [], 15_000)
@@ -79,7 +85,7 @@ export function SchedulesPage() {
             intro="A schedule fires a task on a cron: check a tracker for new defects, review new pull requests, look at the inbox, check a host. A prefilter (a shell command, a GitHub or Trac query) runs first without spending tokens; the agent starts only when it finds something new. Pick one from the list, or create a new one."
             newLabel="New schedule"
             aside={(entry) => <Status entry={entry} view={viewOf(entry.name)} onChanged={status.reload} />}
-            form={(fm, set) => {
+            form={(fm, set, entry) => {
                 const prefilter = (fm.prefilter as Record<string, unknown> | undefined) ?? {}
                 const kind = str(prefilter.kind)
                 const setPrefilter = (patch: Record<string, unknown>) => set({ prefilter: { ...prefilter, ...patch } })
@@ -118,6 +124,15 @@ export function SchedulesPage() {
                                 ))}
                             </select>
                         </Field>
+                        <Field label="Model" hint="The orchestrator's model for these runs; inherit = whatever the factory runs on now (Settings, /model).">
+                            <select value={str(fm.model)} onChange={(e) => set({ model: e.target.value || undefined })}>
+                                <option value="">inherit — the factory's current model</option>
+                                <option value="haiku">haiku — cheapest, mechanical checks</option>
+                                <option value="sonnet">sonnet — current Sonnet</option>
+                                <option value="opus">opus — current Opus</option>
+                                <option value="fable">fable — current Fable (Max plans)</option>
+                            </select>
+                        </Field>
                         <Field label="Mode" hint="report = look and tell, change nothing; fix / comment = act as the instructions allow.">
                             <input list="modes" value={str(fm.action)} onChange={(e) => set({ action: e.target.value })} placeholder="report" />
                             <datalist id="modes">
@@ -138,6 +153,22 @@ export function SchedulesPage() {
                                 <option value="continue">continue one session</option>
                             </select>
                         </Field>
+                        <Field label="Run once" hint="Switches itself off after queueing one task: a check to do tomorrow, not every day." group>
+                            <div className="row wrap">
+                                <label className="row" style={{ gap: 8 }}>
+                                    <input type="checkbox" checked={fm.once === true} onChange={(e) => set({ once: e.target.checked ? true : undefined })} /> <span>switch off after the next run</span>
+                                </label>
+                            </div>
+                        </Field>
+                        {!entry && (
+                            <Field label="After saving" hint="A new schedule is saved switched off unless ticked; the status bar above the form switches it later." group>
+                                <div className="row wrap">
+                                    <label className="row" style={{ gap: 8 }}>
+                                        <input type="checkbox" checked={fm.enabled === true} onChange={(e) => set({ enabled: e.target.checked })} /> <span>switch it on</span>
+                                    </label>
+                                </div>
+                            </Field>
+                        )}
                         <ProjectHosts owner="schedule" value={hostList} onChange={(next) => set({ hosts: next.length ? next : undefined })} shared={hosts.data} onSharedChanged={hosts.reload} keys={keys.data} />
                         <Field label="Prefilter" hint="Runs before the model, every firing, without tokens. Only what it finds and no earlier run has handed over becomes a task; nothing found = no task." wide>
                             <select value={kind} onChange={(e) => set({ prefilter: e.target.value ? { kind: e.target.value } : undefined })}>
@@ -276,7 +307,9 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
     const [error, setError] = useState<string | null>(null)
     const [preview, setPreview] = useState<SchedulePreview | null>(null)
     const [showRuns, setShowRuns] = useState(false)
-    const runs = useAsync(() => (showRuns ? api.scheduleRuns(entry.name, RUNS_SHOWN) : Promise.resolve([] as ScheduleRun[])), [entry.name, showRuns, view?.last_run?.id])
+    // By default only the firings that mattered; every poll and skip on request.
+    const [allRuns, setAllRuns] = useState(false)
+    const runs = useAsync(() => (showRuns ? api.scheduleRuns(entry.name, RUNS_SHOWN, allRuns) : Promise.resolve([] as ScheduleRun[])), [entry.name, showRuns, allRuns, view?.last_run?.id, view?.last_task?.task_status])
     const [toast, showToast] = useToast()
     const confirm = useConfirm()
     if (!view) return null
@@ -326,6 +359,7 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
         })
 
     const last = view.last_run
+    const lastTask = view.last_task
     return (
         <div className="card pad0 schedule-status" style={{ marginBottom: 14 }}>
             <div className="stat-row">
@@ -333,6 +367,8 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
                     <span className="label dim">Fires</span>
                     <span className="value small" style={{ fontSize: 13 }}>
                         {view.cron_text ?? view.cron ?? '—'}
+                        {view.once ? ' · once' : ''}
+                        {view.model ? ` · ${view.model}` : ''}
                     </span>
                     <span className="small dim">
                         {view.tz}
@@ -348,7 +384,7 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
                     {view.next_run && <span className="small dim">{fmt.when(view.next_run)}</span>}
                 </div>
                 <div className="stat">
-                    <span className="label dim">Last run</span>
+                    <span className="label dim">Last firing</span>
                     <span className="value small" style={{ fontSize: 13 }}>
                         {last ? (
                             <>
@@ -358,23 +394,41 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
                             'never'
                         )}
                     </span>
-                    {last?.note && <span className="small dim">{last.note}</span>}
-                    {last?.task_id && (
-                        <Link className="small" to={`/tasks/${last.task_id}`}>
-                            open task
-                        </Link>
+                    {last?.note && (
+                        <span className={`small ${last.status === 'missed' || last.status === 'error' ? '' : 'dim'}`} style={last.status === 'missed' ? { color: 'var(--amber)' } : last.status === 'error' ? { color: 'var(--red)' } : undefined}>
+                            {last.note}
+                        </span>
                     )}
+                </div>
+                <div className="stat">
+                    <span className="label dim">Last task</span>
+                    <span className="value small" style={{ fontSize: 13 }}>
+                        {lastTask ? (
+                            <>
+                                <RunBadge run={lastTask} /> {fmt.ago(lastTask.fired_at)}
+                            </>
+                        ) : (
+                            'none yet'
+                        )}
+                    </span>
+                    <span className="row" style={{ gap: 10 }}>
+                        {lastTask?.task_id && (
+                            <Link className="small" to={`/tasks/${lastTask.task_id}`}>
+                                open task
+                            </Link>
+                        )}
+                        {view.conversation_id && (
+                            <Link className="small" to={`/chat/${view.conversation_id}`}>
+                                open thread
+                            </Link>
+                        )}
+                    </span>
                 </div>
                 <div className="stat">
                     <span className="label dim">Seen items</span>
                     <span className="value small" style={{ fontSize: 13 }}>
                         {view.prefilter ? view.seen : 'no prefilter'}
                     </span>
-                    {view.conversation_id && (
-                        <Link className="small" to={`/chat/${view.conversation_id}`}>
-                            open thread
-                        </Link>
-                    )}
                 </div>
             </div>
             {(view.errors.length > 0 || view.warnings.length > 0) && (
@@ -435,7 +489,9 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
                         <div className="mcp-servers" style={{ marginTop: 6 }}>
                             {preview.items.map((item) => (
                                 <div key={item.key} className="mcp-server row" style={{ gap: 10 }}>
-                                    <span className={`badge ${preview.new_keys.includes(item.key) ? 'done' : 'cancelled'}`}>{preview.new_keys.includes(item.key) ? 'new' : 'seen'}</span>
+                                    <span className={`badge ${preview.new_keys.includes(item.key) ? (item.seen_before ? 'amber' : 'done') : 'cancelled'}`} title={item.seen_before ? `handed over ${fmt.when(item.seen_before)}, changed since` : undefined}>
+                                        {preview.new_keys.includes(item.key) ? (item.seen_before ? 'changed' : 'new') : 'seen'}
+                                    </span>
                                     <span className="grow">
                                         {item.url ? (
                                             <a href={item.url} target="_blank" rel="noreferrer">
@@ -455,6 +511,9 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
             )}
             {showRuns && (
                 <div className="card-scroll schedule-runs">
+                    <label className="row small dim" style={{ gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+                        <input type="checkbox" checked={allRuns} onChange={(e) => setAllRuns(e.target.checked)} /> <span>every firing, including empty polls and skips</span>
+                    </label>
                     {runs.data?.length ? (
                         <>
                             <table>
@@ -477,7 +536,7 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
                                             </td>
                                             <td>{r.trigger}</td>
                                             <td>
-                                                <span className={`badge ${runTone(r.status)}`}>{r.status}</span>
+                                                <RunBadge run={r} />
                                             </td>
                                             <td className="col-main small">{r.note ?? ''}</td>
                                             <td>{r.items || ''}</td>
@@ -491,7 +550,7 @@ function Status({ entry, view, onChanged }: { entry: CatalogEntry; view: Schedul
                         </>
                     ) : (
                         <div className="dim small" style={{ padding: '10px 16px' }}>
-                            {runs.loading ? 'Loading…' : 'No runs yet.'}
+                            {runs.loading ? 'Loading…' : allRuns ? 'No firings yet.' : 'No task, error or missed firing yet.'}
                         </div>
                     )}
                 </div>

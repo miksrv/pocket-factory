@@ -12,8 +12,8 @@ export interface EditorProps {
     kind: Kind
     title: string
     sub: string
-    /** Renders the frontmatter form; receives current values and a setter. */
-    form: (fm: Record<string, unknown>, set: (patch: Record<string, unknown>) => void) => ReactNode
+    /** Renders the frontmatter form; receives current values, a setter and the file being edited (null for a new one). */
+    form: (fm: Record<string, unknown>, set: (patch: Record<string, unknown>) => void, entry: CatalogEntry | null) => ReactNode
     /** Default frontmatter for a new entry. */
     defaults: Record<string, unknown>
     /** Default body for a new entry. */
@@ -49,6 +49,8 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
     const [toast, showToast] = useToast()
     const [filter, setFilter] = useState('')
     const [dirty, setDirty] = useState(false)
+    // Bumped to reload a file from disk into a fresh form (after a save conflict).
+    const [version, setVersion] = useState(0)
     const { leave, guard } = useLeaveGuard()
     useEffect(() => {
         setUnsaved(dirty)
@@ -106,7 +108,7 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                 </div>
                 {creating || selected ? (
                     <Form
-                        key={creating ? 'new' : selected!.name}
+                        key={creating ? 'new' : `${selected!.name}:${version}`}
                         kind={kind}
                         entry={creating ? null : selected!}
                         defaults={defaults}
@@ -117,6 +119,10 @@ export function Editor({ kind, title, sub, form, defaults, template, bodyLabel =
                         bodyLabel={bodyLabel}
                         taken={names}
                         onDirty={setDirty}
+                        onReload={() => {
+                            list.reload()
+                            setVersion((v) => v + 1)
+                        }}
                         onSaved={(saved) => {
                             showToast(`Saved ${kind}/${saved.name}`)
                             list.reload()
@@ -150,6 +156,7 @@ function Form({
     bodyLabel,
     taken,
     onDirty,
+    onReload,
     onSaved,
     onDeleted
 }: {
@@ -164,6 +171,8 @@ function Form({
     /** Names that exist already: a new entry may not take one (the agent's file would be replaced). */
     taken: Set<string>
     onDirty: (dirty: boolean) => void
+    /** Drop the edits and read the file from disk again (it changed under the form). */
+    onReload: () => void
     onSaved: (entry: CatalogEntry) => void
     onDeleted: () => void
 }) {
@@ -174,6 +183,8 @@ function Form({
     const [mode, setMode] = useState<'edit' | 'preview'>(entry ? 'preview' : 'edit')
     const focusBody = useRef(false)
     const [error, setError] = useState<string | null>(null)
+    /** The file changed on disk since it was opened: Save was refused, the owner reloads or keeps editing. */
+    const [conflict, setConflict] = useState(false)
     const [busy, setBusy] = useState(false)
     const confirm = useConfirm()
     const textarea = useRef<HTMLTextAreaElement>(null)
@@ -219,14 +230,16 @@ function Form({
         if (!canSave) return
         setBusy(true)
         setError(null)
+        setConflict(false)
         try {
-            const saved = await api.save(kind, trimmed, { frontmatter: clean(fm), body }, !entry)
+            const saved = await api.save(kind, trimmed, { frontmatter: clean(fm), body, ...(entry ? { updated_at: entry.updated_at } : {}) }, !entry)
             // The form stays mounted for the same name: adopt the saved state so it reads as clean.
             setFm(saved.frontmatter)
             setBody(saved.body)
             onSaved(saved)
         } catch (e) {
             setError((e as Error).message)
+            setConflict(/changed on disk/.test((e as Error).message))
         } finally {
             setBusy(false)
         }
@@ -312,8 +325,16 @@ function Form({
             </div>
             <div className="form-body">
                 <ErrorBox error={error ?? undefined} />
+                {conflict && (
+                    <div className="row" style={{ marginBottom: 12, gap: 8 }}>
+                        <Button size="sm" onClick={onReload}>
+                            Reload from disk
+                        </Button>
+                        <span className="dim small">drops your edits here; copy what you need first</span>
+                    </div>
+                )}
                 {entry && aside?.(entry)}
-                <div className="form-grid">{form(fm, (patch) => setFm((prev) => ({ ...prev, ...patch })))}</div>
+                <div className="form-grid">{form(fm, (patch) => setFm((prev) => ({ ...prev, ...patch })), entry)}</div>
                 <div className="field-head">
                     <div>
                         <div>{bodyLabel}</div>

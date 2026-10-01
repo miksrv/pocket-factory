@@ -4,7 +4,7 @@ import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
 import { Tile } from '../components/Tile'
 import { Button, Empty, PageHead, Stat, StatusBadge } from '../components/ui'
-import { api, fmt, type McpEntry, type Status, type Task, taskTokens } from '../lib/api'
+import { api, fmt, type McpEntry, type Stats, type Status, type Task, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 export function OverviewPage() {
@@ -77,6 +77,8 @@ export function OverviewPage() {
                 <Check ok={Boolean(d?.telegram.enabled)} label="Telegram" detail={d?.telegram.enabled ? `bot enabled · ${d.telegram.allowed_user_ids.length} allowed user(s)` : 'TELEGRAM_BOT_TOKEN missing — web only'} warn />
                 <Check ok={Boolean(d?.stt.enabled)} label="Voice input" detail={d?.stt.enabled ? d.stt.model : 'GROQ_API_KEY missing — text only'} warn />
                         <Check ok={(d?.workspaces.length ?? 0) > 0} label="Workspaces" detail={`${d?.workspaces.length ?? 0} repositories in ${d?.paths.workspaces ?? '…'}`} />
+                        {/* Red: a file that cannot fire or a prefilter that fails. Amber: a firing the factory slept through. */}
+                        <Check ok={Boolean(s && !s.schedules.invalid && !s.schedules.failing.length && !s.schedules.missed.length)} label="Schedules" detail={schedulesDetail(s?.schedules)} warn={Boolean(s && !s.schedules.invalid && !s.schedules.failing.length)} />
                         <div className="card-foot">
                             <span>From .env; edit on the host, restart to apply.</span>
                             <Link to="/settings" className="quiet">
@@ -98,7 +100,7 @@ export function OverviewPage() {
 function McpConnected({ servers }: { servers: McpEntry[] | undefined }) {
     const connected = (servers ?? []).filter((s) => s.status === 'connected')
     const rest = (servers?.length ?? 0) - connected.length
-    const shown = connected.slice(0, 6)
+    const shown = connected.slice(0, 7)
     const more = connected.length - shown.length
     return (
         <div className="card pad0">
@@ -163,6 +165,18 @@ function githubDetail(github: Status['github'] | undefined): string {
     return `${parts.join(' + ')} · ${github.cli ?? 'gh not found'}`
 }
 
+/** "2 on · next inbox-morning in 3h" — or what needs the owner: invalid files, failing prefilters, a minute slept through. */
+function schedulesDetail(s: Stats['schedules'] | undefined): string {
+    if (!s) return '…'
+    if (!s.total) return 'none yet — Schedules'
+    const parts: string[] = []
+    if (s.invalid) parts.push(`${s.invalid} invalid`)
+    if (s.failing.length) parts.push(`prefilter failing: ${s.failing.join(', ')}`)
+    if (s.missed.length) parts.push(`missed a firing: ${s.missed.join(', ')}`)
+    parts.push(`${s.on} of ${s.total} on`)
+    if (s.next) parts.push(`next ${s.next.name} in ${fmt.until(s.next.at)}`)
+    return parts.join(' · ')
+}
 function Check({ ok, label, detail, warn }: { ok: boolean; label: string; detail: string; warn?: boolean }) {
     return (
         <div className="row" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>

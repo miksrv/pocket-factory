@@ -47,6 +47,8 @@ export function Layout() {
     const unread = status.data?.stats.chat_unread ?? 0
     const needsReply = status.data?.stats.chat_needs_reply ?? 0
     const chatActive = status.data?.stats.chat_active ?? 0
+    // Schedules that need the owner: an invalid file or a prefilter that fails (a missed minute is told on the page and in Telegram).
+    const schedulesBad = (status.data?.stats.schedules?.invalid ?? 0) + (status.data?.stats.schedules?.failing.length ?? 0)
     // One badge per item: the Chat item shows what needs the owner first —
     // replies not seen yet, then questions waiting for an answer, then work in progress.
     const chatBadge =
@@ -70,8 +72,6 @@ export function Layout() {
     useEffect(() => {
         document.title = unread > 0 ? `(${unread}) Pocket Factory` : 'Pocket Factory'
     }, [unread])
-    const [collapsed, setCollapsed] = useState(readCollapsed)
-    const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === 'open') // mobile drawer
     useEffect(() => {
         setFaviconBadge(chatBadge ? (chatBadge.kind === 'running' ? { kind: 'running' } : { kind: chatBadge.kind, count: chatBadge.count }) : null)
     }, [chatBadge?.kind, chatBadge?.count]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -108,6 +108,8 @@ export function Layout() {
           : notifyOn
             ? 'Desktop notifications on — click to turn off'
             : 'Notify me when a task finishes while this tab is hidden'
+    const [collapsed, setCollapsed] = useState(readCollapsed)
+    const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === 'open') // mobile drawer
     const location = useLocation()
     const { guard } = useLeaveGuard()
 
@@ -166,6 +168,11 @@ export function Layout() {
                                 </span>
                                 <span className="grow label">{item.label}</span>
                                 {item.to === '/tasks' && running > 0 && <span className="badge running count">{running}</span>}
+                                {item.to === '/schedules' && schedulesBad > 0 && (
+                                    <span className="badge ask count" title={`${schedulesBad} schedule(s) need attention`}>
+                                        {schedulesBad}
+                                    </span>
+                                )}
                                 {item.to === '/chat' && chatBadge && (
                                     <span className={`badge ${chatBadge.kind} count`} title={chatBadge.title}>
                                         {chatBadge.count}

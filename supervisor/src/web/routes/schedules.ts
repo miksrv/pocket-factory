@@ -34,9 +34,10 @@ export function scheduleRoutes(): Hono<Env> {
         return view ? c.json(view) : c.json({ error: 'schedule not found' }, 404)
     })
 
+    /** The firings that mattered (a task, an error, a missed minute); `all=1` adds the empty polls and the skips. */
     app.get('/:name/runs', (c) => {
         const limit = Math.min(200, Math.max(1, Number(c.req.query('limit')) || 30))
-        return c.json(c.get('app').schedules.runs(c.req.param('name'), limit))
+        return c.json(c.get('app').schedules.runs(c.req.param('name'), limit, c.req.query('all') === '1'))
     })
 
     /** Fire now: ignores the cron, the window and the soft-stop; never overlaps a run in progress. */

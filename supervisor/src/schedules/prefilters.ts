@@ -8,6 +8,8 @@ export interface Item {
     title: string
     text?: string
     url?: string
+    /** Set by the scheduler: an earlier version of this item (same id, older change time or commit) was handed over at this time. */
+    seen_before?: string
 }
 
 export interface PrefilterContext {

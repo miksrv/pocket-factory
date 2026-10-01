@@ -1,3 +1,4 @@
+import { isModelAlias, MODEL_ALIASES } from '../claude/models.js'
 import type { CatalogEntry } from '../files/catalog.js'
 import { type Cron, describeCron, isTimeZone, parseCron, parseWindow, type Window } from './cron.js'
 
@@ -60,6 +61,8 @@ export interface ScheduleSpec {
     hosts: ScheduleHost[]
     skill: string | null
     agent: string | null
+    /** CLI alias the run's orchestrator uses; null (`inherit`) = the factory's current model. */
+    model: string | null
     /** Free text handed to the agent as the mode of the run: `report`, `fix`, `comment`, … */
     action: string | null
     prefilter: Prefilter | null
@@ -70,6 +73,8 @@ export interface ScheduleSpec {
     first_run: 'skip' | 'process'
     /** At most this many new items per run; the rest wait for the next one. */
     max_items: number
+    /** One-shot: the schedule switches itself off once it has queued a task. */
+    once: boolean
 }
 
 export interface Refs {
@@ -181,6 +186,9 @@ export function parseSchedule(entry: CatalogEntry, defaults: { tz: string }, ref
     if (skill && !refs.skillExists(skill)) warnings.push(`skill "${skill}" is not installed`)
     const agent = str(fm.agent) ?? null
     if (agent && !refs.agentExists(agent)) warnings.push(`agent "${agent}" does not exist`)
+    const modelRaw = str(fm.model)
+    const model = !modelRaw || modelRaw === 'inherit' ? null : modelRaw
+    if (model && !isModelAlias(model)) errors.push(`model must be inherit or one of ${MODEL_ALIASES.join(', ')} (got "${model}")`)
 
     const prefilter = parsePrefilter(fm.prefilter, errors)
     if (prefilter?.kind === 'github-prs' && !prefilter.repo && !project) errors.push('prefilter github-prs needs a `repo` or a `project` with a repository')
@@ -210,12 +218,14 @@ export function parseSchedule(entry: CatalogEntry, defaults: { tz: string }, ref
             hosts,
             skill,
             agent,
+            model,
             action: str(fm.action) ?? null,
             prefilter,
             notify: notify as ScheduleSpec['notify'],
             session: session as ScheduleSpec['session'],
             first_run: firstRun as ScheduleSpec['first_run'],
-            max_items: int(fm.max_items, 10, 1, 100)
+            max_items: int(fm.max_items, 10, 1, 100),
+            once: bool(fm.once, false)
         }
     }
 }
