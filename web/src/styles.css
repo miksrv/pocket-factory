@@ -164,6 +164,10 @@ a.stat { color: inherit; }
 a.stat:hover { text-decoration: none; }
 a.stat:hover .value { text-decoration: underline; }
 .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px 24px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+/* One line of a card: a health check, a connected server. Rows draw their own bottom border, so the
+   last one, and the one a .card-foot (which draws its top border) follows, must not: the line would double. */
+.card-row { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.card > :is(.card-row, .stat-row, .meters):last-child, .card > :is(.card-row, .stat-row, .meters):has(+ .card-foot) { border-bottom: 0; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { font-size: 10.5px; background: var(--surface); }

@@ -106,7 +106,7 @@ function McpConnected({ servers }: { servers: McpEntry[] | undefined }) {
         <div className="card pad0">
             {connected.length ? (
                 shown.map((s) => (
-                    <div key={s.key} className="row" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                    <div key={s.key} className="card-row">
                         <span className="live" style={{ fontWeight: 600 }}>
                             {s.label}
                         </span>
@@ -179,7 +179,7 @@ function schedulesDetail(s: Stats['schedules'] | undefined): string {
 }
 function Check({ ok, label, detail, warn }: { ok: boolean; label: string; detail: string; warn?: boolean }) {
     return (
-        <div className="row" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+        <div className="card-row">
             <span className={`live${ok ? '' : warn ? ' warn' : ' off'}`} style={{ width: 170, fontWeight: 600 }}>
                 {label}
             </span>
