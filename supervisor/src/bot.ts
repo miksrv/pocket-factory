@@ -8,6 +8,7 @@ import type { Schedules } from './schedules/service.js'
 import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 import { MODEL_ALIASES } from './claude/models.js'
+import { describeUserAgent, type WebAuth } from './web/auth.js'
 
 const log = createLogger('bot')
 
@@ -183,7 +184,7 @@ function askMessage(task: Task, ask: Ask, inTopic: boolean): { key: string; text
     return { key: `${ask.request_id}:${index}`, text: lines.join('\n'), keyboard }
 }
 
-export function createBot(config: Config, tasks: TaskService, store: Store, schedules?: Schedules): Bot {
+export function createBot(config: Config, tasks: TaskService, store: Store, schedules?: Schedules, auth?: WebAuth): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
 
@@ -557,6 +558,22 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 if (conversation) remember(ownerChat, ids, conversation.id, run.task_id)
             })
             .catch((error) => log.error('schedule notice failed', error))
+    })
+
+    // The web UI's door: the owner hears about every sign-in, the first wrong
+    // password of a streak (the ones after it would only repeat the message)
+    // and a lock, so an attempt to guess the password is never silent.
+    auth?.on('notice', (notice) => {
+        if (!ownerChat) return
+        const where = `from \`${notice.ip}\` (${describeUserAgent(notice.userAgent)})`
+        const name = notice.username ? ` as \`${notice.username}\`` : ''
+        const text =
+            notice.kind === 'ok'
+                ? `🔓 Signed in to the web UI ${where}. Not you? Settings → Security → Sign out everywhere, and change WEB_AUTH_PASSWORD.`
+                : notice.kind === 'locked'
+                  ? `🔒 Web sign-in locked for ${where} until ${new Date(notice.locked_until ?? Date.now()).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' })} after ${notice.failures} wrong passwords${name}.`
+                  : `⚠️ Wrong web password ${where}${name}. ${auth.policy.max_failures - notice.failures} more and that address is locked for ${auth.policy.lock_minutes} min.`
+        sendMarkdown(bot, ownerChat, text).catch((error) => log.error('sign-in notice failed', error))
     })
 
     bot.catch((err) => {

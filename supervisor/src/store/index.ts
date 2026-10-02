@@ -250,6 +250,27 @@ const now = () => new Date().toISOString()
  * `id` breaks ties between rows created in the same millisecond; without it a
  * page boundary would skip or repeat them.
  */
+/** A signed-in browser: the row of a session cookie (the token itself is never stored, only its hash). */
+export interface WebSession {
+    id: string
+    created_at: string
+    last_seen_at: string
+    expires_at: string
+    ip: string | null
+    user_agent: string | null
+}
+
+export type LoginResult = 'ok' | 'failed' | 'locked'
+
+export interface LoginAttempt {
+    id: number
+    ts: string
+    ip: string
+    username: string | null
+    result: LoginResult
+    user_agent: string | null
+}
+
 export interface Cursor {
     ts: string
     id?: string
@@ -919,5 +940,68 @@ export class Store {
             )
             .all(conversationId, afterId) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
         return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+    }
+
+    // ---- web sign-in -------------------------------------------------------
+
+    createWebSession(id: string, expiresAt: string, ip: string | null, userAgent: string | null): WebSession {
+        const ts = now()
+        this.db
+            .prepare('INSERT INTO web_sessions (id, created_at, last_seen_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(id, ts, ts, expiresAt, ip, userAgent)
+        return { id, created_at: ts, last_seen_at: ts, expires_at: expiresAt, ip, user_agent: userAgent }
+    }
+
+    /** A live session by its id (hash); an expired one counts as gone. */
+    getWebSession(id: string): WebSession | undefined {
+        return this.db.prepare('SELECT * FROM web_sessions WHERE id = ? AND expires_at > ?').get(id, now()) as WebSession | undefined
+    }
+
+    /** The session was used: slide its expiry and remember when and from where. */
+    touchWebSession(id: string, expiresAt: string, ip: string | null): void {
+        this.db.prepare('UPDATE web_sessions SET last_seen_at = ?, expires_at = ?, ip = COALESCE(?, ip) WHERE id = ?').run(now(), expiresAt, ip, id)
+    }
+
+    deleteWebSession(id: string): boolean {
+        return this.db.prepare('DELETE FROM web_sessions WHERE id = ?').run(id).changes > 0
+    }
+
+    /** Sign out everywhere; `except` keeps the current browser signed in. */
+    deleteWebSessions(except?: string): number {
+        return except === undefined
+            ? Number(this.db.prepare('DELETE FROM web_sessions').run().changes)
+            : Number(this.db.prepare('DELETE FROM web_sessions WHERE id <> ?').run(except).changes)
+    }
+
+    listWebSessions(): WebSession[] {
+        return this.db.prepare('SELECT * FROM web_sessions WHERE expires_at > ? ORDER BY last_seen_at DESC').all(now()) as unknown as WebSession[]
+    }
+
+    purgeWebSessions(): number {
+        return Number(this.db.prepare('DELETE FROM web_sessions WHERE expires_at <= ?').run(now()).changes)
+    }
+
+    addLoginAttempt(ip: string, username: string | null, result: LoginResult, userAgent: string | null): LoginAttempt {
+        const ts = now()
+        const info = this.db.prepare('INSERT INTO login_attempts (ts, ip, username, result, user_agent) VALUES (?, ?, ?, ?, ?)').run(ts, ip, username, result, userAgent)
+        return { id: Number(info.lastInsertRowid), ts, ip, username, result, user_agent: userAgent }
+    }
+
+    /** Failed sign-ins since `since`, from one address or (null) from anywhere; `last` is the newest of them. */
+    loginFailures(ip: string | null, since: string): { count: number; last: string | null } {
+        const row = (
+            ip === null
+                ? this.db.prepare(`SELECT COUNT(*) AS count, MAX(ts) AS last FROM login_attempts WHERE result = 'failed' AND ts > ?`).get(since)
+                : this.db.prepare(`SELECT COUNT(*) AS count, MAX(ts) AS last FROM login_attempts WHERE result = 'failed' AND ip = ? AND ts > ?`).get(ip, since)
+        ) as { count: number; last: string | null }
+        return { count: Number(row.count), last: row.last }
+    }
+
+    listLoginAttempts(limit = 50): LoginAttempt[] {
+        return this.db.prepare('SELECT * FROM login_attempts ORDER BY id DESC LIMIT ?').all(limit) as unknown as LoginAttempt[]
+    }
+
+    purgeLoginAttempts(before: string): number {
+        return Number(this.db.prepare('DELETE FROM login_attempts WHERE ts < ?').run(before).changes)
     }
 }

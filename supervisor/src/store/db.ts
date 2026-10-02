@@ -169,7 +169,32 @@ const MIGRATIONS: string[] = [
     // v11: the model a task was queued with (a schedule's `model:`); null =
     // the factory's current model, kept in `meta` (`claude.model`) since the
     // owner picks it from Telegram or Settings, not from .env.
-    `ALTER TABLE tasks ADD COLUMN model TEXT`
+    `ALTER TABLE tasks ADD COLUMN model TEXT`,
+    // v12: the web UI's own sign-in. A session row per browser (the cookie
+    // holds a random token, the row its SHA-256), and every sign-in attempt,
+    // which is what the lockout counts and Settings → Security shows.
+    `
+    CREATE TABLE web_sessions (
+        id           TEXT PRIMARY KEY,           -- sha256 of the cookie token
+        created_at   TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        expires_at   TEXT NOT NULL,
+        ip           TEXT,
+        user_agent   TEXT
+    );
+    CREATE INDEX web_sessions_expires ON web_sessions(expires_at);
+
+    CREATE TABLE login_attempts (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts         TEXT NOT NULL,
+        ip         TEXT NOT NULL,
+        username   TEXT,
+        result     TEXT NOT NULL,                -- ok | failed | locked
+        user_agent TEXT
+    );
+    CREATE INDEX login_attempts_ts ON login_attempts(ts);
+    CREATE INDEX login_attempts_ip ON login_attempts(ip, ts);
+    `
 ]
 
 export function openDatabase(file: string): DatabaseSync {

@@ -4,12 +4,16 @@ import path from 'node:path'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
-import { basicAuth } from 'hono/basic-auth'
 import { bodyLimit } from 'hono/body-limit'
+import { getCookie } from 'hono/cookie'
+import { secureHeaders } from 'hono/secure-headers'
 
 import { createLogger } from '../logger.js'
 import { BadName, NotFound } from '../files/catalog.js'
+import { SESSION_COOKIE } from './auth.js'
 import type { AppContext, Env } from './context.js'
+import { clientIp, clientOf } from './request.js'
+import { authRoutes } from './routes/auth.js'
 import { conversationRoutes } from './routes/conversations.js'
 import { fileRoutes } from './routes/files.js'
 import { hostRoutes } from './routes/hosts.js'
@@ -45,30 +49,31 @@ export function createApp(app: AppContext): Hono<Env> {
         await next()
     })
 
-    // The UI controls an agent with repository and host credentials. Basic
-    // auth is the floor; put Tailscale / Caddy / Cloudflare Access in front.
-    if (web.authPassword) {
-        hono.use('*', basicAuth({ username: web.authUser, password: web.authPassword }))
-    }
+    // The UI controls an agent with repository and host credentials. The
+    // sign-in below is the floor; put Tailscale / Caddy / Cloudflare Access
+    // in front when the port is reachable from outside.
+    hono.use('*', secureHeaders({ xFrameOptions: 'DENY', referrerPolicy: 'same-origin' }))
 
     // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
     hono.use('/api/*', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
 
     hono.use('/api/*', async (c, next) => {
+        // What the API answers is the owner's: never a shared cache's, never the browser's after sign-out.
+        c.header('Cache-Control', 'no-store')
         const host = hostnameOf(c.req.header('host'))
         // Without a password the API trusts whoever reaches the port, so it
         // must at least refuse a DNS-rebinding page, which arrives with a
         // foreign Host. Local names are always allowed; WEB_ALLOWED_HOSTS
         // adds a LAN or tunnel name. With a password the browser holds no
-        // credentials for a foreign name, so any Host is fine.
+        // session for a foreign name, so any Host is fine.
         if (!web.authPassword && !isLocal(host) && !web.allowedHosts.has(host)) {
             return c.json({ error: `host "${host}" not allowed; set WEB_ALLOWED_HOSTS or WEB_AUTH_PASSWORD` }, 403)
         }
-        // A cross-site form or fetch carries a foreign Origin. Basic auth does
-        // not help here: the browser attaches the stored credentials to a
-        // cross-site POST as well, and the routes parse JSON whatever the
-        // content type, so the check applies in both modes. Requests without
-        // an Origin (curl, scripts) pass.
+        // A cross-site form or fetch carries a foreign Origin. The session
+        // cookie is SameSite=Strict, and a script's Basic header is attached
+        // by the browser cross-site too, and the routes parse JSON whatever
+        // the content type, so the check applies in both modes. Requests
+        // without an Origin (curl, scripts) pass.
         const origin = c.req.header('origin')
         if (origin && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
             let originHost = ''
@@ -82,6 +87,24 @@ export function createApp(app: AppContext): Hono<Env> {
         await next()
     })
 
+    // Sign-in. The SPA shell and its assets are public (they hold no data);
+    // every API route but /auth/me and /auth/login needs a session cookie, or
+    // a Basic header for a script. 401 is what the UI turns into its sign-in
+    // page.
+    hono.use('/api/*', async (c, next) => {
+        const { auth } = app
+        c.set('session', null)
+        if (auth.mode === 'open') return next()
+        const session = auth.sessionOf(getCookie(c, SESSION_COOKIE), clientIp(c))
+        if (session) {
+            c.set('session', session)
+            return next()
+        }
+        if (c.req.path === '/api/auth/me' || (c.req.path === '/api/auth/login' && c.req.method === 'POST')) return next()
+        if (auth.basic(c.req.header('authorization'), clientOf(c))) return next()
+        return c.json({ error: 'sign in required' }, 401)
+    })
+
     hono.onError((error, c) => {
         if (error instanceof BadName) return c.json({ error: error.message }, 400)
         if (error instanceof NotFound) return c.json({ error: error.message }, 404)
@@ -90,6 +113,7 @@ export function createApp(app: AppContext): Hono<Env> {
     })
 
     const api = new Hono<Env>()
+    api.route('/auth', authRoutes())
     api.route('/status', statusRoutes())
     api.route('/tasks', taskRoutes())
     api.route('/usage', usageRoutes())
@@ -127,6 +151,6 @@ export function startServer(app: AppContext): void {
     const { host, port, authPassword } = app.config.web
     const hono = createApp(app)
     serve({ fetch: hono.fetch, hostname: host, port }, (info) => {
-        log.info(`listening on http://${info.address}:${info.port}${authPassword ? ' (basic auth)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`)
+        log.info(`listening on http://${info.address}:${info.port}${authPassword ? ' (sign-in required)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`)
     })
 }

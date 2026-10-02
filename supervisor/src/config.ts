@@ -29,9 +29,17 @@ export interface Config {
         host: string
         port: number
         authUser: string
+        /** Empty = open mode: no sign-in, the API answers only to local host names (`allowedHosts`). */
         authPassword: string | undefined
         /** Host names the API answers to when no password is set (DNS-rebinding guard). */
         allowedHosts: Set<string>
+        /** A browser session lives this long since it was last used. */
+        sessionDays: number
+        /** Failed sign-ins from one address within `loginLockMinutes` that lock sign-in for as long. */
+        loginMaxFailures: number
+        loginLockMinutes: number
+        /** Behind a reverse proxy: take the client address from X-Real-IP / X-Forwarded-For. */
+        trustProxy: boolean
         distDir: string
     }
     presetsDir: string
@@ -124,6 +132,10 @@ export function loadConfig(): Config {
                     .map((h) => h.trim().toLowerCase())
                     .filter(Boolean)
             ),
+            sessionDays: Math.max(1, number('WEB_SESSION_DAYS', 30)),
+            loginMaxFailures: Math.max(1, Math.floor(number('WEB_LOGIN_MAX_FAILURES', 5))),
+            loginLockMinutes: Math.max(1, number('WEB_LOGIN_LOCK_MIN', 10)),
+            trustProxy: flag('WEB_TRUST_PROXY'),
             distDir: optional('WEB_DIST') ?? path.resolve(process.cwd(), 'web', 'dist')
         },
         presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),
@@ -136,6 +148,12 @@ export function loadConfig(): Config {
             askTimeoutMs: Math.max(0, number('SCHEDULES_ASK_TIMEOUT_MIN', 120)) * 60_000
         }
     }
+}
+
+/** A boolean switch: 1 / true / yes / on. */
+function flag(name: string): boolean {
+    const raw = optional(name)?.toLowerCase()
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
 }
 
 function timeZone(tz: string): string {

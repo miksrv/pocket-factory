@@ -13,6 +13,7 @@ import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
 import { TaskService, type Workspace } from './tasks/service.js'
 import fs from 'node:fs'
+import { WebAuth } from './web/auth.js'
 import { startServer } from './web/server.js'
 
 const log = createLogger('supervisor')
@@ -93,7 +94,9 @@ async function main(): Promise<void> {
     // Telegram is optional: without a token the factory is web-only (also
     // handy for a second dev instance next to the container, which would
     // otherwise fight over long polling).
-    const bot = config.telegram.botToken ? createBot(config, tasks, store, schedules) : null
+    // The web UI's sign-in: sessions and the lockout live in the store, failed attempts are told in Telegram.
+    const auth = new WebAuth(store, config.web)
+    const bot = config.telegram.botToken ? createBot(config, tasks, store, schedules, auth) : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({
@@ -105,12 +108,15 @@ async function main(): Promise<void> {
         knownHosts,
         transcripts,
         presets: new Presets(config.presetsDir),
-        schedules
+        schedules,
+        auth
     })
+    auth.start()
 
     const shutdown = (signal: string) => {
         log.info(`${signal} received, stopping`)
         schedules.stop()
+        auth.stop()
         void bot?.stop()
         void tasks.shutdown().then(() => process.exit(0))
     }

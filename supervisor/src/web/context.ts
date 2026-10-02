@@ -7,6 +7,7 @@ import type { Schedules } from '../schedules/service.js'
 import type { Transcripts } from '../sessions/transcripts.js'
 import type { Store } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
+import type { WebAuth } from './auth.js'
 
 /** Everything the HTTP routes need; assembled once in index.ts. */
 export interface AppContext {
@@ -19,6 +20,10 @@ export interface AppContext {
     transcripts: Transcripts
     presets: Presets
     schedules: Schedules
+    auth: WebAuth
 }
 
-export type Env = { Variables: { app: AppContext } }
+import type { WebSession } from '../store/index.js'
+
+/** `session`: the signed-in browser's session, null for a request without one (open mode, Basic auth, or not signed in). */
+export type Env = { Variables: { app: AppContext; session: WebSession | null } }
