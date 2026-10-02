@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { HostsSection } from '../components/Hosts'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
+import { SecuritySection } from '../components/Security'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
 import { type McpEntry, type McpOverview, type McpServerConfig } from '../lib/api'
 import { api } from '../lib/api'
@@ -49,6 +50,9 @@ export function SettingsPage() {
                         <Row k="Caps per task" v={`${s.claude.max_turns} turns · $${s.claude.max_budget_usd} by the CLI's list-price estimate (a safety stop, not a bill)`} />
                         <Row k="Concurrent sessions" v={String(s.max_concurrent_sessions)} />
                         <Row k="Config dir" v={s.claude.config_dir} mono />
+                    </Section>
+                    <Section id="security" title="Security">
+                        <SecuritySection telegram={s.telegram.enabled} />
                     </Section>
                     <Section id="github" title="GitHub">
                         <Row k="gh CLI" v={s.github.cli ?? 'not found'} />

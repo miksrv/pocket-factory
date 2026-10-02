@@ -8,6 +8,7 @@ import { useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { Icon, type IconName } from './Icon'
 import { LimitsInline } from './Limits'
+import { useAuth } from './Auth'
 import { Button, CloseButton } from './ui'
 
 const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }> = [
@@ -42,6 +43,7 @@ function readCollapsed(): boolean {
 }
 
 export function Layout() {
+    const { auth, signOut } = useAuth()
     const status = useAsync(() => api.status(), [], 10_000)
     const running = status.data?.stats.running ?? 0
     const unread = status.data?.stats.chat_unread ?? 0
@@ -111,7 +113,7 @@ export function Layout() {
     const [collapsed, setCollapsed] = useState(readCollapsed)
     const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === 'open') // mobile drawer
     const location = useLocation()
-    const { guard } = useLeaveGuard()
+    const { guard, leave } = useLeaveGuard()
 
     useEffect(() => {
         try {
@@ -187,17 +189,24 @@ export function Layout() {
                         <div className={`live${live}`} title={liveText}>
                             <span className="label">{liveText}</span>
                         </div>
-                        <Button
-                            variant="ghost"
-                            className={`notify-toggle${notifyOn ? ' on' : ''}`}
-                            title={notifyTitle}
-                            aria-label={notifyTitle}
-                            aria-pressed={notifyOn}
-                            disabled={!notificationsSupported || notificationsBlocked()}
-                            onClick={() => toggleNotifications().then(setNotifyOn)}
-                        >
-                            <Icon name={notifyOn ? 'bell' : 'bellOff'} size={14} />
-                        </Button>
+                        <span className="foot-actions">
+                            <Button
+                                variant="ghost"
+                                className={`foot-btn notify-toggle${notifyOn ? ' on' : ''}`}
+                                title={notifyTitle}
+                                aria-label={notifyTitle}
+                                aria-pressed={notifyOn}
+                                disabled={!notificationsSupported || notificationsBlocked()}
+                                onClick={() => toggleNotifications().then(setNotifyOn)}
+                            >
+                                <Icon name={notifyOn ? 'bell' : 'bellOff'} size={14} />
+                            </Button>
+                            {auth.mode === 'password' && (
+                                <Button variant="ghost" className="foot-btn" title={`Sign out (${auth.user})`} aria-label="Sign out" onClick={() => leave(() => void signOut())}>
+                                    <Icon name="logout" size={14} />
+                                </Button>
+                            )}
+                        </span>
                     </div>
                     <div className="label" style={{ marginTop: 4 }}>
                         {status.data?.claude.version ?? ''}

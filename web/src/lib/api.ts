@@ -482,10 +482,44 @@ export interface Preset {
     installed: boolean
 }
 
+/** Who the browser is to the API: the sign-in mode, whether this browser is signed in, and the lock policy. */
+export interface AuthState {
+    /** `password`: sign-in required (WEB_AUTH_PASSWORD set); `open`: no password, whoever reaches the port is the owner. */
+    mode: 'password' | 'open'
+    authenticated: boolean
+    user: string | null
+    session: { created_at: string; ip: string | null } | null
+    policy: { max_failures: number; lock_minutes: number; session_days: number }
+}
+
+export interface WebSession {
+    id: string
+    created_at: string
+    last_seen_at: string
+    expires_at: string
+    ip: string | null
+    user_agent: string | null
+    current: boolean
+}
+
+export interface LoginAttempt {
+    id: number
+    ts: string
+    ip: string
+    username: string | null
+    result: 'ok' | 'failed' | 'locked'
+    user_agent: string | null
+}
+
+/** Dispatched on `window` when the API answers 401: the session is gone, the sign-in page takes over. */
+export const UNAUTHORIZED = 'pf:unauthorized'
+
 export class ApiError extends Error {
     constructor(
         public status: number,
-        message: string
+        message: string,
+        /** The JSON the API answered with, when it did (a sign-in refusal says how many attempts are left). */
+        public body: unknown = null
     ) {
         super(message)
     }
@@ -504,7 +538,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
         // not JSON: an HTML login page from a proxy in front, or a crashed server
     }
-    if (!response.ok) throw new ApiError(response.status, (body as { error?: string } | null)?.error ?? `${response.status} ${response.statusText}`)
+    if (!response.ok) {
+        // A session that lapsed or was revoked: the whole UI goes back to the sign-in page, not one widget to an error.
+        if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event(UNAUTHORIZED))
+        throw new ApiError(response.status, (body as { error?: string } | null)?.error ?? `${response.status} ${response.statusText}`, body)
+    }
     // A 200 that is not JSON must not become `{}`: every screen would then throw on a missing field.
     if (body === null) throw new ApiError(response.status, 'The API returned something other than JSON — a proxy login page? Reload and sign in.')
     return body as T
@@ -513,6 +551,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const targetBody = (target: HostTarget) => ('name' in target ? target : { ssh: target.ssh, key: target.key || undefined })
 
 export const api = {
+    auth: {
+        me: () => request<AuthState>('/auth/me'),
+        login: (username: string, password: string) =>
+            request<{ ok: true; user: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+        logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
+        logoutOthers: () => request<{ signed_out: number }>('/auth/logout-others', { method: 'POST' }),
+        sessions: () => request<WebSession[]>('/auth/sessions'),
+        revokeSession: (id: string) => request<{ revoked: boolean }>(`/auth/sessions/${id}`, { method: 'DELETE' }),
+        log: (limit = 50) => request<LoginAttempt[]>(`/auth/log?limit=${limit}`)
+    },
     status: () => request<Status>('/status'),
     /** Newest first, one page; pass `before` = the last task shown for the next. */
     tasks: (q: { status?: TaskStatus; project?: string; before?: Cursor; limit?: number } = {}) => {

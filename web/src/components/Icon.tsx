@@ -1,4 +1,4 @@
-import { Activity, Bell, BellOff, Bot, CalendarClock, ClipboardList, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, MessageSquare, Package, Send, Server, Settings, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
+import { Activity, Bell, BellOff, Bot, CalendarClock, ClipboardList, Eye, EyeOff, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, LogOut, MessageSquare, Package, Send, Server, Settings, ShieldCheck, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
 
 /**
  * One icon per concept, used by the sidebar, tiles and card heads alike so
@@ -33,7 +33,13 @@ export const ICONS = {
     /** The sidebar's switch for desktop notifications. */
     bell: Bell,
     bellOff: BellOff,
-    host: Server
+    host: Server,
+    /** The sidebar's sign-out, next to the bell; the shield heads Settings → Security. */
+    logout: LogOut,
+    shield: ShieldCheck,
+    /** Show / hide the password on the sign-in page. */
+    eye: Eye,
+    eyeOff: EyeOff
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
