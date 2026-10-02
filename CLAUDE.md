@@ -116,7 +116,7 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     (sub-agent started / completed, from the CLI's `task_started` / `task_notification` system
     events) and `limits` events besides text / tool calls. Project per task is detected from
     workspace names in tool-call inputs
-  - `web/` Hono server: basic auth, `/api/*` routes, serves `web/dist`
+  - `web/` Hono server: sign-in (`web/auth.ts`, below), `/api/*` routes, serves `web/dist`
 - `web/src/` — Vite + React SPA, no UI framework, one `styles.css`; `lib/api.ts` typed client,
   `components/Editor.tsx` shared list+form for agents/skills/projects/schedules (an `aside`
   slot renders live state above the form: `pages/Schedules.tsx` puts the schedule's state, Run
@@ -194,10 +194,25 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
 - `presets/<name>/` — `preset.json` + `agents/` `skills/` `projects/`; installed from the UI
 - `docker/entrypoint.sh` — seeds `/data`, git identity + `safe.directory '*'`, the per-owner
   credential helper for github.com, links `/data/secrets/ssh` → `~/.ssh`
-- Without `WEB_AUTH_PASSWORD` the API answers only to localhost `Host` names plus
-  `WEB_ALLOWED_HOSTS` (DNS-rebinding guard); in both auth modes it refuses mutating requests with a
-  foreign `Origin` (CSRF: browsers send basic-auth credentials cross-site too) and bodies over
-  2 MB (`web/server.ts`). `CLAUDE_TASK_TIMEOUT_MIN` bounds a task's wall-clock time (0 = none); a
+- **Web sign-in** (2026-10-01, replaces basic auth): with `WEB_AUTH_PASSWORD` set the SPA shows a
+  sign-in page (`components/Auth.tsx`: `AuthProvider` asks `/api/auth/me` first, a 401 from any
+  later call brings the page back) and the API wants a session cookie (`pf_session`, 32 random
+  bytes, HttpOnly, SameSite=Strict, Secure behind an https proxy; the store keeps the SHA-256 in
+  `web_sessions`, migration v12, sliding `WEB_SESSION_DAYS`). `web/auth.ts` `WebAuth`: constant-time
+  compare of `WEB_AUTH_USER` / password, every attempt a `login_attempts` row and a log line,
+  `WEB_LOGIN_MAX_FAILURES` (5) failures from one address within `WEB_LOGIN_LOCK_MIN` (10) lock
+  that address for as long (429 + `Retry-After`; four times as many from anywhere lock everyone;
+  attempts during a lock are recorded, not counted), a `notice` event the bot turns into a
+  Telegram message (every sign-in, the first wrong password of a streak, a lock). The client
+  address is the socket's unless `WEB_TRUST_PROXY=1` (then `X-Real-IP` / last `X-Forwarded-For`).
+  `Authorization: Basic` still works for scripts (same credentials, same lockout, no session).
+  Routes `web/routes/auth.ts`: `/api/auth/me|login|logout|logout-others|sessions|log`. The
+  sidebar foot has Sign out next to the bell; Settings → Security shows the policy, the
+  signed-in browsers (revoke one, "Sign out everywhere else") and the last 50 attempts.
+  Without a password (open mode) there is no sign-in and the API answers only to localhost `Host`
+  names plus `WEB_ALLOWED_HOSTS` (DNS-rebinding guard); in both modes it refuses mutating requests
+  with a foreign `Origin` (CSRF), bodies over 2 MB, sends `Cache-Control: no-store` on `/api` and
+  hono's secure headers (`X-Frame-Options: DENY`) on everything (`web/server.ts`). `CLAUDE_TASK_TIMEOUT_MIN` bounds a task's wall-clock time (0 = none); a
   stop sends SIGTERM to the CLI's process group and SIGKILL 10 s later. A conversation whose
   session cannot be resumed forgets the session id and the task runs once more from scratch. A
   task interrupted by a supervisor restart (deploy, crash, SIGTERM) stays `running` in the store,
