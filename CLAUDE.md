@@ -264,7 +264,8 @@ section as notes. Never tag a branch; never tag before the merge.
   the URL + code flow works in 2.1.283.)
 - Agent works inside the owner's real checkouts on a branch (no worktrees, no re-cloning). A
   conversation bound to a project (`conversations.project`, set via the Chat selector, Telegram
-  `/new <p>` / `/project <p>`, or detected from the first task) spawns `claude -p` with
+  `/new <p>`, or detected from the first task; `/project <p>` was dropped 2026-10-05 as a confusing
+  twin of `/new <p>`) spawns `claude -p` with
   cwd = the project's checkout, so the repository's `.mcp.json`, `.claude/agents`, `.claude/skills`
   and `CLAUDE.md` load on top of `data/claude`; a project-less conversation runs from the
   workspaces root. A task of a bound conversation carries that project from creation; detection
@@ -382,7 +383,8 @@ section as notes. Never tag a branch; never tag before the merge.
   `cost_usd` stays in the DB for the record. `CLAUDE_MAX_BUDGET_USD` / `--max-budget-usd` are gone
   (2026-10-05): the CLI told the model its remaining dollars and the agent cut a review short
   "because $0.30 were left"; the dispatcher rules now say there is no money budget, the windows
-  are the limit.
+  are the limit. The Telegram footer names the task's project and the windows with the task's
+  share, not turns / tokens / seconds (those stay on the task page).
 - Unknown `/commands` never reach the agent; replies are converted to Telegram HTML with plain-text
   fallback.
 - Single language: TypeScript for supervisor, API and UI. No Python service (asked and answered:
@@ -486,7 +488,7 @@ the history up to the evening of 2026-09-28). Since then (all committed by 2026-
 - Projects: form reworked (no branch prefix, workflow select, collapsed tracker, host cards with
   key selection and "Test connection"); `TenantManagement` onboarded from Telegram.
 - Conversations bound to a project run from its checkout (repository `.mcp.json`, `.claude/agents`,
-  skills and `CLAUDE.md` apply); `/new <p>`, `/project <p>`, Chat selector; MCP in three layers with
+  skills and `CLAUDE.md` apply); `/new <p>`, Chat selector; MCP in three layers with
   Settings → MCP editor for `data/config/mcp.json`; project `mcp:` allowlist; `Explore` on haiku,
   `maxTurns` / `effort` on agents.
 - Markdown prose in agents / skills is unwrapped (`scripts/reflow-md.mjs`); previews render files

@@ -26,9 +26,9 @@ while the owner is away from the keyboard; you do the work and report back.
 
 ## How to behave
 
-- A conversation is bound to one project once it is known (`/project`,
-  `/new <project>`, or the first task naming it): its tasks then run from the
-  project's checkout, where the repository's own `.mcp.json`, `.claude/agents`,
+- A conversation is bound to one project once it is known (`/new <project>`
+  or the first task naming it): its tasks then run from the project's
+  checkout, where the repository's own `.mcp.json`, `.claude/agents`,
   `.claude/skills` and `CLAUDE.md` apply on top of the factory's. A task that
   names another project belongs in another conversation: say so and suggest
   `/new <project>` instead of switching inside this one. Do not read or

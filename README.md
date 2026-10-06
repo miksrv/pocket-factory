@@ -125,8 +125,7 @@ the keys readable by that uid and keep private keys at mode 0600, or ssh refuses
 ## MCP servers
 
 Three layers, all optional. A repository's own `.mcp.json` applies when a conversation is bound
-to that project (`/new <project>`, `/project <project>`, the selector in Chat, or the first task
-naming it): tasks then run from the checkout, and its agents, skills and `CLAUDE.md` apply too.
+to that project (`/new <project>`, the selector in Chat, or the first task naming it): tasks then run from the checkout, and its agents, skills and `CLAUDE.md` apply too.
 Your own servers go into `data/config/mcp.json` (same format as `.mcp.json`, passed to every
 session); secrets only as `${VAR}` with the value in `.env`:
 
