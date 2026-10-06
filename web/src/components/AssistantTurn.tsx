@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fmt, type Task, type TaskEvent, taskTokens } from '../lib/api'
+import { changesText, fmt, type Task, type TaskEvent, taskTokens } from '../lib/api'
 import { AskForm } from './Ask'
 import { Event, summarizeInput } from './EventFeed'
 import { Button, Markdown, StatusBadge } from './ui'
@@ -89,7 +89,9 @@ export function AssistantTurn({ task, events, onTask }: { task: Task; events: Ta
         }
     }
 
-    if (task.status === 'queued') {
+    // A task the subscription limit stopped keeps what it did so far on screen and says when it goes on.
+    const waiting = task.status === 'queued' && task.not_before
+    if (task.status === 'queued' && !waiting) {
         return (
             <div className="reply-row">
                 <Tile icon="control" color="gray" small />
@@ -121,6 +123,12 @@ export function AssistantTurn({ task, events, onTask }: { task: Task; events: Ta
                         {parts.length === 0 ? 'Starting…' : 'Working…'}
                     </div>
                 )}
+                {waiting && (
+                    <div className="working waiting" title={fmt.when(task.not_before)}>
+                        ⏸ Subscription limit reached. Continues by itself in {fmt.until(task.not_before!)}, at{' '}
+                        {new Date(task.not_before!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, in the same session.
+                    </div>
+                )}
                 {task.status === 'failed' && <div className="tool error">{task.error ?? 'failed'}</div>}
                 {task.status === 'cancelled' && <div className="dim small">Stopped.</div>}
                 {!live && (
@@ -133,6 +141,12 @@ export function AssistantTurn({ task, events, onTask }: { task: Task; events: Ta
                         <span className="dim" title={fmt.when(task.finished_at)}>
                             · {fmt.ago(task.finished_at)}
                         </span>
+                        {changesText(task.git) && (
+                            <Button size="sm" variant="ghost" className="changes-chip" to={`/tasks/${task.id}#changes`} title="Files, diff and pull request">
+                                {changesText(task.git)}
+                                {task.git?.pr ? ` · PR #${task.git.pr.number}` : ''}
+                            </Button>
+                        )}
                         <span className="grow" />
                         {prose && (
                             <Button size="sm" variant="ghost" onClick={copy} title="Copy the reply as Markdown">

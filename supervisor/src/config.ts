@@ -12,6 +12,8 @@ export interface Config {
         permissionMode: string
         /** Wall-clock limit per task in ms; 0 = none. */
         taskTimeoutMs: number
+        /** How long a task stopped by the subscription limit may wait for the window to reset (0 = it fails instead). */
+        autoContinueMs: number
     }
     paths: {
         dataRoot: string
@@ -39,6 +41,8 @@ export interface Config {
         loginLockMinutes: number
         /** Behind a reverse proxy: take the client address from X-Real-IP / X-Forwarded-For. */
         trustProxy: boolean
+        /** Where the owner opens the UI, without a trailing slash; null = Telegram reports carry no links. */
+        publicUrl: string | null
         distDir: string
     }
     presetsDir: string
@@ -104,7 +108,10 @@ export function loadConfig(): Config {
             configDir: optional('CLAUDE_CONFIG_DIR') ?? path.join(dataRoot, 'claude'),
             maxTurns: number('CLAUDE_MAX_TURNS', 50),
             permissionMode: optional('CLAUDE_PERMISSION_MODE') ?? 'acceptEdits',
-            taskTimeoutMs: number('CLAUDE_TASK_TIMEOUT_MIN', 0) * 60_000
+            taskTimeoutMs: number('CLAUDE_TASK_TIMEOUT_MIN', 0) * 60_000,
+            // A task the subscription limit stopped waits in the queue for the window to reset and
+            // continues, when the reset is at most this far away (the weekly window usually is not). 0 = off.
+            autoContinueMs: Math.max(0, number('CLAUDE_AUTO_CONTINUE_HOURS', 6)) * 3_600_000
         },
         paths: {
             dataRoot,
@@ -134,6 +141,8 @@ export function loadConfig(): Config {
             loginMaxFailures: Math.max(1, Math.floor(number('WEB_LOGIN_MAX_FAILURES', 5))),
             loginLockMinutes: Math.max(1, number('WEB_LOGIN_LOCK_MIN', 10)),
             trustProxy: flag('WEB_TRUST_PROXY'),
+            // The address the owner opens the UI at (https://factory.example.com): Telegram reports link to the task page then.
+            publicUrl: optional('WEB_PUBLIC_URL')?.replace(/\/+$/, '') ?? null,
             distDir: optional('WEB_DIST') ?? path.resolve(process.cwd(), 'web', 'dist')
         },
         presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),

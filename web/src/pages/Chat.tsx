@@ -1,8 +1,9 @@
-import { ArrowDown, SendHorizontal } from 'lucide-react'
-import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ArrowDown, Paperclip, SendHorizontal } from 'lucide-react'
+import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { AssistantTurn } from '../components/AssistantTurn'
+import { MAX_FILES, PendingUploads, SentAttachments, useUploads } from '../components/Attachments'
 import { Channel } from '../components/Icon'
 import { STATUS_CHANGED } from '../components/Layout'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
@@ -125,8 +126,12 @@ export function ChatPage() {
 
 const NEAR_BOTTOM = 80
 
-/** Order of a task's life, so a stale row can never replace a newer one. */
-const rank = (status: Task['status']) => (status === 'queued' ? 0 : status === 'running' ? 1 : 2)
+/**
+ * Order of a task's life, so a stale row can never replace a newer one. A
+ * task goes back from running to queued only to wait for a window reset or
+ * after a restart; those bump `limit_waits` / `restarts`, which count first.
+ */
+const rank = (task: Task) => (task.limit_waits + task.restarts) * 3 + (task.status === 'queued' ? 0 : task.status === 'running' ? 1 : 2)
 
 /** "workspaces root" or one of the project files. */
 function ProjectSelect({ value, onChange, projects, disabled }: { value: string; onChange: (slug: string) => void; projects: CatalogEntry[]; disabled?: boolean }) {
@@ -146,6 +151,9 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
     const [unseen, setUnseen] = useState(false)
     const messages = useRef<HTMLDivElement>(null)
     const composer = useRef<HTMLTextAreaElement>(null)
+    const picker = useRef<HTMLInputElement>(null)
+    const files = useUploads(id)
+    const [dragging, setDragging] = useState(false)
     const lastEvent = useRef(0)
     /** Newest event id the reader has been shown or told about; only an event beyond it is "new". */
     const seen = useRef(0)
@@ -158,7 +166,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
     const mergeTask = (task: Task) =>
         setTasks((prev) => {
             const known = prev.get(task.id)
-            if (known && rank(known.status) > rank(task.status)) return prev
+            if (known && rank(known) > rank(task)) return prev
             return new Map(prev).set(task.id, task)
         })
 
@@ -334,13 +342,14 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
     const send = async (e?: FormEvent) => {
         e?.preventDefault()
         const text = prompt.trim()
-        if (!text || sending) return
+        if ((!text && !files.names.length) || sending || files.busy) return
         setSending(true)
         setPinned(true)
         try {
-            const task = await api.sendMessage(id, text)
+            const task = await api.sendMessage(id, text, files.names)
             mergeTask(task)
-            setPrompt('') // only once it is queued: a failed send keeps the draft
+            setPrompt('') // only once it is queued: a failed send keeps the draft and the files
+            files.clear()
             setError(null)
             onSent()
         } catch (err) {
@@ -391,6 +400,7 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                         <div key={task.id} className="exchange">
                             <div className="msg user">
                                 <div className="bubble">{task.prompt}</div>
+                                <SentAttachments conversationId={id} attachments={task.attachments} />
                                 <div className="meta" title={fmt.when(task.created_at)}>
                                     {task.source !== conversation?.channel ? `${task.source} · ` : ''}
                                     {fmt.ago(task.created_at)}
@@ -407,8 +417,53 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     </Button>
                 )}
             </div>
-            <form className="composer" onSubmit={send}>
+            <form
+                className={`composer${dragging ? ' dragging' : ''}`}
+                onSubmit={send}
+                onDragOver={(e: DragEvent) => {
+                    if (!e.dataTransfer.types.includes('Files')) return
+                    e.preventDefault()
+                    setDragging(true)
+                }}
+                onDragLeave={(e: DragEvent) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+                }}
+                onDrop={(e: DragEvent) => {
+                    if (!e.dataTransfer.files.length) return
+                    e.preventDefault()
+                    setDragging(false)
+                    files.add([...e.dataTransfer.files])
+                }}
+            >
+                <PendingUploads uploads={files.uploads} onRemove={files.remove} />
+                <input
+                    ref={picker}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                        files.add([...(e.target.files ?? [])])
+                        e.target.value = '' // the same file can be picked again after removing it
+                    }}
+                />
+                <Button
+                    className="attach"
+                    variant="ghost"
+                    onClick={() => picker.current?.click()}
+                    disabled={files.uploads.length >= MAX_FILES}
+                    title="Attach photos or files (or paste / drop them here)"
+                    aria-label="Attach files"
+                >
+                    <Paperclip size={16} />
+                </Button>
                 <textarea
+                    onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
+                        // A screenshot from the clipboard; text pasted along with it (some apps send both) still lands as text.
+                        const pasted = [...e.clipboardData.files]
+                        if (!pasted.length) return
+                        if (!e.clipboardData.getData('text')) e.preventDefault()
+                        files.add(pasted)
+                    }}
                     ref={composer}
                     value={prompt}
                     placeholder={answering ? 'Type your answer to the question above…' : active ? 'Queued after the running task…' : 'Describe the task…'}
@@ -422,11 +477,18 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     rows={1}
                     autoFocus
                 />
-                <Button variant="primary" className="send" type="submit" disabled={!prompt.trim() || sending} title="Send (Enter)" aria-label="Send">
+                <Button
+                    variant="primary"
+                    className="send"
+                    type="submit"
+                    disabled={(!prompt.trim() && !files.names.length) || sending || files.busy}
+                    title={files.busy ? 'Waiting for the upload…' : 'Send (Enter)'}
+                    aria-label="Send"
+                >
                     <SendHorizontal size={16} />
                 </Button>
                 <div className="composer-hint dim">
-                    Enter to send · Shift+Enter for a new line{answering ? ' · the agent is waiting: your message is the answer' : active ? ' · a task is running, yours will queue' : ''}
+                    Enter to send · Shift+Enter for a new line · paste or drop files{answering ? ' · the agent is waiting: your message is the answer' : active ? ' · a task is running, yours will queue' : ''}
                 </div>
             </form>
         </div>

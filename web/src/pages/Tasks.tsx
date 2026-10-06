@@ -4,6 +4,8 @@ import { Link, useParams } from 'react-router-dom'
 import { EventFeed } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
 import { AskForm } from '../components/Ask'
+import { SentAttachments } from '../components/Attachments'
+import { Changes } from '../components/Changes'
 import { Empty, ErrorBox, FilterSelect, PageHead, Stat, StatusBadge, StopButton, Tabs } from '../components/ui'
 import { api, fmt, taskTokens, type TaskStatus } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
@@ -131,10 +133,19 @@ export function TaskPage() {
                 <Stat card label="5-hour window" value={fmt.windowDelta(t.window_5h_delta) ?? '—'} sub={t.window_5h_delta === null ? 'not reported by the CLI' : 'share of the window this task consumed'} />
             </div>
 
+            <Changes task={t} onChanged={task.reload} />
+
             <h2>Prompt</h2>
             <div className="card" style={{ whiteSpace: 'pre-wrap' }}>
                 {t.prompt}
+                <SentAttachments conversationId={t.conversation_id} attachments={t.attachments} removed={Boolean(t.conversation?.deleted_at)} />
             </div>
+
+            {t.status === 'queued' && t.not_before && (
+                <div className="card working waiting" style={{ marginTop: 12 }} title={fmt.when(t.not_before)}>
+                    ⏸ Subscription limit reached. The task continues by itself in {fmt.until(t.not_before)}, in the same session.
+                </div>
+            )}
 
             {t.status === 'running' && t.ask && (
                 <>

@@ -184,7 +184,35 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   waiting (amber), else active (blue), never two at once.
   **Drafts**: an unsent message is kept in `localStorage` per conversation
   (`lib/drafts.ts`, `pf.chat.draft.<id>`), restored with the caret at its end when the
-  thread reopens, removed on send or delete
+  thread reopens, removed on send or delete.
+  **Attachments** (1.1.0, 2026-10-06): `files/inbox.ts` `Inbox` saves the owner's files under
+  `data/inbox/<conversation>/<stamp>-<rand>-<safe name>` (`TaskService.inbox`, pruned after 30
+  days at start); `tasks.attachments` (migration v13) keeps `{ name, path, type, size }` and the
+  runner gets `prompt + attachmentNote()` (absolute paths, "open with the Read tool") plus
+  `--add-dir <inbox root>`, so the Read needs no prompt in any mode (verified with `default`:
+  Haiku read a PNG and named its colour). Web: `POST /api/conversations/:id/attachments?name=`
+  with the raw body (its own 20 MB body limit in `web/server.ts`), then `/messages` with
+  `attachments: [names]`; `GET …/attachments/:name` serves PNG / JPEG / GIF / WebP inline and
+  everything else (SVG, HTML) as a download under a sandbox CSP. `components/Attachments.tsx`:
+  paperclip, paste, drop, chips with upload state; thumbnails under the bubble and on the task
+  page. Telegram: photo / document / video; an album (`media_group_id`) is gathered for 1.5 s;
+  with a caption it is a task at once, without one the files wait 30 min for the next text or
+  voice of the chat (`/new` drops them); while a question is open they go with the answer.
+  Deleting a conversation (`TaskService.deleteConversation`) removes its inbox directory; at
+  start `Inbox.sweep` removes directories of deleted or unknown conversations (owner's rule
+  2026-10-06: nothing on disk outlives its chat; any file the factory keeps for a chat belongs
+  under its inbox directory). `TaskService.submit` runs `Inbox.adopt`, so a file saved for the
+  chat's topic moves into the conversation a topic-switching reply lands in. **Changes panel** (1.1.0): `git/changes.ts`; a task of a bound
+  conversation records `tasks.git.start_head` / `start_branch` at start (`snapshotSync`, before
+  the CLI is registered, so the worker cannot overshoot `MAX_CONCURRENT_SESSIONS`), and every end
+  of `attempt` measures first (`measure`: branch, base = merge-base with origin's default branch
+  for a new branch, else the start; files / lines; uncommitted; `gh pr list --head`). Routes
+  `/api/tasks/:id/changes`, `/changes/file?path=`, `POST /pr` (push + `gh pr create --fill`).
+  `components/Changes.tsx` on the task page (`#changes`): report first, size + branch + Create
+  PR, files by folder with generated ones folded (`isGenerated`: lock files, build output,
+  minified, snapshots; migrations stay visible on purpose), one wrapped diff at a time. The chat
+  links the size under a reply; the Telegram footer adds changes, PR and, with `WEB_PUBLIC_URL`,
+  the panel's link
 - **Brand** (2026-10-01): the logo is `docs/brand/logo.png` (ChatGPT's render, the only source; no
   hand-drawn SVG). `web/public/` holds the cuts made from it with Pillow (`favicon-32`, `icon-64` for
   the badge, `icon-192` for the sidebar and notifications, `icon-512`, `apple-touch-icon` on an opaque
@@ -222,7 +250,18 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   session cannot be resumed forgets the session id and the task runs once more from scratch. A
   task interrupted by a supervisor restart (deploy, crash, SIGTERM) stays `running` in the store,
   is re-queued at the next start (`tasks.restarts`, once) and resumes its session; the dispatcher
-  rules tell the agent a repeated prompt means "continue". Only the owner's stop cancels
+  rules tell the agent a repeated prompt means "continue". Only the owner's stop cancels.
+  **Auto-continue** (1.1.0): a run refused for the subscription limit (`limitReset()` in
+  `tasks/service.ts`: `rate_limit_event` `rejected` with `rateLimitType` / `resetsAt`, else the
+  epoch in "usage limit reached|…", else an exhausted window's reset; the CLI's own words are
+  "You've hit your limit" / "usage limit reached") goes back to `queued` with `not_before` =
+  reset + 1 min and `limit_waits` + 1 (at most 3, only within `CLAUDE_AUTO_CONTINUE_HOURS`,
+  default 6), keeping the session; `nextQueuedTasks` skips a conversation whose oldest queued task
+  is not due, a 30 s interval ticks the worker. Telegram says when it continues once per wait;
+  `/stop` cancels a queued task too; the web merge ranks a row by `limit_waits + restarts` first
+  so the running → queued step is not dropped as stale. A wait also sets `pausedUntil`: the worker
+  starts nothing new before the reset (each run would be refused in turn). Only the result path
+  is covered: a CLI that exits without a result fails as before. Verified with a fake `claude` on PATH
 - The CLI's environment is `process.env` minus the supervisor's own secrets (`PRIVATE_ENV` in
   `tasks/service.ts`: bot token, allowed ids, web auth, Groq key); GitHub tokens and MCP `${VAR}`
   secrets stay because the agent needs them. The supervisor never calls the Claude API with the
@@ -528,7 +567,9 @@ Not done / next:
    README for forkers.
 7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
    audit log export.
-8. From the landscape survey (`docs/LANDSCAPE.md`), in priority order: ~~permission prompts /
+8. Release 1.1 from the October survey: ~~photos and files in~~ and ~~auto-continue after a window
+   reset~~ and ~~the Changes panel~~ done 2026-10-06 (branch `feature/attachments-and-auto-continue`,
+   not committed); next: Merge from the UI, files back to the chat. From the landscape survey (`docs/LANDSCAPE.md`), in priority order: ~~permission prompts /
    `AskUserQuestion` from Telegram and the web~~ (done 2026-09-30 over stream-json, see above;
    "Always allow" rules and a deny-on-timeout policy still open); photos and files in
    (`data/inbox/<task>/`, `@path` in the prompt); auto-continue after a window reset; a diff panel

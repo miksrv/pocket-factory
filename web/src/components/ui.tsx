@@ -19,12 +19,21 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
     size?: 'sm'
     /** Render as a router link that looks like a button. */
     to?: string
+    /** Render as an external link that looks like a button, opened in a new tab (a pull request on GitHub). */
+    href?: string
 }
 
 const buttonClass = (variant?: Variant, size?: 'sm', className?: string) => ['btn', variant, size, className].filter(Boolean).join(' ')
 
 /** The one button: `<Button variant="primary">`, `<Button size="sm" to="/tasks">`. */
-export function Button({ variant, size, to, className, type = 'button', children, ...rest }: ButtonProps) {
+export function Button({ variant, size, to, href, className, type = 'button', children, ...rest }: ButtonProps) {
+    if (href) {
+        return (
+            <a href={href} target="_blank" rel="noopener noreferrer" className={buttonClass(variant, size, className)} title={rest.title} aria-label={rest['aria-label']}>
+                {children}
+            </a>
+        )
+    }
     if (to) {
         // The handler only reads the event (a guard calls preventDefault), so the element type is immaterial.
         const onClick = rest.onClick as unknown as MouseEventHandler<HTMLAnchorElement> | undefined

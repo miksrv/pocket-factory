@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 
 import type { RateLimits } from '../claude/runner.js'
+import type { Attachment } from '../files/inbox.js'
+import type { TaskGit } from '../git/changes.js'
 
 export type Channel = 'telegram' | 'web'
 export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook'
@@ -88,6 +90,14 @@ export interface Task {
     schedule: string | null
     /** CLI model alias the task was queued with (a schedule's `model:`); null = the factory's current model at start. */
     model: string | null
+    /** Files the owner sent with the message (data/inbox); their paths reach the agent after the prompt. */
+    attachments: Attachment[] | null
+    /** A queued task does not start before this time: it hit the subscription limit and waits for the window to reset. */
+    not_before: string | null
+    /** How many times the task went back to the queue to wait for a window reset. */
+    limit_waits: number
+    /** What the task changed in its project's checkout; null for a project-less task or a checkout that is not a git repository. */
+    git: TaskGit | null
     created_at: string
     started_at: string | null
     finished_at: string | null
@@ -321,8 +331,13 @@ const conversationOf = (row: ConversationRow): Conversation => ({
 })
 
 /** A `tasks` row as SQLite returns it: `ask` is JSON text. */
-type TaskRow = Omit<Task, 'ask'> & { ask: string | null }
-const taskOf = (row: TaskRow): Task => ({ ...row, ask: row.ask ? (JSON.parse(row.ask) as Ask) : null })
+type TaskRow = Omit<Task, 'ask' | 'attachments' | 'git'> & { ask: string | null; attachments: string | null; git: string | null }
+const taskOf = (row: TaskRow): Task => ({
+    ...row,
+    git: row.git ? (JSON.parse(row.git) as TaskGit) : null,
+    ask: row.ask ? (JSON.parse(row.ask) as Ask) : null,
+    attachments: row.attachments ? (JSON.parse(row.attachments) as Attachment[]) : null
+})
 const tasksOf = (rows: TaskRow[]): Task[] => rows.map(taskOf)
 
 export class Store {
@@ -404,7 +419,15 @@ export class Store {
 
     // ---- tasks ------------------------------------------------------------
 
-    createTask(conversationId: string, source: TaskSource, prompt: string, project: string | null = null, schedule: string | null = null, model: string | null = null): Task {
+    createTask(
+        conversationId: string,
+        source: TaskSource,
+        prompt: string,
+        project: string | null = null,
+        schedule: string | null = null,
+        model: string | null = null,
+        attachments: Attachment[] | null = null
+    ): Task {
         const task: Task = {
             id: randomUUID(),
             conversation_id: conversationId,
@@ -427,16 +450,20 @@ export class Store {
             ask: null,
             schedule,
             model,
+            attachments: attachments?.length ? attachments : null,
+            not_before: null,
+            limit_waits: 0,
+            git: null,
             created_at: now(),
             started_at: null,
             finished_at: null
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, attachments, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`
             )
-            .run(task.id, conversationId, source, prompt, project, schedule, model, task.created_at)
+            .run(task.id, conversationId, source, prompt, project, schedule, model, task.attachments ? JSON.stringify(task.attachments) : null, task.created_at)
         return task
     }
 
@@ -450,7 +477,7 @@ export class Store {
         const values: unknown[] = []
         for (const [key, value] of Object.entries(patch)) {
             sets.push(`${key} = ?`)
-            values.push(key === 'ask' && value !== null ? JSON.stringify(value) : value)
+            values.push((key === 'ask' || key === 'attachments' || key === 'git') && value !== null ? JSON.stringify(value) : value)
         }
         if (sets.length > 0) {
             values.push(id)
@@ -497,8 +524,13 @@ export class Store {
         return rows.map((row) => row.project)
     }
 
-    /** Oldest queued tasks first, one per conversation that has nothing running. */
-    nextQueuedTasks(): Task[] {
+    /**
+     * Oldest queued tasks first, one per conversation that has nothing
+     * running. A conversation whose oldest queued task waits for a window
+     * reset (`not_before` ahead) offers nothing: the later ones keep their turn.
+     */
+    nextQueuedTasks(at: Date = new Date()): Task[] {
+        const due = (task: Task) => !task.not_before || new Date(task.not_before) <= at
         return tasksOf(
             this.db
                 .prepare(
@@ -513,7 +545,7 @@ export class Store {
                  ORDER BY t.created_at ASC`
                 )
                 .all() as unknown as TaskRow[]
-        )
+        ).filter(due)
     }
 
     /**

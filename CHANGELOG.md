@@ -9,6 +9,69 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.1.0] - 2026-10-06
+
+Photos and files with a task, tasks that wait out the subscription limit instead of failing, and
+a Changes panel to decide on a task's work from a phone. The release plan from the October survey
+of similar projects (`docs/LANDSCAPE.md`).
+
+### Added
+
+- **Photos and files with a task, from Telegram and the web.** A screenshot of a bug, a log, a
+  PDF: the file is saved under `data/inbox/<conversation>/` and its absolute path follows the
+  message, so the agent opens it with the Read tool (which shows images and PDFs to the model).
+  Telegram takes photos, documents and videos, an album as one message; with a caption the
+  files go at once, without one they wait up to 30 minutes for the next text or voice message
+  of the chat (`/new` drops them). Files sent while the agent waits for an answer go with the
+  answer. The web composer has a paperclip, takes pasted screenshots and dropped files, uploads
+  each at once and shows it as a chip; the thread shows images as thumbnails and other files as
+  chips under the message, the task page too. Up to 10 files of 20 MB each per message
+  (Telegram's own download limit). Sessions get `--add-dir` for the inbox, so reading a file
+  needs no permission prompt in any mode. **Deleting a conversation in the UI deletes its files
+  from the disk** (everything under its inbox directory, Telegram and web uploads alike); its
+  tasks stay in Tasks and the Audit log, and their attachments say "removed". Directories of
+  deleted or unknown conversations are swept at start, and uploads older than 30 days go too.
+- **Changes panel on the task page**, built for deciding from a phone rather than reading every
+  line. A task in a project records where it started in the checkout; at the end the factory
+  measures what it changed: the branch, the range (the merge-base with the default branch for a
+  branch of its own, else the start), files and lines, files left uncommitted, and the branch's
+  pull request if `gh` finds one. The panel shows the agent's report first (a few lines, "Show
+  the whole report"), then `4 files +5 −2 · feature/x → main` with **Create PR** (pushes the
+  branch and runs `gh pr create --fill` against the default branch; an open PR is shown instead),
+  then the files by folder with lock files and build output folded into one line, and the diff of
+  a file only when it is tapped, as wrapped lines without sideways scrolling. The chat shows the
+  size as a link under each reply that changed something, and the Telegram report adds
+  `— changes: 4 files, +5 −2 on feature/x`, the PR and, with `WEB_PUBLIC_URL` set, a link to the
+  panel. Migration v14: `tasks.git`. Two conversations working in the same checkout at the same
+  time see each other's commits in their ranges: the real checkout is shared by design.
+- **Auto-continue after a window reset.** A task the CLI refused because the subscription
+  window was used up goes back to the queue until the window resets (plus a minute) and then
+  continues its session by itself, like a task interrupted by a restart. Telegram says when it
+  continues; the thread and the task page show the wait; Stop (or `/stop`, which now also
+  cancels a queued task) cancels it. Only when the reset is at most
+  `CLAUDE_AUTO_CONTINUE_HOURS` away (default 6, so the weekly window fails as before, with the
+  reset time in the error; 0 turns it off) and at most three times per task. The reset comes
+  from the CLI's `rate_limit_event` (`rejected`, with the window and its reset), else from the
+  result text, else from the exhausted window.
+
+### Changed
+
+- **Migrations v13 and v14**: `tasks.attachments`, `tasks.not_before`, `tasks.limit_waits`,
+  `tasks.git`.
+- **`Button` takes `href`** for an external link that looks like a button (the pull request).
+- **`/stop` in Telegram** cancels a queued task too, not only a running one.
+- **Review fixes before the merge**: a limit refusal pauses the whole queue until the reset, so
+  other conversations do not each start a CLI only to be refused; only the CLI's own wordings
+  and a `rejected` event count as the limit (an API 429 fails as before); files saved for the
+  chat's topic move with a reply that lands in another conversation; Create PR no longer makes
+  the bot deliver the finished report again; a task that leaves its branch for main is measured
+  from where the two meet, never backwards; the PR lookup before the report waits 5 s at most
+  and a merged or closed PR is saved as such; old uploads are pruned daily, not only at start;
+  two quick pastes cannot queue more than ten files.
+- **README and `docs/LANDSCAPE.md` reflect October 2026**: the comparison with Remote Control,
+  Agent View, Projects and Routines, the open-source neighbours, the quick start with
+  `claude auth login` in the container.
+
 ## [1.0.1] - 2026-10-05
 
 Fixes from the owner's first day of real use from Telegram.
