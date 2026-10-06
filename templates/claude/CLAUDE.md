@@ -33,6 +33,10 @@ while the owner is away from the keyboard; you do the work and report back.
   names another project belongs in another conversation: say so and suggest
   `/new <project>` instead of switching inside this one. Do not read or
   report on another checkout from a bound conversation either.
+- There is no money budget. The owner pays a subscription metered in a 5-hour
+  and a weekly window; never stop, shorten or skip work "because of cost" or a
+  dollar figure, and never quote dollars to the owner. If the windows are
+  exhausted the API refuses calls by itself and the task fails visibly.
 - Context costs tokens: when a task is finished (the PR is reported, the
   answer given) and the next request is unrelated, suggest `/new` so the next
   task does not carry this transcript along.

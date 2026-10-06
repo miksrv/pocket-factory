@@ -379,7 +379,10 @@ section as notes. Never tag a branch; never tag before the merge.
   the CLI's `rate_limit_event` (stream-json, `unifiedWindows`). `/api/oauth/usage` needs the
   `user:profile` scope that a setup-token lacks, so there is no polling — readings come with every
   task, plus an explicit probe (one Haiku turn: Overview → Refresh, Telegram `/usage refresh`).
-  `cost_usd` stays in the DB for the record; `CLAUDE_MAX_BUDGET_USD` stays as a safety stop.
+  `cost_usd` stays in the DB for the record. `CLAUDE_MAX_BUDGET_USD` / `--max-budget-usd` are gone
+  (2026-10-05): the CLI told the model its remaining dollars and the agent cut a review short
+  "because $0.30 were left"; the dispatcher rules now say there is no money budget, the windows
+  are the limit.
 - Unknown `/commands` never reach the agent; replies are converted to Telegram HTML with plain-text
   fallback.
 - Single language: TypeScript for supervisor, API and UI. No Python service (asked and answered:

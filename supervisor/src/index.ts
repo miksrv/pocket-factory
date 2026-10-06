@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 
     log.info(`pocket-factory v${VERSION}`)
     log.info(`workspaces: ${config.paths.workspacesRoot}`)
-    log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns} budget=$${config.claude.maxBudgetUsd}`)
+    log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns}`)
 
     const store = new Store(openDatabase(config.paths.dbFile))
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)

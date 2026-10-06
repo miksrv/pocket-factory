@@ -9,7 +9,6 @@ export interface Config {
     claude: {
         configDir: string
         maxTurns: number
-        maxBudgetUsd: number
         permissionMode: string
         /** Wall-clock limit per task in ms; 0 = none. */
         taskTimeoutMs: number
@@ -104,7 +103,6 @@ export function loadConfig(): Config {
             // CLI is logged in there too, and the UI edits the same files.
             configDir: optional('CLAUDE_CONFIG_DIR') ?? path.join(dataRoot, 'claude'),
             maxTurns: number('CLAUDE_MAX_TURNS', 50),
-            maxBudgetUsd: number('CLAUDE_MAX_BUDGET_USD', 5),
             permissionMode: optional('CLAUDE_PERMISSION_MODE') ?? 'acceptEdits',
             taskTimeoutMs: number('CLAUDE_TASK_TIMEOUT_MIN', 0) * 60_000
         },

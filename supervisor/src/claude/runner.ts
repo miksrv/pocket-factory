@@ -90,7 +90,6 @@ export interface RunOptions {
     resumeSessionId?: string
     model?: string
     maxTurns: number
-    maxBudgetUsd: number
     permissionMode: string
     /** The CLI's whole environment; defaults to the supervisor's own. */
     env?: NodeJS.ProcessEnv
@@ -262,9 +261,7 @@ export function runClaude(options: RunOptions): RunHandle {
         '--permission-mode',
         options.permissionMode,
         '--max-turns',
-        String(options.maxTurns),
-        '--max-budget-usd',
-        String(options.maxBudgetUsd)
+        String(options.maxTurns)
     ]
     if (options.model) args.push('--model', options.model)
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)

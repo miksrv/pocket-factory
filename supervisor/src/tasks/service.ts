@@ -584,7 +584,6 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             cwd: this.config.paths.workspacesRoot,
             model: 'haiku',
             maxTurns: 1,
-            maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
             env: this.agentEnv(),
             timeoutMs: PROBE_TIMEOUT_MS,
@@ -759,7 +758,6 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
             model: task.model ?? this.model(),
             maxTurns: this.config.claude.maxTurns,
-            maxBudgetUsd: this.config.claude.maxBudgetUsd,
             permissionMode: this.config.claude.permissionMode,
             env: this.agentEnv(),
             timeoutMs: this.config.claude.taskTimeoutMs,
