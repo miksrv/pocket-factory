@@ -5,7 +5,7 @@ import { createLogger } from './logger.js'
 import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import type { Schedules } from './schedules/service.js'
-import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
+import { askQuestions, openQuestions, titleFrom, type TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 import { MODEL_ALIASES } from './claude/models.js'
 import { describeUserAgent, type WebAuth } from './web/auth.js'
@@ -105,27 +105,16 @@ function resetsIn(iso: string): string {
     return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
-/** `5 min`, `2 h 10 min`: how long something has been going on. */
-function since(iso: string): string {
-    const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
-    if (min < 1) return 'under a minute'
-    if (min < 60) return `${min} min`
-    return `${Math.floor(min / 60)} h ${min % 60} min`
-}
-
-/** The first line of a prompt, cut to `max` characters. */
-function oneLine(text: string, max: number): string {
-    const line = text.split('\n').find((l) => l.trim())?.trim() ?? ''
-    return line.length > max ? `${line.slice(0, max - 1)}…` : line
-}
-
-function resetsAgo(iso: string): string {
+/** Time passed since `iso`: `under a minute`, `5 min`, `3 h`, `2 d`. */
+function elapsed(iso: string): string {
     const ms = Date.now() - new Date(iso).getTime()
-    if (ms < 60_000) return 'just now'
-    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`
-    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h ago`
-    return `${Math.floor(ms / 86_400_000)} d ago`
+    if (ms < 60_000) return 'under a minute'
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min`
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h`
+    return `${Math.floor(ms / 86_400_000)} d`
 }
+
+const resetsAgo = (iso: string): string => (Date.now() - new Date(iso).getTime() < 60_000 ? 'just now' : `${elapsed(iso)} ago`)
 
 /** One line: how full the subscription windows are, e.g. "5h 12% · week 31%". */
 function limitsLine(limits: RateLimitSnapshot | undefined): string | null {
@@ -322,12 +311,16 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     // conversation line is shown only when the chat was switched to another thread by a reply).
     bot.command('status', async (ctx) => {
         const conversation = conversationFor(ctx)
-        const switched = store.telegramTopic(ctx.chat.id)
+        // A topic is an override: after `/new` the chat's own (newest) conversation is the topic too.
+        const switched = conversation.id !== tasks.conversationFor('telegram', String(ctx.chat.id)).id ? conversation : null
         const active = tasks.activeTask(conversation.id)
+        const queued = active ? undefined : tasks.queuedTask(conversation.id)
         const windows = limitsLine(tasks.limits())
         const running = active
-            ? `"${oneLine(active.prompt, 60)}" · ${active.started_at ? `${since(active.started_at)}` : 'starting'}${active.ask ? ' · waiting for your answer' : ''}`
-            : 'nothing'
+            ? `"${titleFrom(active.prompt)}" · ${active.started_at ? elapsed(active.started_at) : 'starting'}${active.ask ? ' · waiting for your answer' : ''}`
+            : queued
+              ? `"${titleFrom(queued.prompt)}" · queued, waiting for a free slot`
+              : 'nothing'
         await ctx.reply(
             [
                 `Pocket Factory v${VERSION}`,

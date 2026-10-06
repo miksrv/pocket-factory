@@ -230,9 +230,20 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.workspace.projectPath(slug) !== null
     }
 
-    /** Where a conversation's tasks run: the project's checkout, else the workspaces root. */
+    /**
+     * Where a conversation's tasks run: the project's checkout, else the workspaces root.
+     * A bound conversation whose checkout is gone (renamed, moved, the project file
+     * deleted) is an error, never a silent fallback to the root under the project's name.
+     */
     cwdFor(conversation: Conversation): string {
-        return (conversation.project && this.workspace.projectPath(conversation.project)) || this.config.paths.workspacesRoot
+        if (!conversation.project) return this.config.paths.workspacesRoot
+        const checkout = this.workspace.projectPath(conversation.project)
+        if (!checkout) {
+            throw new Error(
+                `project "${conversation.project}" has no checkout or project file any more; start a conversation elsewhere (/new [project] in Telegram, the project selector in Chat)`
+            )
+        }
+        return checkout
     }
 
     /** MCP servers of the last session per project (or the root), as the CLI reported them. */
@@ -414,6 +425,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** Returns the running task of a conversation, if any. */
     activeTask(conversationId: string): Task | undefined {
         return this.store.listTasks({ conversationId, status: 'running', limit: 1 })[0]
+    }
+
+    /** The task of a conversation that waits for a slot, if any. */
+    queuedTask(conversationId: string): Task | undefined {
+        return this.store.listTasks({ conversationId, status: 'queued', limit: 1 })[0]
     }
 
     /** The running task of a conversation whose agent waits for the owner's answer to a *question* (permissions are answered with buttons only). */
@@ -729,16 +745,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      */
     private async attempt(task: Task, mayRetry: boolean): Promise<void> {
         const conversation = this.store.getConversation(task.conversation_id)!
-        // A bound conversation whose checkout is gone (renamed, moved, the project file
-        // deleted) must not run from the workspaces root under the project's name.
-        if (conversation.project && !this.workspace.projectPath(conversation.project)) {
-            this.finish(task.id, {
-                status: 'failed',
-                error: `project "${conversation.project}" has no checkout or project file any more; start a conversation elsewhere (/new [project] in Telegram, the project selector in Chat)`
-            })
+        let cwd: string
+        try {
+            cwd = this.cwdFor(conversation)
+        } catch (error) {
+            this.finish(task.id, { status: 'failed', error: error instanceof Error ? error.message : String(error) })
             return
         }
-        const cwd = this.cwdFor(conversation)
         // A session lives in the directory it started in: resuming it from another
         // cwd fails, so a conversation that moved (its project was detected or set
         // after the first task) starts a fresh session there instead of failing once.
@@ -763,9 +776,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         // owner may have changed in the web while the task sat in the queue.
         let project = conversation.project
         if (project !== task.project) this.store.updateTask(task.id, { project })
-        // Sub-agents still running when the orchestrator's final answer arrives die with
-        // the process: `claude -p` has no "later". Count them to say so in the result.
-        let openAgents = 0
+        /** Orchestrator prose streamed: the web thread then shows the text events and hides `result`. */
+        let sawText = false
         const resuming = Boolean(conversation.session_id)
         let sawOutput = false
         const startedAt = Date.now()
@@ -821,7 +833,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     return
                 }
                 const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
-                if (event.type === 'agent') openAgents += event.phase === 'started' ? 1 : -1
+                if (event.type === 'text' && !event.agent) sawText = true
                 if (event.type === 'llm') {
                     // The CLI's final result counts the orchestrator's own calls only; the sub-agents' calls arrive here too.
                     spent.input += event.inputTokens
@@ -862,14 +874,22 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const seen = spent.input + spent.output + spent.cacheRead + spent.cacheCreation
             const counted = result.inputTokens + result.outputTokens + result.cacheReadTokens + result.cacheCreationTokens
             const all = seen > counted
-            const cutOff = openAgents > 0 && !result.isError
-                ? `\n\n⚠️ The run ended while ${openAgents === 1 ? 'a sub-agent was' : `${openAgents} sub-agents were`} still working: their work stopped with it. Say "continue" to pick it up.`
+            // The orchestrator answered while sub-agents were still working: `claude -p` has no
+            // "later", whatever they did after that reached nobody. Said in the result (Telegram,
+            // and the web when nothing streamed) and as a text event (the web thread otherwise
+            // shows only the streamed prose).
+            const open = result.openAgentsAtResult
+            const cutOff = open > 0 && !result.isError && !this.stopRequested.has(task.id)
+                ? `⚠️ The reply came while ${open === 1 ? 'a sub-agent was' : `${open} sub-agents were`} still working: whatever they did after it reached nobody. Say "continue" to pick it up.`
                 : ''
-            if (cutOff) log.warn(`task ${task.id} ended with ${openAgents} sub-agent(s) still running`)
+            if (cutOff) {
+                log.warn(`task ${task.id} answered with ${open} sub-agent(s) still running`)
+                if (sawText) this.emit('event', this.store.addEvent(task.id, 'text', { text: cutOff }))
+            }
             this.finish(task.id, {
                 status: this.stopRequested.has(task.id) ? 'cancelled' : result.isError ? 'failed' : 'done',
                 session_id: result.sessionId || conversation.session_id,
-                result: result.text + cutOff,
+                result: cutOff ? `${result.text}\n\n${cutOff}` : result.text,
                 // Error results (max turns, budget, execution errors) often carry no text: name the reason.
                 error: result.isError ? result.text || `claude stopped: ${result.subtype}` : null,
                 num_turns: result.numTurns,
