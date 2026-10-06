@@ -7,6 +7,7 @@ import { Hono } from 'hono'
 
 import { startOfDay } from '../../schedules/cron.js'
 import type { Env } from '../context.js'
+import { VERSION } from '../../version.js'
 
 const run = promisify(execFile)
 
@@ -72,6 +73,7 @@ export function statusRoutes(): Hono<Env> {
         const schedules = c.get('app').schedules.list()
         const upcoming = schedules.filter((s) => s.next_run).sort((a, b) => a.next_run!.localeCompare(b.next_run!))[0]
         return c.json({
+            version: VERSION,
             stats: {
                 ...store.stats(startOfDay(new Date(), config.timezone).toISOString()),
                 schedules: {

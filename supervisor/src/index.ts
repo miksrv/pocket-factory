@@ -15,6 +15,7 @@ import { TaskService, type Workspace } from './tasks/service.js'
 import fs from 'node:fs'
 import { WebAuth } from './web/auth.js'
 import { startServer } from './web/server.js'
+import { VERSION } from './version.js'
 
 const log = createLogger('supervisor')
 
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
     const config = loadConfig()
     setLogLevel(config.logLevel)
 
+    log.info(`pocket-factory v${VERSION}`)
     log.info(`workspaces: ${config.paths.workspacesRoot}`)
     log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns} budget=$${config.claude.maxBudgetUsd}`)
 

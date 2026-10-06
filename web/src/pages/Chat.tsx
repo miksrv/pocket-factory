@@ -68,7 +68,7 @@ export function ChatPage() {
                 <div className="list">
                     {(error || conversations.error) && <div className="error small" style={{ padding: '8px 14px' }}>{error ?? conversations.error}</div>}
                     {conversations.items.map((c) => (
-                        <NavLink key={c.id} to={`/chat/${c.id}`} className={({ isActive }) => `${isActive ? 'active' : ''}${c.unread ? ' unread' : ''}${c.needs_reply ? ' needs-reply' : ''}`}>
+                        <NavLink key={c.id} to={`/chat/${c.id}`} className={({ isActive }) => `${isActive ? 'active' : ''}${c.active ? ' running' : ''}${c.unread ? ' unread' : ''}${c.needs_reply ? ' needs-reply' : ''}`}>
                             <div className="grow">
                                 <div className="title" title={c.title ?? undefined}>{c.title ?? 'Untitled'}</div>
                                 <div className="desc">
@@ -82,6 +82,7 @@ export function ChatPage() {
                                 </span>
                             )}
                             {c.unread && <span className="dot unread" title="New reply" />}
+                            {c.active && !c.needs_reply && !c.unread && <span className="dot running" title="A task is running" />}
                         </NavLink>
                     ))}
                     {conversations.items.length === 0 && !conversations.loading && <Empty>No conversations yet.</Empty>}

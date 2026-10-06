@@ -55,6 +55,8 @@ export interface Conversation {
     unread: boolean
     /** A running task waits for the owner: a question or a permission request (Chat list, sidebar badge). */
     needs_reply: boolean
+    /** A task of the conversation is queued or running (Chat list: blue stripe). */
+    active: boolean
 }
 
 export interface Task {
@@ -302,12 +304,21 @@ const UNREAD = `EXISTS (
 const NEEDS_REPLY = `EXISTS (
     SELECT 1 FROM tasks t WHERE t.conversation_id = c.id AND t.status = 'running' AND t.ask IS NOT NULL
 )`
-const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply FROM conversations c`
+/** "Active": a task of the conversation is queued or running (the same test as `chat_active`). */
+const ACTIVE = `EXISTS (
+    SELECT 1 FROM tasks t WHERE t.conversation_id = c.id AND t.status IN ('queued', 'running')
+)`
+const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply, ${ACTIVE} AS active FROM conversations c`
 /** A schedule run with the status of the task it queued, if any. */
 const SCHEDULE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
 
-type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply'> & { unread: number; needs_reply: number }
-const conversationOf = (row: ConversationRow): Conversation => ({ ...row, unread: Boolean(row.unread), needs_reply: Boolean(row.needs_reply) })
+type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply' | 'active'> & { unread: number; needs_reply: number; active: number }
+const conversationOf = (row: ConversationRow): Conversation => ({
+    ...row,
+    unread: Boolean(row.unread),
+    needs_reply: Boolean(row.needs_reply),
+    active: Boolean(row.active)
+})
 
 /** A `tasks` row as SQLite returns it: `ask` is JSON text. */
 type TaskRow = Omit<Task, 'ask'> & { ask: string | null }
@@ -345,7 +356,8 @@ export class Store {
             deleted_at: null,
             read_at: null,
             unread: false,
-            needs_reply: false
+            needs_reply: false,
+            active: false
         }
         this.db
             .prepare(

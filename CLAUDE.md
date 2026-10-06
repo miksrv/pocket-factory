@@ -34,6 +34,8 @@ yarn dev:web                 # Vite dev server on :5173 proxying /api → :8080
 docker compose up -d --build # build image + (re)start the supervisor container
 docker compose logs -f supervisor
 docker compose run --rm supervisor claude -p "Reply with exactly: OK" --model haiku --max-turns 1   # auth smoke test
+node scripts/release.mjs bump 1.2.0   # new version: package.json ×3 + a CHANGELOG.md section to fill in
+node scripts/release.mjs tag          # after the merge, on a clean main in sync with origin: tag vX.Y.Z + GitHub release
 ```
 
 No test runner yet; smoke-test through the API (`curl localhost:8080/api/status`) or a scratch
@@ -175,6 +177,9 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   supervisor restart drops the pending ask with the CLI; the resumed session asks again.
   Without a host the tool does not exist in `-p` (verified 2026-09-30), so agents could only
   ask in prose. The Chat list draws an amber stripe + `?`, the composer placeholder changes.
+  **A running conversation** (2026-10-05, from the owner's first real use): `conversations.active`
+  (computed, a queued / running task) draws a blue stripe + pulsing dot in the Chat list, the same
+  order as the sidebar badge (open thread > waiting > unread > running).
   **One badge per menu item**: the sidebar's Chat item shows unread (green) first, else
   waiting (amber), else active (blue), never two at once.
   **Drafts**: an unsent message is kept in `localStorage` per conversation
@@ -227,6 +232,22 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   token, no probe turns; a full id can still be typed into the file)
 - `data/` — runtime state, gitignored, bind-mounted; `WORKSPACES_DIR` in `.env` points the container
   (and `yarn dev`) at the owner's existing repositories
+
+## Versioning and releases (2026-10-05)
+
+`MAJOR.MINOR.PATCH`: the major almost never moves, a minor adds something the owner can see or
+use, a patch fixes or polishes. The version lives in the root `package.json` (the workspaces are
+kept in step), is read by `supervisor/src/version.ts`, shown in the sidebar foot
+(`v1.0.0 · 2.1.290 (Claude Code)`, one line), in Telegram `/status`, in `/api/status`
+`version` and in the start-up log. `CHANGELOG.md` (Keep a Changelog, newest first, `## [x.y.z] -
+date` with `### Added` / `Changed` / `Fixed`) is written **with** the change, before the commit.
+When the owner says "let's make a new version" (or the work is ready to commit): pick the next
+version by the rules, `node scripts/release.mjs bump <x.y.z>`, fill the new section with what
+changed since the previous one, and the commit carries both. The **tag and the release come only
+after the PR is merged**: on `main`, `git pull`, `node scripts/release.mjs tag` (refuses a dirty
+tree, a branch other than main, a main out of sync with origin, an existing tag or an empty
+section) creates the annotated tag `vX.Y.Z`, pushes it and publishes the GitHub release with the
+section as notes. Never tag a branch; never tag before the merge.
 
 ## Decisions already made (don't re-open)
 

@@ -124,6 +124,8 @@ export interface Conversation {
     unread: boolean
     /** A running task waits for the owner: a question or a permission request. */
     needs_reply: boolean
+    /** A task of the conversation is queued or running. */
+    active: boolean
 }
 
 export interface ConversationHistory {
@@ -181,6 +183,8 @@ export interface RateLimits {
 }
 
 export interface Status {
+    /** The factory's own version (root `package.json`, see CHANGELOG.md). */
+    version: string
     stats: Stats
     running: string[]
     limits: RateLimits | null
