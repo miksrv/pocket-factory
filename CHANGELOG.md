@@ -22,6 +22,9 @@ Fixes from the owner's first day of real use from Telegram.
   `N turns · tokens · +x% of 5h · Ns`, and the windows line carries this task's share of the
   5-hour window: `— project: geometki` / `— windows: 5h 27% · week 50% · this task +4%`. Turns,
   tokens and duration stay on the task page.
+- **`/status` is shorter.** Session id and the workspaces path are gone; the running task is shown
+  by its first line and how long it has run (and whether it waits for an answer); the conversation
+  line appears only when the chat was switched to another thread by a reply.
 - **No dollar budget.** `CLAUDE_MAX_BUDGET_USD` and `--max-budget-usd` are removed: the CLI told
   the model its remaining dollars and the agent cut work short "because $0.30 were left", which
   means nothing on a subscription. The dispatcher rules say the 5-hour and weekly windows are the

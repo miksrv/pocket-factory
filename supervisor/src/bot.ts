@@ -105,6 +105,20 @@ function resetsIn(iso: string): string {
     return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
+/** `5 min`, `2 h 10 min`: how long something has been going on. */
+function since(iso: string): string {
+    const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
+    if (min < 1) return 'under a minute'
+    if (min < 60) return `${min} min`
+    return `${Math.floor(min / 60)} h ${min % 60} min`
+}
+
+/** The first line of a prompt, cut to `max` characters. */
+function oneLine(text: string, max: number): string {
+    const line = text.split('\n').find((l) => l.trim())?.trim() ?? ''
+    return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
 function resetsAgo(iso: string): string {
     const ms = Date.now() - new Date(iso).getTime()
     if (ms < 60_000) return 'just now'
@@ -303,21 +317,28 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         await ctx.reply('Stopping…')
     })
 
+    // What the owner needs on a phone: where the next message goes, what runs now, the model
+    // and the windows (2026-10-05: session id and the workspaces path were noise, the
+    // conversation line is shown only when the chat was switched to another thread by a reply).
     bot.command('status', async (ctx) => {
         const conversation = conversationFor(ctx)
+        const switched = store.telegramTopic(ctx.chat.id)
         const active = tasks.activeTask(conversation.id)
         const windows = limitsLine(tasks.limits())
+        const running = active
+            ? `"${oneLine(active.prompt, 60)}" · ${active.started_at ? `${since(active.started_at)}` : 'starting'}${active.ask ? ' · waiting for your answer' : ''}`
+            : 'nothing'
         await ctx.reply(
             [
                 `Pocket Factory v${VERSION}`,
-                `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
-                `Running task: ${active ? 'yes' : 'no'}`,
+                switched ? `Thread: ${topicName(switched)} (switched by your reply; /new comes back to this chat)` : null,
                 `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
-                `Session: ${conversation.session_id ?? 'none'}`,
-                `Workspaces: ${config.paths.workspacesRoot}`,
+                `Running: ${running}`,
                 `Model: ${tasks.model()} (/model to switch)`,
                 `Limits: ${windows ?? 'unknown (see /usage)'}`
-            ].join('\n')
+            ]
+                .filter(Boolean)
+                .join('\n')
         )
     })
 
