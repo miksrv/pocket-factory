@@ -11,6 +11,7 @@ import {
     type RateLimits,
     runClaude,
     type RunHandle,
+    type RunResult,
     RunTimeout
 } from '../claude/runner.js'
 import type { Config } from '../config.js'
@@ -162,6 +163,21 @@ const PRIVATE_ENV = [
     'WEB_AUTH_PASSWORD',
     'GROQ_API_KEY'
 ]
+
+/**
+ * The warning appended to a reply that did not see the end of its sub-agents' work: some were
+ * still running when the result came (`claude -p` has no "later"), or the CLI stopped some
+ * after the orchestrator's last turn, so nobody saw that they did not finish. Empty when neither.
+ */
+export function cutOffNote(result: Pick<RunResult, 'openAgentsAtResult' | 'stoppedAgentsAtResult'>): string {
+    const open = result.openAgentsAtResult
+    const stopped = result.stoppedAgentsAtResult
+    if (open > 0)
+        return `⚠️ The reply came while ${open === 1 ? 'a sub-agent was' : `${open} sub-agents were`} still working: whatever they did after it reached nobody. Say "continue" to pick it up.`
+    if (stopped > 0)
+        return `⚠️ ${stopped === 1 ? 'A sub-agent' : `${stopped} sub-agents`} stopped before finishing, after this reply was written: the work is incomplete. Say "continue" to pick it up.`
+    return ''
+}
 
 /**
  * Which workspace a tool call touches: the first workspace directory name
@@ -899,7 +915,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. Prefilters run with the same one. */
     agentEnv(): NodeJS.ProcessEnv {
-        const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CONFIG_DIR: this.config.claude.configDir }
+        const env: NodeJS.ProcessEnv = {
+            // In -p the CLI waits for background tasks after the orchestrator's last turn only
+            // 10 minutes by default, then kills them and answers with whatever was said last
+            // ("Background tasks still running after …; terminating"): a sub-agent resumed with
+            // SendMessage always runs in the background. CLAUDE_TASK_TIMEOUT_MIN is the limit here.
+            CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0',
+            ...process.env,
+            CLAUDE_CONFIG_DIR: this.config.claude.configDir
+        }
         for (const name of PRIVATE_ENV) delete env[name]
         return env
     }
@@ -1198,13 +1222,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             // "later", whatever they did after that reached nobody. Said in the result (Telegram,
             // and the web when nothing streamed) and as a text event (the web thread otherwise
             // shows only the streamed prose).
-            const open = result.openAgentsAtResult
-            const cutOff =
-                open > 0 && !result.isError && !this.stopRequested.has(task.id)
-                    ? `⚠️ The reply came while ${open === 1 ? 'a sub-agent was' : `${open} sub-agents were`} still working: whatever they did after it reached nobody. Say "continue" to pick it up.`
-                    : ''
+            const cutOff = this.stopRequested.has(task.id) || result.isError ? '' : cutOffNote(result)
             if (cutOff) {
-                log.warn(`task ${task.id} answered with ${open} sub-agent(s) still running`)
+                log.warn(
+                    `task ${task.id} answered with ${result.openAgentsAtResult} sub-agent(s) still running, ${result.stoppedAgentsAtResult} stopped unseen`
+                )
                 if (sawText) this.emit('event', this.store.addEvent(task.id, 'text', { text: cutOff }))
             }
             // Refused for the subscription limit: back to the queue until the window resets, the session kept.

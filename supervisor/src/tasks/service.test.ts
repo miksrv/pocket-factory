@@ -5,6 +5,7 @@ import type { Ask } from '../store/index.js'
 import {
     askQuestions,
     claudeSlug,
+    cutOffNote,
     detectProject,
     limitReset,
     mcpKey,
@@ -106,6 +107,24 @@ const ask = (over: Partial<Ask> = {}): Ask => ({
     agent: null,
     asked_at: '2026-10-06T08:00:00.000Z',
     ...over
+})
+
+describe('cutOffNote', () => {
+    it('is empty when every sub-agent was seen to the end', () => {
+        expect(cutOffNote({ openAgentsAtResult: 0, stoppedAgentsAtResult: 0 })).toBe('')
+    })
+
+    it('names sub-agents still running at the result', () => {
+        expect(cutOffNote({ openAgentsAtResult: 2, stoppedAgentsAtResult: 1 })).toMatch(
+            /2 sub-agents were still working/
+        )
+    })
+
+    it('names sub-agents the CLI stopped after the last reply', () => {
+        expect(cutOffNote({ openAgentsAtResult: 0, stoppedAgentsAtResult: 1 })).toMatch(
+            /A sub-agent stopped before finishing/
+        )
+    })
 })
 
 describe('askQuestions', () => {

@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import readline from 'node:readline'
 
 import { createLogger } from '../logger.js'
@@ -134,6 +135,8 @@ export interface RunResult {
     rateLimits: RateLimits | null
     /** Sub-agents still running when the `result` arrived: their work after that point reached nobody. */
     openAgentsAtResult: number
+    /** Sub-agents that ended without completing (the CLI stopped them) after the orchestrator's last turn: nobody saw that they did not finish. */
+    stoppedAgentsAtResult: number
 }
 
 /** A running `claude -p` process that can be cancelled. */
@@ -179,6 +182,9 @@ interface StreamEvent {
     type: string
     subtype?: string
     session_id?: string
+    /** A user message the CLI took from stdin, echoed by `--replay-user-messages`. */
+    isReplay?: boolean
+    uuid?: string
     message?: {
         id?: string
         model?: string
@@ -272,6 +278,9 @@ export function runClaude(options: RunOptions): RunHandle {
         'stream-json',
         '--permission-prompt-tool',
         'stdio',
+        // The CLI echoes every user message it takes from stdin: the result that answers our
+        // prompt is the first one after its echo (see `promptTaken`).
+        '--replay-user-messages',
         '--verbose',
         '--permission-mode',
         options.permissionMode,
@@ -311,10 +320,15 @@ export function runClaude(options: RunOptions): RunHandle {
         child.stdin!.end()
     }
     let promptSent = false
+    const promptUuid = randomUUID()
     const sendPrompt = () => {
         if (promptSent) return
         promptSent = true
-        write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: options.prompt }] } })
+        write({
+            type: 'user',
+            uuid: promptUuid,
+            message: { role: 'user', content: [{ type: 'text', text: options.prompt }] }
+        })
     }
     write({ type: 'control_request', request_id: INIT_REQUEST_ID, request: { subtype: 'initialize', hooks: {} } })
 
@@ -384,6 +398,17 @@ export function runClaude(options: RunOptions): RunHandle {
         /** Started and not yet reported sub-agents; counted the moment the result arrives, not at exit. */
         const openAgents = new Set<string>()
         let openAgentsAtResult = 0
+        /** Sub-agents that ended failed / stopped since the orchestrator last spoke. */
+        const stoppedAgents = new Set<string>()
+        let stoppedAgentsAtResult = 0
+        /**
+         * The CLI echoed our prompt. A resumed session may first run a turn of its own: the
+         * notifications about background tasks the previous run left behind ("didn't finish
+         * before the previous session ended") are queued ahead of the prompt and end in a
+         * `result` of their own (empty, 0 turns). Taking that one as the answer closed stdin
+         * before the prompt was ever read (2026-10-06).
+         */
+        let promptTaken = false
         const seenMessages = new Set<string>()
         const stderr: string[] = []
 
@@ -482,6 +507,7 @@ export function runClaude(options: RunOptions): RunHandle {
                 const agent = agentsByToolUse.get(event.tool_use_id)
                 if (!agent) return
                 openAgents.delete(event.tool_use_id)
+                if (event.status !== 'completed') stoppedAgents.add(event.tool_use_id)
                 const usage = (event as { usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number } })
                     .usage
                 emit({
@@ -497,9 +523,20 @@ export function runClaude(options: RunOptions): RunHandle {
                 })
                 return
             }
+            if (event.type === 'user' && event.isReplay) {
+                if (event.uuid === promptUuid) promptTaken = true
+                return
+            }
             if (event.type === 'result') {
+                if (!promptTaken) {
+                    log.info(
+                        `result before the prompt was taken (${event.subtype ?? '?'}, ${event.num_turns ?? 0} turns): waiting for the prompt's own`
+                    )
+                    return
+                }
                 finalEvent = event
                 openAgentsAtResult = openAgents.size
+                stoppedAgentsAtResult = stoppedAgents.size
                 closeStdin() // one prompt per run: the CLI exits once stdin ends
                 return
             }
@@ -521,6 +558,8 @@ export function runClaude(options: RunOptions): RunHandle {
                     : null
             }
             if (event.type === 'assistant') {
+                // The orchestrator speaks after a sub-agent stopped: it has seen that.
+                if (!parentToolUseId) stoppedAgents.clear()
                 // The CLI emits one line per content block, all carrying the
                 // same message id and usage: count the model call once.
                 const message = event.message!
@@ -591,7 +630,8 @@ export function runClaude(options: RunOptions): RunHandle {
                 return
             }
             if (!finalEvent) {
-                reject(new Error(`claude exited with code ${code} without a result${errText ? `: ${errText}` : ''}`))
+                const why = promptSent && !promptTaken ? ' before it took the prompt' : ' without a result'
+                reject(new Error(`claude exited with code ${code}${why}${errText ? `: ${errText}` : ''}`))
                 return
             }
 
@@ -610,7 +650,8 @@ export function runClaude(options: RunOptions): RunHandle {
                 cacheReadTokens: finalEvent.usage?.cache_read_input_tokens ?? 0,
                 cacheCreationTokens: finalEvent.usage?.cache_creation_input_tokens ?? 0,
                 rateLimits,
-                openAgentsAtResult
+                openAgentsAtResult,
+                stoppedAgentsAtResult
             })
         })
     })
