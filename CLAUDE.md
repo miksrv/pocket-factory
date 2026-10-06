@@ -248,6 +248,8 @@ after the PR is merged**: on `main`, `git pull`, `node scripts/release.mjs tag` 
 tree, a branch other than main, a main out of sync with origin, an existing tag or an empty
 section) creates the annotated tag `vX.Y.Z`, pushes it and publishes the GitHub release with the
 section as notes. Never tag a branch; never tag before the merge.
+**One bump per PR** (owner's rule, 2026-10-05): once a branch carries the version bump, later commits on
+it (review fixes, more changes) only extend that CHANGELOG section, never bump again.
 
 ## Decisions already made (don't re-open)
 
