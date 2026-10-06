@@ -25,13 +25,14 @@ const currentVersion = () => JSON.parse(fs.readFileSync(PACKAGES[0], 'utf8')).ve
 
 /** The `## [x.y.z] - date` section of CHANGELOG.md, heading excluded, or null. */
 function notesOf(version) {
-    const text = fs.readFileSync(CHANGELOG, 'utf8')
-    const re = new RegExp(
-        `^## \\[${version.replace(/\./g, '\\.')}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|(?![\\s\\S]))`,
-        'm'
-    )
-    const m = text.match(re)
-    return m ? m[1].trim() : null
+    const lines = fs.readFileSync(CHANGELOG, 'utf8').split('\n')
+    const start = lines.findIndex((line) => line.startsWith(`## [${version}]`))
+    if (start < 0) return null
+    const end = lines.findIndex((line, i) => i > start && line.startsWith('## ['))
+    return lines
+        .slice(start + 1, end < 0 ? undefined : end)
+        .join('\n')
+        .trim()
 }
 
 function bump(version) {

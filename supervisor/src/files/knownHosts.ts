@@ -107,7 +107,7 @@ export class KnownHosts {
         if (!accepted.length) throw new BadName('no host keys to trust')
         if (replace) await this.forget(host, port)
         fs.mkdirSync(path.dirname(this.file), { recursive: true })
-        const current = fs.existsSync(this.file) ? fs.readFileSync(this.file, 'utf8') : ''
+        const current = readIfExists(this.file)
         const fresh = accepted.filter((l) => !current.split('\n').some((c) => c.trim() === l))
         if (!fresh.length) return
         fs.appendFileSync(this.file, `${current && !current.endsWith('\n') ? '\n' : ''}${fresh.join('\n')}\n`, {
@@ -144,4 +144,14 @@ function keygen(args: string[]): Promise<{ code: number; stdout: string; stderr:
             resolve({ code: error ? (typeof code === 'number' ? code : 1) : 0, stdout, stderr })
         })
     })
+}
+
+/** The file's text, or '' when it does not exist yet (read once: no exists-then-read race). */
+function readIfExists(file: string): string {
+    try {
+        return fs.readFileSync(file, 'utf8')
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+        throw error
+    }
 }
