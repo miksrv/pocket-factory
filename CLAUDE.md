@@ -175,6 +175,9 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   supervisor restart drops the pending ask with the CLI; the resumed session asks again.
   Without a host the tool does not exist in `-p` (verified 2026-09-30), so agents could only
   ask in prose. The Chat list draws an amber stripe + `?`, the composer placeholder changes.
+  **A running conversation** (2026-10-05, from the owner's first real use): `conversations.active`
+  (computed, a queued / running task) draws a blue stripe + pulsing dot in the Chat list, the same
+  order as the sidebar badge (open thread > waiting > unread > running).
   **One badge per menu item**: the sidebar's Chat item shows unread (green) first, else
   waiting (amber), else active (blue), never two at once.
   **Drafts**: an unsent message is kept in `localStorage` per conversation
