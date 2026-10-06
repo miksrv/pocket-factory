@@ -20,3 +20,11 @@ data/**
 .idea/
 .vscode/
 .DS_Store
+
+# tests
+coverage/
+.e2e/
+playwright-report/
+test-results/
+blob-report/
+playwright/.auth/

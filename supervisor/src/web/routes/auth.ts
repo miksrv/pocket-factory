@@ -29,7 +29,8 @@ export function authRoutes(): Hono<Env> {
         const { auth } = c.get('app')
         if (auth.mode === 'open') return c.json({ error: 'sign-in is not enabled: WEB_AUTH_PASSWORD is empty' }, 400)
         const body = (await c.req.json().catch(() => null)) as { username?: unknown; password?: unknown } | null
-        if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') return c.json({ error: 'username and password are required' }, 400)
+        if (!body || typeof body.username !== 'string' || typeof body.password !== 'string')
+            return c.json({ error: 'username and password are required' }, 400)
         const client = clientOf(c)
         const outcome = auth.login(body.username, body.password, client)
         if (!outcome.ok) {
@@ -38,7 +39,14 @@ export function authRoutes(): Hono<Env> {
                 c.header('Retry-After', String(seconds))
                 return c.json({ error: 'too many failed sign-ins', locked_until: outcome.locked_until }, 429)
             }
-            return c.json({ error: 'wrong username or password', attempts_left: outcome.attempts_left, locked_until: outcome.locked_until }, 401)
+            return c.json(
+                {
+                    error: 'wrong username or password',
+                    attempts_left: outcome.attempts_left,
+                    locked_until: outcome.locked_until
+                },
+                401
+            )
         }
         setCookie(c, SESSION_COOKIE, outcome.token, {
             path: '/',
@@ -47,7 +55,11 @@ export function authRoutes(): Hono<Env> {
             secure: isSecure(c),
             maxAge: Math.floor(auth.policy.session_days * 86_400)
         })
-        return c.json({ ok: true, user: auth.username, session: { created_at: outcome.session.created_at, ip: outcome.session.ip } })
+        return c.json({
+            ok: true,
+            user: auth.username,
+            session: { created_at: outcome.session.created_at, ip: outcome.session.ip }
+        })
     })
 
     app.post('/logout', (c) => {
@@ -57,7 +69,9 @@ export function authRoutes(): Hono<Env> {
     })
 
     /** Sign out every other browser; this one stays. */
-    app.post('/logout-others', (c) => c.json({ signed_out: c.get('app').auth.logoutOthers(getCookie(c, SESSION_COOKIE)) }))
+    app.post('/logout-others', (c) =>
+        c.json({ signed_out: c.get('app').auth.logoutOthers(getCookie(c, SESSION_COOKIE)) })
+    )
 
     app.get('/sessions', (c) => c.json(c.get('app').auth.sessions(getCookie(c, SESSION_COOKIE))))
 

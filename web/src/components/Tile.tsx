@@ -1,4 +1,4 @@
-import { Icon, ICONS, type IconName } from './Icon'
+import { Icon, type IconName, ICONS } from './Icon'
 import { Sprite } from './Sprite'
 
 /** The tones a name can get. Gray and red are for states (an orchestrator, a warning), never picked by a name. */
@@ -46,8 +46,19 @@ export function Tile({
     const tone = color ?? COLORS[hash(name || kind || icon || '') % COLORS.length]
     const iconName = icon ?? (kind && kind in ICONS ? (kind as IconName) : undefined)
     return (
-        <span className={`tile ${tone}${small ? ' sm' : ''}${large ? ' lg' : ''}`} aria-hidden>
-            {glyph ? glyph : kind === 'agents' && !icon ? <Sprite name={name} /> : iconName ? <Icon name={iconName} /> : name.slice(0, 1).toUpperCase()}
+        <span
+            className={`tile ${tone}${small ? ' sm' : ''}${large ? ' lg' : ''}`}
+            aria-hidden
+        >
+            {glyph ? (
+                glyph
+            ) : kind === 'agents' && !icon ? (
+                <Sprite name={name} />
+            ) : iconName ? (
+                <Icon name={iconName} />
+            ) : (
+                name.slice(0, 1).toUpperCase()
+            )}
         </span>
     )
 }

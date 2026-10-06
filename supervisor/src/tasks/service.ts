@@ -1,17 +1,43 @@
+import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { execFile } from 'node:child_process'
-
-import { type McpLoginView, McpLogins } from '../claude/mcpLogin.js'
-import { type AskResponse, type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
+import { McpLogins, type McpLoginView } from '../claude/mcpLogin.js'
 import { DEFAULT_MODEL, isModelAlias, MODEL_ALIASES, MODEL_META_KEY, type ModelAlias } from '../claude/models.js'
+import {
+    type AskResponse,
+    type McpServerStatus,
+    type RateLimits,
+    runClaude,
+    type RunHandle,
+    RunTimeout
+} from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
-import { type ChangedFile, createPullRequest, filePatch, findPullRequest, listFiles, measure, type PullRequest, snapshotSync, type TaskGit } from '../git/changes.js'
+import {
+    type ChangedFile,
+    createPullRequest,
+    filePatch,
+    findPullRequest,
+    listFiles,
+    measure,
+    type PullRequest,
+    snapshotSync,
+    type TaskGit
+} from '../git/changes.js'
 import { createLogger } from '../logger.js'
-import type { Ask, AskQuestion, Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
+import type {
+    Ask,
+    AskQuestion,
+    Channel,
+    Conversation,
+    RateLimitSnapshot,
+    Store,
+    Task,
+    TaskEvent,
+    TaskSource
+} from '../store/index.js'
 
 const log = createLogger('tasks')
 
@@ -43,7 +69,8 @@ export interface TaskServiceEvents {
     limits: [snapshot: RateLimitSnapshot]
 }
 
-const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+const fmtTokens = (n: number) =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -88,17 +115,27 @@ export function limitReset(result: { isError: boolean; text: string; rateLimits:
     if (rejected && limits?.resets_at) candidates.push(limits.resets_at)
     const epoch = /\|(\d{10})\b/.exec(result.text)
     if (epoch) candidates.push(new Date(Number(epoch[1]) * 1000).toISOString())
-    const named = !rejected ? null : limits?.window?.startsWith('seven_day') ? limits.seven_day : limits?.window === 'five_hour' ? limits.five_hour : null
+    const named = !rejected
+        ? null
+        : limits?.window?.startsWith('seven_day')
+          ? limits.seven_day
+          : limits?.window === 'five_hour'
+            ? limits.five_hour
+            : null
     if (named) candidates.push(named.resets_at)
     for (const w of [limits?.five_hour, limits?.seven_day]) if (w && w.used >= 0.99) candidates.push(w.resets_at)
-    const at = candidates.map((c) => (c ? new Date(c) : null)).find((d): d is Date => d !== null && !Number.isNaN(d.getTime()))
+    const at = candidates
+        .map((c) => (c ? new Date(c) : null))
+        .find((d): d is Date => d !== null && !Number.isNaN(d.getTime()))
     return at ?? null
 }
 
 /** The questions of an `AskUserQuestion` call, as far as the input is well-formed. */
 export function askQuestions(ask: Ask): AskQuestion[] {
     const questions = ask.kind === 'question' ? ask.input.questions : undefined
-    return Array.isArray(questions) ? questions.filter((q): q is AskQuestion => Boolean(q) && typeof (q as AskQuestion).question === 'string') : []
+    return Array.isArray(questions)
+        ? questions.filter((q): q is AskQuestion => Boolean(q) && typeof (q as AskQuestion).question === 'string')
+        : []
 }
 
 /** Questions the owner has not answered yet, in order. */
@@ -108,7 +145,8 @@ export const openQuestions = (ask: Ask): AskQuestion[] => askQuestions(ask).filt
  * How the owner answers an `Ask`: for a question, answers by question text
  * (any subset; the rest stay open); for a permission, allow or deny.
  */
-export type Answer = { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }
+export type Answer =
+    { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }
 
 /**
  * Variables the CLI (and so every Bash call of the agent) must not see: they
@@ -117,7 +155,13 @@ export type Answer = { answers: Record<string, string> } | { behavior: 'allow' }
  * away with the bot token and the UI password. GitHub tokens and MCP
  * secrets (`${VAR}` in mcp.json) stay, the agent needs them.
  */
-const PRIVATE_ENV = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USER_IDS', 'WEB_AUTH_USER', 'WEB_AUTH_PASSWORD', 'GROQ_API_KEY']
+const PRIVATE_ENV = [
+    'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_ALLOWED_USER_IDS',
+    'WEB_AUTH_USER',
+    'WEB_AUTH_PASSWORD',
+    'GROQ_API_KEY'
+]
 
 /**
  * Which workspace a tool call touches: the first workspace directory name
@@ -174,7 +218,11 @@ function sourceOf(name: string, cliSource: string | null, scope: string | null):
  * means the repository, not the owner's folder (`ServicePattern/UserManagement`
  * is UserManagement); a name with a project file wins over a bare folder.
  */
-export function detectProject(input: unknown, workspaces: string[], hasProject: (name: string) => boolean = () => false): string | null {
+export function detectProject(
+    input: unknown,
+    workspaces: string[],
+    hasProject: (name: string) => boolean = () => false
+): string | null {
     const haystack = JSON.stringify(input ?? '')
     const found: string[] = []
     for (const name of workspaces) {
@@ -182,7 +230,12 @@ export function detectProject(input: unknown, workspaces: string[], hasProject: 
         const m = new RegExp(`(?:^|[\\s"'/=:(])${escapeRegExp(name)}(?=[\\s"'/):]|$)`).exec(haystack)
         if (!m) continue
         const after = haystack.slice(m.index + m[0].length)
-        const repo = workspaces.find((other) => other !== name && other.length >= 3 && new RegExp(`^/${escapeRegExp(other)}(?=[\\s"'/):]|$)`).test(after))
+        const repo = workspaces.find(
+            (other) =>
+                other !== name &&
+                other.length >= 3 &&
+                new RegExp(`^/${escapeRegExp(other)}(?=[\\s"'/):]|$)`).test(after)
+        )
         found.push(repo ?? name)
     }
     if (!found.length) return null
@@ -213,7 +266,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     readonly inbox: Inbox
     private readonly wake: NodeJS.Timeout
     /** Sign-ins to MCP servers started from the web UI; a completed one marks its server connected. */
-    private readonly logins = new McpLogins((name) => this.rememberRegistry([{ name, status: 'connected', source: null }], null))
+    private readonly logins = new McpLogins((name) =>
+        this.rememberRegistry([{ name, status: 'connected', source: null }], null)
+    )
 
     constructor(
         private readonly store: Store,
@@ -229,7 +284,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 return Boolean(conversation && !conversation.deleted_at)
             })
         } catch (error) {
-            log.warn(`inbox prune failed: ${error instanceof Error ? error.message : error}`)
+            log.warn(`inbox prune failed: ${error instanceof Error ? error.message : String(error)}`)
         }
         // Tasks waiting for a window reset become due on their own: look again now and then.
         this.wake = setInterval(() => this.tick(), WAKE_INTERVAL_MS)
@@ -240,13 +295,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         // to the resumed session). Tasks over the restart limit fail instead.
         const { requeued, failed } = store.recoverOrphanedTasks(MAX_RESTARTS)
         for (const task of requeued) {
-            store.addEvent(task.id, 'status', { status: 'queued', note: 'supervisor restarted while the task was running; resuming the session' })
+            store.addEvent(task.id, 'status', {
+                status: 'queued',
+                note: 'supervisor restarted while the task was running; resuming the session'
+            })
         }
         for (const task of failed) {
             store.addEvent(task.id, 'error', { status: 'failed', error: task.error ?? undefined })
         }
         this.orphaned = failed
-        if (requeued.length > 0) log.warn(`${requeued.length} task(s) were running when the supervisor stopped; re-queued`)
+        if (requeued.length > 0)
+            log.warn(`${requeued.length} task(s) were running when the supervisor stopped; re-queued`)
         if (failed.length > 0) log.warn(`${failed.length} task(s) hit the restart limit; marked failed`)
         // Tasks queued before a restart are still queued; pick them up.
         queueMicrotask(() => this.tick())
@@ -266,7 +325,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return this.store.findConversation(channel, externalId) ?? this.store.createConversation(channel, externalId)
     }
 
-    newConversation(channel: Channel, externalId: string | null, title: string | null = null, project: string | null = null): Conversation {
+    newConversation(
+        channel: Channel,
+        externalId: string | null,
+        title: string | null = null,
+        project: string | null = null
+    ): Conversation {
         return this.store.createConversation(channel, externalId, title, project)
     }
 
@@ -279,9 +343,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     setProject(conversationId: string, project: string | null): Conversation {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
-        if (project && !this.workspace.projectPath(project)) throw new Error(`Unknown project "${project}" or its checkout is missing`)
-        if (this.activeTask(conversationId)) throw new Error('a task is running in this conversation; wait for it to finish')
-        if (conversation.project !== project) this.store.updateConversation(conversationId, { project, session_id: null })
+        if (project && !this.workspace.projectPath(project))
+            throw new Error(`Unknown project "${project}" or its checkout is missing`)
+        if (this.activeTask(conversationId))
+            throw new Error('a task is running in this conversation; wait for it to finish')
+        if (conversation.project !== project)
+            this.store.updateConversation(conversationId, { project, session_id: null })
         return this.store.getConversation(conversationId)!
     }
 
@@ -291,7 +358,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * events stay; their attachment previews then say the file was removed.
      */
     deleteConversation(conversationId: string): void {
-        if (this.activeTask(conversationId) || this.queuedTask(conversationId)) throw new Error('a task of this conversation is still queued or running; stop it first')
+        if (this.activeTask(conversationId) || this.queuedTask(conversationId))
+            throw new Error('a task of this conversation is still queued or running; stop it first')
         this.store.deleteConversation(conversationId)
         this.inbox.remove(conversationId)
     }
@@ -299,11 +367,20 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     // ---- what a task changed (the task page's Changes panel) ---------------
 
     /** The task's recorded range and its checkout, or an error the panel shows as is. */
-    private changed(taskId: string): { task: Task; git: Required<Pick<TaskGit, 'base' | 'head'>> & TaskGit; cwd: string } {
+    private changed(taskId: string): {
+        task: Task
+        git: Required<Pick<TaskGit, 'base' | 'head'>> & TaskGit
+        cwd: string
+    } {
         const task = this.store.getTask(taskId)
         if (!task) throw new Error('task not found')
         const git = task.git
-        if (!git?.base || !git.head) throw new Error(task.status === 'queued' || task.status === 'running' ? 'the task has not finished yet' : 'no changes were recorded for this task (it ran outside a project, or before 1.1.0)')
+        if (!git?.base || !git.head)
+            throw new Error(
+                task.status === 'queued' || task.status === 'running'
+                    ? 'the task has not finished yet'
+                    : 'no changes were recorded for this task (it ran outside a project, or before 1.1.0)'
+            )
         const cwd = task.project ? this.workspace.projectPath(task.project) : null
         if (!cwd) throw new Error(`the checkout of project "${task.project}" is not on disk any more`)
         return { task, git: git as Required<Pick<TaskGit, 'base' | 'head'>> & TaskGit, cwd }
@@ -316,10 +393,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         try {
             files = await listFiles(cwd, git.base, git.head)
         } catch {
-            throw new Error('the commits of this task are gone from the checkout (rebased, squashed or pruned); see the pull request on GitHub')
+            throw new Error(
+                'the commits of this task are gone from the checkout (rebased, squashed or pruned); see the pull request on GitHub'
+            )
         }
-        const pr = git.branch && git.branch !== git.default_branch ? await findPullRequest(cwd, git.branch, this.agentEnv()) : null
-        if (pr && (pr.url !== git.pr?.url || pr.state !== git.pr?.state || pr.isDraft !== git.pr?.isDraft)) this.store.updateTask(task.id, { git: { ...git, pr } })
+        const pr =
+            git.branch && git.branch !== git.default_branch
+                ? await findPullRequest(cwd, git.branch, this.agentEnv())
+                : null
+        if (pr && (pr.url !== git.pr?.url || pr.state !== git.pr?.state || pr.isDraft !== git.pr?.isDraft))
+            this.store.updateTask(task.id, { git: { ...git, pr } })
         return { git: { ...git, pr }, files, pr }
     }
 
@@ -334,8 +417,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     async createPr(taskId: string): Promise<PullRequest> {
         const { task, git, cwd } = this.changed(taskId)
         if (!git.branch) throw new Error('the task did not end on a branch')
-        if (!git.default_branch) throw new Error('the repository has no default branch to open the pull request against')
-        if (git.branch === git.default_branch) throw new Error(`the changes are on ${git.branch} itself; a pull request needs a branch of its own`)
+        if (!git.default_branch)
+            throw new Error('the repository has no default branch to open the pull request against')
+        if (git.branch === git.default_branch)
+            throw new Error(`the changes are on ${git.branch} itself; a pull request needs a branch of its own`)
         const pr = await createPullRequest(cwd, git.branch, git.default_branch, this.agentEnv())
         // No 'task' event: the task finished long ago, and listeners treat one as news (the bot would deliver its report again).
         this.store.updateTask(task.id, { git: { ...git, pr } })
@@ -382,7 +467,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         for (const [scope, servers] of Object.entries(this.mcpStatus())) {
             for (const server of servers) {
                 const key = mcpKey(server.name)
-                if (!known[key]) known[key] = { name: server.name, status: server.status, source: sourceOf(server.name, server.source, scope), seen_at: null }
+                if (!known[key])
+                    known[key] = {
+                        name: server.name,
+                        status: server.status,
+                        source: sourceOf(server.name, server.source, scope),
+                        seen_at: null
+                    }
             }
         }
         const tools = new Map<string, string[]>()
@@ -412,10 +503,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** `claude mcp list` from the workspaces root: the authoritative status of every server the CLI can see, needs-auth ones included. */
     async refreshMcp(): Promise<McpEntry[]> {
         const output = await new Promise<string>((resolve, reject) => {
-            execFile('claude', ['mcp', 'list'], { cwd: this.config.paths.workspacesRoot, env: this.agentEnv(), timeout: 90_000, maxBuffer: 1 << 20 }, (error, stdout, stderr) => {
-                if (error && !stdout) reject(new Error(`claude mcp list: ${stderr.trim() || error.message}`))
-                else resolve(stdout)
-            })
+            execFile(
+                'claude',
+                ['mcp', 'list'],
+                { cwd: this.config.paths.workspacesRoot, env: this.agentEnv(), timeout: 90_000, maxBuffer: 1 << 20 },
+                (error, stdout, stderr) => {
+                    if (error && !stdout) reject(new Error(`claude mcp list: ${stderr.trim() || error.message}`))
+                    else resolve(stdout)
+                }
+            )
         })
         const names = new Set(this.mcpRegistry().map((e) => e.name))
         const seen: RegistryUpdate[] = []
@@ -428,8 +524,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const name = [...names].find((n) => left.startsWith(`${n}: `)) ?? left.split(': ')[0]
             if (!name) continue
             // The URL or command, without the CLI's "(HTTP)" / "(SSE)" / "(stdio)" suffix.
-            const target = left.slice(name.length + 2).replace(/\s*\((?:HTTP|SSE|stdio)\)\s*$/i, '').trim() || null
-            const status = /connected/i.test(verdict) ? 'connected' : /needs auth/i.test(verdict) ? 'needs-auth' : 'failed'
+            const target =
+                left
+                    .slice(name.length + 2)
+                    .replace(/\s*\((?:HTTP|SSE|stdio)\)\s*$/i, '')
+                    .trim() || null
+            const status = /connected/i.test(verdict)
+                ? 'connected'
+                : /needs auth/i.test(verdict)
+                  ? 'needs-auth'
+                  : 'failed'
             seen.push({ name, status, source: null, target })
         }
         if (seen.length) this.rememberRegistry(seen, null)
@@ -472,7 +576,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             // Session starts do not carry the target: keep the one `claude mcp list` gave.
             const target = server.target ?? known[key]?.target ?? null
             const next: StoredMcp = { name: server.name, status: server.status, source, seen_at: now, target }
-            if (known[key]?.status !== next.status || known[key]?.source !== next.source || known[key]?.name !== next.name || known[key]?.target !== target) changed = true
+            if (
+                known[key]?.status !== next.status ||
+                known[key]?.source !== next.source ||
+                known[key]?.name !== next.name ||
+                known[key]?.target !== target
+            )
+                changed = true
             known[key] = next
         }
         if (changed || servers.length) this.store.setMeta('claude.mcp.registry', known)
@@ -513,7 +623,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return alias
     }
 
-    submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string; model?: string; attachments?: Attachment[] } = {}): Task {
+    submit(
+        conversationId: string,
+        source: TaskSource,
+        prompt: string,
+        options: { schedule?: string; model?: string; attachments?: Attachment[] } = {}
+    ): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
         // Files saved for the chat's topic go to the conversation the message lands in (a reply that switched topics).
@@ -522,7 +637,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (asking && !options.schedule) {
             const question = openQuestions(asking.ask!)[0]
             // Files sent with an answer reach the agent as paths inside the answer text.
-            if (question) return this.answer(asking.id, { answers: { [question.question]: prompt + attachmentNote(attachments) } })
+            if (question)
+                return this.answer(asking.id, {
+                    answers: { [question.question]: prompt + attachmentNote(attachments) }
+                })
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
@@ -538,7 +656,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
-        log.info(`queued ${task.id} (${source}): ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${attachments.length ? ` +${attachments.length} file(s)` : ''}`)
+        log.info(
+            `queued ${task.id} (${source}): ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${attachments.length ? ` +${attachments.length} file(s)` : ''}`
+        )
         this.emit('task', task)
         queueMicrotask(() => this.tick())
         return task
@@ -578,12 +698,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if ('answers' in answer) {
             if (ask.kind !== 'question') throw new Error('this request is a permission prompt: allow or deny it')
             const known = new Set(askQuestions(ask).map((q) => q.question))
-            const given = Object.fromEntries(Object.entries(answer.answers).filter(([q, a]) => known.has(q) && typeof a === 'string' && a.trim()))
+            const given = Object.fromEntries(
+                Object.entries(answer.answers).filter(([q, a]) => known.has(q) && typeof a === 'string' && a.trim())
+            )
             if (!Object.keys(given).length) throw new Error('no answer to any of the questions')
             answers = { ...ask.answers, ...given }
-            response = openQuestions({ ...ask, answers }).length ? null : { behavior: 'allow', updatedInput: { ...ask.input, answers } }
+            response = openQuestions({ ...ask, answers }).length
+                ? null
+                : { behavior: 'allow', updatedInput: { ...ask.input, answers } }
         } else if (answer.behavior === 'allow') {
-            response = { behavior: 'allow', updatedInput: ask.kind === 'question' ? { ...ask.input, answers } : ask.input }
+            response = {
+                behavior: 'allow',
+                updatedInput: ask.kind === 'question' ? { ...ask.input, answers } : ask.input
+            }
         } else {
             response = { behavior: 'deny', message: answer.message?.trim() || 'The owner declined.' }
         }
@@ -636,15 +763,29 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (!task || task.status !== 'running' || task.ask?.request_id !== ask.request_id) return
             const reason = `no answer from the owner within ${minutes} min`
             try {
-                if (ask.kind === 'permission') this.answer(taskId, { behavior: 'deny', message: `${reason}; the scheduled run goes on without it, or reports what it needed and stops` })
+                if (ask.kind === 'permission')
+                    this.answer(taskId, {
+                        behavior: 'deny',
+                        message: `${reason}; the scheduled run goes on without it, or reports what it needed and stops`
+                    })
                 else {
                     const text = `(${reason}: decide by the schedule's instructions, or report what you needed and stop)`
-                    this.answer(taskId, { answers: Object.fromEntries(openQuestions(task.ask).map((q) => [q.question, text])) })
+                    this.answer(taskId, {
+                        answers: Object.fromEntries(openQuestions(task.ask).map((q) => [q.question, text]))
+                    })
                 }
-                this.emit('event', this.store.addEvent(taskId, 'status', { status: 'running', note: `${ask.kind} answered for the owner: ${reason}` }))
+                this.emit(
+                    'event',
+                    this.store.addEvent(taskId, 'status', {
+                        status: 'running',
+                        note: `${ask.kind} answered for the owner: ${reason}`
+                    })
+                )
                 log.warn(`${taskId}: ${ask.kind} ${ask.tool_name} answered by the timeout (${minutes} min)`)
             } catch (error) {
-                log.warn(`${taskId}: could not settle the ${ask.kind} by the timeout: ${error instanceof Error ? error.message : error}`)
+                log.warn(
+                    `${taskId}: could not settle the ${ask.kind} by the timeout: ${error instanceof Error ? error.message : String(error)}`
+                )
             }
         }, ms)
         timer.unref()
@@ -653,7 +794,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** Whether a task submitted now waits: this conversation is busy or queued, or every session slot is taken. */
     willWait(conversationId: string): boolean {
         if (this.running.size >= this.config.maxConcurrentSessions) return true
-        return this.store.listTasks({ conversationId, status: 'running', limit: 1 }).length > 0 || this.store.listTasks({ conversationId, status: 'queued', limit: 1 }).length > 0
+        return (
+            this.store.listTasks({ conversationId, status: 'running', limit: 1 }).length > 0 ||
+            this.store.listTasks({ conversationId, status: 'queued', limit: 1 }).length > 0
+        )
     }
 
     runningTaskIds(): string[] {
@@ -744,7 +888,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.probe = handle.result
             .then((result) => (result.rateLimits ? this.recordLimits(result.rateLimits, null) : null))
             .catch((error) => {
-                log.warn(`limits probe failed: ${error instanceof Error ? error.message : error}`)
+                log.warn(`limits probe failed: ${error instanceof Error ? error.message : String(error)}`)
                 return null
             })
             .finally(() => {
@@ -769,7 +913,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.rememberRegistry(servers, scope)
         const all = this.mcpStatus()
         const known = all[scope] ?? []
-        if (known.length === servers.length && known.every((s, i) => s.name === servers[i].name && s.status === servers[i].status)) return
+        if (
+            known.length === servers.length &&
+            known.every((s, i) => s.name === servers[i].name && s.status === servers[i].status)
+        )
+            return
         this.store.setMeta('claude.mcp', { ...all, [scope]: servers })
     }
 
@@ -784,7 +932,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const file = this.mcpConfigFile()
         if (!file) return []
         try {
-            return Object.keys((JSON.parse(fs.readFileSync(file, 'utf8')) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {})
+            return Object.keys(
+                (JSON.parse(fs.readFileSync(file, 'utf8')) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {}
+            )
         } catch {
             return []
         }
@@ -837,7 +987,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             try {
                 this.inbox.prune(INBOX_KEEP_DAYS)
             } catch (error) {
-                log.warn(`inbox prune failed: ${error instanceof Error ? error.message : error}`)
+                log.warn(`inbox prune failed: ${error instanceof Error ? error.message : String(error)}`)
             }
         }
         if (Date.now() < this.pausedUntil) return
@@ -845,7 +995,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         try {
             for (const task of this.store.nextQueuedTasks()) {
                 if (this.running.size >= this.config.maxConcurrentSessions) break
-                if ([...this.running.keys()].some((id) => this.store.getTask(id)?.conversation_id === task.conversation_id)) {
+                if (
+                    [...this.running.keys()].some(
+                        (id) => this.store.getTask(id)?.conversation_id === task.conversation_id
+                    )
+                ) {
                     continue
                 }
                 void this.run(task)
@@ -901,10 +1055,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (conversation.session_id) {
             const recorded = this.workspace.sessionWorkspace(conversation.session_id)
             if (recorded && recorded !== claudeSlug(cwd)) {
-                log.info(`conversation ${conversation.id} moved to ${cwd}; session ${conversation.session_id} stays behind`)
+                log.info(
+                    `conversation ${conversation.id} moved to ${cwd}; session ${conversation.session_id} stays behind`
+                )
                 this.store.updateConversation(conversation.id, { session_id: null })
                 conversation.session_id = null
-                this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running', note: `fresh session in ${cwd}` }))
+                this.emit(
+                    'event',
+                    this.store.addEvent(task.id, 'status', { status: 'running', note: `fresh session in ${cwd}` })
+                )
             }
         }
 
@@ -967,7 +1126,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                         agent: null,
                         asked_at: new Date().toISOString()
                     }
-                    this.emit('event', this.store.addEvent(task.id, 'ask', { kind: ask.kind, request_id: ask.request_id, tool_name: ask.tool_name, input: ask.input }, origin))
+                    this.emit(
+                        'event',
+                        this.store.addEvent(
+                            task.id,
+                            'ask',
+                            { kind: ask.kind, request_id: ask.request_id, tool_name: ask.tool_name, input: ask.input },
+                            origin
+                        )
+                    )
                     this.emit('task', this.store.updateTask(task.id, { ask }))
                     log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name}`)
                     if (task.schedule) this.answerLater(task.id, ask)
@@ -975,7 +1142,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 }
                 if (event.type === 'ask_cancelled') {
                     const current = this.store.getTask(task.id)
-                    if (current?.ask?.request_id === event.requestId) this.emit('task', this.store.updateTask(task.id, { ask: null }))
+                    if (current?.ask?.request_id === event.requestId)
+                        this.emit('task', this.store.updateTask(task.id, { ask: null }))
                     return
                 }
                 const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
@@ -993,7 +1161,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 // fence moved the thread, dropped its session and the next reply was about the
                 // other repository). Later tasks of a bound conversation never leave it.
                 if (event.type === 'tool_use' && !project) {
-                    project = detectProject(event.input, this.workspaces(), (name) => this.workspace.projectPath(name) !== null)
+                    project = detectProject(
+                        event.input,
+                        this.workspaces(),
+                        (name) => this.workspace.projectPath(name) !== null
+                    )
                     if (project) {
                         this.store.updateTask(task.id, { project })
                         if (!conversation.project) this.store.updateConversation(conversation.id, { project })
@@ -1015,19 +1187,22 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (result.sessionId) this.store.updateConversation(conversation.id, { session_id: result.sessionId })
             const last = result.rateLimits?.five_hour ?? null
             const before = previous && last && previous.resets_at === last.resets_at ? previous : first
-            const delta = before && last && before.resets_at === last.resets_at ? Math.max(0, last.used - before.used) : null
+            const delta =
+                before && last && before.resets_at === last.resets_at ? Math.max(0, last.used - before.used) : null
             // Every model call seen on the stream, sub-agents included, against the result's own figures (the orchestrator only, and only its last turn when sub-agents ran in the background): the larger reading is the truth.
             const seen = spent.input + spent.output + spent.cacheRead + spent.cacheCreation
-            const counted = result.inputTokens + result.outputTokens + result.cacheReadTokens + result.cacheCreationTokens
+            const counted =
+                result.inputTokens + result.outputTokens + result.cacheReadTokens + result.cacheCreationTokens
             const all = seen > counted
             // The orchestrator answered while sub-agents were still working: `claude -p` has no
             // "later", whatever they did after that reached nobody. Said in the result (Telegram,
             // and the web when nothing streamed) and as a text event (the web thread otherwise
             // shows only the streamed prose).
             const open = result.openAgentsAtResult
-            const cutOff = open > 0 && !result.isError && !this.stopRequested.has(task.id)
-                ? `⚠️ The reply came while ${open === 1 ? 'a sub-agent was' : `${open} sub-agents were`} still working: whatever they did after it reached nobody. Say "continue" to pick it up.`
-                : ''
+            const cutOff =
+                open > 0 && !result.isError && !this.stopRequested.has(task.id)
+                    ? `⚠️ The reply came while ${open === 1 ? 'a sub-agent was' : `${open} sub-agents were`} still working: whatever they did after it reached nobody. Say "continue" to pick it up.`
+                    : ''
             if (cutOff) {
                 log.warn(`task ${task.id} answered with ${open} sub-agent(s) still running`)
                 if (sawText) this.emit('event', this.store.addEvent(task.id, 'text', { text: cutOff }))
@@ -1041,7 +1216,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 session_id: result.sessionId || conversation.session_id,
                 result: cutOff ? `${result.text}\n\n${cutOff}` : result.text,
                 // Error results (max turns, budget, execution errors) often carry no text: name the reason.
-                error: result.isError ? (typeof waits === 'string' ? waits : result.text || `claude stopped: ${result.subtype}`) : null,
+                error: result.isError
+                    ? typeof waits === 'string'
+                        ? waits
+                        : result.text || `claude stopped: ${result.subtype}`
+                    : null,
                 num_turns: result.numTurns,
                 cost_usd: result.costUsd,
                 // Wall clock: the result's duration stops at the orchestrator's last turn, before background sub-agents end.
@@ -1069,9 +1248,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 return
             }
             if (resuming && !sawOutput && mayRetry) {
-                log.warn(`session ${conversation.session_id} of ${conversation.id} could not be resumed, starting afresh: ${message}`)
+                log.warn(
+                    `session ${conversation.session_id} of ${conversation.id} could not be resumed, starting afresh: ${message}`
+                )
                 this.store.updateConversation(conversation.id, { session_id: null })
-                this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running', note: 'previous session could not be resumed; starting a fresh one' }))
+                this.emit(
+                    'event',
+                    this.store.addEvent(task.id, 'status', {
+                        status: 'running',
+                        note: 'previous session could not be resumed; starting a fresh one'
+                    })
+                )
                 this.running.delete(task.id)
                 await this.attempt(task, false)
                 return
@@ -1096,7 +1283,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const wait = at.getTime() - now
         const max = this.config.claude.autoContinueMs
         if (max <= 0 || wait > max || task.limit_waits >= MAX_LIMIT_WAITS) {
-            const why = max <= 0 ? 'auto-continue is off' : task.limit_waits >= MAX_LIMIT_WAITS ? `it already waited ${task.limit_waits} times` : 'that is further away than CLAUDE_AUTO_CONTINUE_HOURS'
+            const why =
+                max <= 0
+                    ? 'auto-continue is off'
+                    : task.limit_waits >= MAX_LIMIT_WAITS
+                      ? `it already waited ${task.limit_waits} times`
+                      : 'that is further away than CLAUDE_AUTO_CONTINUE_HOURS'
             return `Subscription limit reached; the window resets at ${reset.toISOString()} (not waiting: ${why}). Say "continue" after that.`
         }
         this.pausedUntil = Math.max(this.pausedUntil, at.getTime())
@@ -1108,7 +1300,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             ask: null,
             error: null
         })
-        this.emit('event', this.store.addEvent(taskId, 'status', { status: 'queued', note: `subscription limit reached; continues after the window resets`, not_before: updated.not_before }))
+        this.emit(
+            'event',
+            this.store.addEvent(taskId, 'status', {
+                status: 'queued',
+                note: `subscription limit reached; continues after the window resets`,
+                not_before: updated.not_before
+            })
+        )
         log.warn(`${taskId} hit the subscription limit; waits until ${updated.not_before}`)
         this.emit('task', updated)
         return true
@@ -1121,25 +1320,33 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         try {
             const git = await measure(cwd, task.git)
             // A short lookup: the report waits for it, and a slow GitHub must not hold the conversation.
-            if (git.files && git.branch && git.branch !== git.default_branch) git.pr = await findPullRequest(cwd, git.branch, this.agentEnv(), 5_000)
+            if (git.files && git.branch && git.branch !== git.default_branch)
+                git.pr = await findPullRequest(cwd, git.branch, this.agentEnv(), 5_000)
             this.store.updateTask(taskId, { git })
         } catch (error) {
-            log.warn(`${taskId}: could not measure the changes: ${error instanceof Error ? error.message : error}`)
+            log.warn(
+                `${taskId}: could not measure the changes: ${error instanceof Error ? error.message : String(error)}`
+            )
         }
     }
 
     private finish(taskId: string, patch: Partial<Task>): void {
         const task = this.store.updateTask(taskId, { ...patch, ask: null, finished_at: new Date().toISOString() })
         const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
-        this.emit('event', this.store.addEvent(taskId, task.status === 'failed' ? 'error' : 'status', {
-            status: task.status,
-            error: task.error ?? undefined,
-            num_turns: task.num_turns,
-            tokens,
-            window_5h_delta: task.window_5h_delta,
-            duration_ms: task.duration_ms
-        }))
-        log.info(`${task.status} ${task.id}: ${task.num_turns} turns · ${fmtTokens(tokens)} tokens · ${Math.round(task.duration_ms / 1000)}s`)
+        this.emit(
+            'event',
+            this.store.addEvent(taskId, task.status === 'failed' ? 'error' : 'status', {
+                status: task.status,
+                error: task.error ?? undefined,
+                num_turns: task.num_turns,
+                tokens,
+                window_5h_delta: task.window_5h_delta,
+                duration_ms: task.duration_ms
+            })
+        )
+        log.info(
+            `${task.status} ${task.id}: ${task.num_turns} turns · ${fmtTokens(tokens)} tokens · ${Math.round(task.duration_ms / 1000)}s`
+        )
         this.emit('task', task)
     }
 }
@@ -1148,7 +1355,11 @@ const TITLE_MAX = 60
 
 /** A conversation title from its first prompt: the first line, cut at a word boundary. */
 export function titleFrom(prompt: string): string {
-    const line = prompt.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? ''
+    const line =
+        prompt
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .find((l) => l.length > 0) ?? ''
     const text = line.replace(/\s+/g, ' ')
     if (text.length <= TITLE_MAX) return text
     const cut = text.slice(0, TITLE_MAX)

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+
 import { changesText, fmt, type Task, type TaskEvent, taskTokens } from '../lib/api'
 import { AskForm } from './Ask'
 import { Event, summarizeInput } from './EventFeed'
-import { Button, Markdown, StatusBadge } from './ui'
 import { Tile } from './Tile'
+import { Button, Markdown, StatusBadge } from './ui'
 
 type Segment = { kind: 'text'; text: string; agent: string | null } | { kind: 'steps'; events: TaskEvent[] }
 
@@ -54,15 +55,23 @@ function Steps({ events, live }: { events: TaskEvent[]; live: boolean }) {
         if (details.current) details.current.open = live
     }, [live])
     return (
-        <details ref={details} className={`steps${live ? ' steps-live' : ''}${errors ? ' has-error' : ''}`}>
+        <details
+            ref={details}
+            className={`steps${live ? ' steps-live' : ''}${errors ? ' has-error' : ''}`}
+        >
             <summary>
-                <span className="steps-count">{fmt.plural(calls.length, 'step')}</span>
-                <span className="dim steps-names">{live ? lastStep(events) : names.slice(0, 6).join(' · ') + (names.length > 6 ? ' · …' : '')}</span>
-                {errors > 0 && <span className="badge red">{fmt.plural(errors, 'error')}</span>}
+                <span className='steps-count'>{fmt.plural(calls.length, 'step')}</span>
+                <span className='dim steps-names'>
+                    {live ? lastStep(events) : names.slice(0, 6).join(' · ') + (names.length > 6 ? ' · …' : '')}
+                </span>
+                {errors > 0 && <span className='badge red'>{fmt.plural(errors, 'error')}</span>}
             </summary>
-            <div className="steps-body">
+            <div className='steps-body'>
                 {events.map((e) => (
-                    <Event key={e.id} event={e} />
+                    <Event
+                        key={e.id}
+                        event={e}
+                    />
                 ))}
             </div>
         </details>
@@ -70,14 +79,27 @@ function Steps({ events, live }: { events: TaskEvent[]; live: boolean }) {
 }
 
 /** `onTask`: the task row after the owner answered what it asked (its `ask` gone or advanced). */
-export function AssistantTurn({ task, events, onTask }: { task: Task; events: TaskEvent[]; onTask?: (task: Task) => void }) {
+export function AssistantTurn({
+    task,
+    events,
+    onTask
+}: {
+    task: Task
+    events: TaskEvent[]
+    onTask?: (task: Task) => void
+}) {
     const [copied, setCopied] = useState(false)
     const live = task.status === 'running' || task.status === 'queued'
     const parts = segments(events)
     const hasText = parts.some((p) => p.kind === 'text')
     // The final result repeats the last text event; show it only when nothing streamed.
     const finalText = !hasText && task.status === 'done' && task.result ? task.result : null
-    const prose = [...parts.filter((p): p is Extract<Segment, { kind: 'text' }> => p.kind === 'text').map((p) => p.text), finalText ?? ''].filter(Boolean).join('\n\n')
+    const prose = [
+        ...parts.filter((p): p is Extract<Segment, { kind: 'text' }> => p.kind === 'text').map((p) => p.text),
+        finalText ?? ''
+    ]
+        .filter(Boolean)
+        .join('\n\n')
 
     const copy = async () => {
         try {
@@ -93,29 +115,49 @@ export function AssistantTurn({ task, events, onTask }: { task: Task; events: Ta
     const waiting = task.status === 'queued' && task.not_before
     if (task.status === 'queued' && !waiting) {
         return (
-            <div className="reply-row">
-                <Tile icon="control" color="gray" small />
-                <div className="reply queued dim">Queued — waits for the running task in this conversation.</div>
+            <div className='reply-row'>
+                <Tile
+                    icon='control'
+                    color='gray'
+                    small
+                />
+                <div className='reply queued dim'>Queued — waits for the running task in this conversation.</div>
             </div>
         )
     }
 
     return (
-        <div className="reply-row">
-            <Tile icon="control" color="gray" small />
-            <div className="reply">
+        <div className='reply-row'>
+            <Tile
+                icon='control'
+                color='gray'
+                small
+            />
+            <div className='reply'>
                 {parts.map((p, i) =>
                     p.kind === 'text' ? (
-                        <Markdown key={i} source={p.text} />
+                        <Markdown
+                            key={i}
+                            source={p.text}
+                        />
                     ) : (
-                        <Steps key={i} events={p.events} live={live && i === parts.length - 1} />
+                        <Steps
+                            key={i}
+                            events={p.events}
+                            live={live && i === parts.length - 1}
+                        />
                     )
                 )}
                 {finalText && <Markdown source={finalText} />}
-                {task.status === 'running' && task.ask && <AskForm task={task} onAnswered={onTask} />}
+                {task.status === 'running' && task.ask && (
+                    <AskForm
+                        task={task}
+                        onAnswered={onTask}
+                    />
+                )}
                 {task.status === 'running' && !task.ask && (
-                    <div className="working">
-                        <span className="dots">
+                    <div className='working'>
+                        <span className='dots'>
                             <i />
                             <i />
                             <i />
@@ -124,36 +166,61 @@ export function AssistantTurn({ task, events, onTask }: { task: Task; events: Ta
                     </div>
                 )}
                 {waiting && (
-                    <div className="working waiting" title={fmt.when(task.not_before)}>
+                    <div
+                        className='working waiting'
+                        title={fmt.when(task.not_before)}
+                    >
                         ⏸ Subscription limit reached. Continues by itself in {fmt.until(task.not_before!)}, at{' '}
-                        {new Date(task.not_before!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, in the same session.
+                        {new Date(task.not_before!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, in
+                        the same session.
                     </div>
                 )}
-                {task.status === 'failed' && <div className="tool error">{task.error ?? 'failed'}</div>}
-                {task.status === 'cancelled' && <div className="dim small">Stopped.</div>}
+                {task.status === 'failed' && <div className='tool error'>{task.error ?? 'failed'}</div>}
+                {task.status === 'cancelled' && <div className='dim small'>Stopped.</div>}
                 {!live && (
-                    <div className="reply-foot">
+                    <div className='reply-foot'>
                         <StatusBadge status={task.status} />
-                        <span className="dim">
+                        <span className='dim'>
                             {fmt.plural(task.num_turns, 'turn')} · {fmt.tokens(taskTokens(task))} tokens
-                            {fmt.windowDelta(task.window_5h_delta) ? ` · ${fmt.windowDelta(task.window_5h_delta)}` : ''} · {fmt.duration(task.duration_ms)}
+                            {fmt.windowDelta(task.window_5h_delta)
+                                ? ` · ${fmt.windowDelta(task.window_5h_delta)}`
+                                : ''}{' '}
+                            · {fmt.duration(task.duration_ms)}
                         </span>
-                        <span className="dim" title={fmt.when(task.finished_at)}>
+                        <span
+                            className='dim'
+                            title={fmt.when(task.finished_at)}
+                        >
                             · {fmt.ago(task.finished_at)}
                         </span>
                         {changesText(task.git) && (
-                            <Button size="sm" variant="ghost" className="changes-chip" to={`/tasks/${task.id}#changes`} title="Files, diff and pull request">
+                            <Button
+                                size='sm'
+                                variant='ghost'
+                                className='changes-chip'
+                                to={`/tasks/${task.id}#changes`}
+                                title='Files, diff and pull request'
+                            >
                                 {changesText(task.git)}
                                 {task.git?.pr ? ` · PR #${task.git.pr.number}` : ''}
                             </Button>
                         )}
-                        <span className="grow" />
+                        <span className='grow' />
                         {prose && (
-                            <Button size="sm" variant="ghost" onClick={copy} title="Copy the reply as Markdown">
+                            <Button
+                                size='sm'
+                                variant='ghost'
+                                onClick={copy}
+                                title='Copy the reply as Markdown'
+                            >
                                 {copied ? 'Copied' : 'Copy'}
                             </Button>
                         )}
-                        <Button size="sm" variant="ghost" to={`/tasks/${task.id}`}>
+                        <Button
+                            size='sm'
+                            variant='ghost'
+                            to={`/tasks/${task.id}`}
+                        >
                             Task
                         </Button>
                     </div>

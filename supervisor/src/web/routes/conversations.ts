@@ -9,7 +9,8 @@ import type { Env } from '../context.js'
 import { cursorOf } from './cursor.js'
 
 /** Absent, null or a string: what an optional text field of a request body may be. */
-const isOptionalString = (v: unknown): v is string | null | undefined => v === undefined || v === null || typeof v === 'string'
+const isOptionalString = (v: unknown): v is string | null | undefined =>
+    v === undefined || v === null || typeof v === 'string'
 
 export function conversationRoutes(): Hono<Env> {
     const app = new Hono<Env>()
@@ -21,7 +22,10 @@ export function conversationRoutes(): Hono<Env> {
     })
 
     /** A conversation the Chat page may show; a deleted one is gone for the API too, not only for the list. */
-    const live = (c: { get: (key: 'app') => Env['Variables']['app']; req: { param: (name: 'id') => string } }): Conversation | undefined => {
+    const live = (c: {
+        get: (key: 'app') => Env['Variables']['app']
+        req: { param: (name: 'id') => string }
+    }): Conversation | undefined => {
         const conversation = c.get('app').store.getConversation(c.req.param('id'))
         return conversation && !conversation.deleted_at ? conversation : undefined
     }
@@ -30,9 +34,11 @@ export function conversationRoutes(): Hono<Env> {
     app.post('/', async (c) => {
         const { tasks } = c.get('app')
         const body = (await c.req.json().catch(() => ({}))) as { title?: unknown; project?: unknown }
-        if (!isOptionalString(body.title) || !isOptionalString(body.project)) return c.json({ error: 'title and project must be strings' }, 400)
+        if (!isOptionalString(body.title) || !isOptionalString(body.project))
+            return c.json({ error: 'title and project must be strings' }, 400)
         const project = body.project?.trim() || null
-        if (project && !tasks.hasProject(project)) return c.json({ error: `unknown project "${project}" or its checkout is missing` }, 400)
+        if (project && !tasks.hasProject(project))
+            return c.json({ error: `unknown project "${project}" or its checkout is missing` }, 400)
         return c.json(tasks.newConversation('web', null, body.title ?? null, project), 201)
     })
 
@@ -114,10 +120,12 @@ export function conversationRoutes(): Hono<Env> {
         const body = (await c.req.json().catch(() => ({}))) as { prompt?: unknown; attachments?: unknown }
         if (!isOptionalString(body.prompt)) return c.json({ error: 'prompt must be a string' }, 400)
         const names = body.attachments ?? []
-        if (!Array.isArray(names) || !names.every((n) => typeof n === 'string')) return c.json({ error: 'attachments must be a list of file names' }, 400)
-        if (names.length > MAX_ATTACHMENTS) return c.json({ error: `at most ${MAX_ATTACHMENTS} files per message` }, 400)
+        if (!Array.isArray(names) || !names.every((n) => typeof n === 'string'))
+            return c.json({ error: 'attachments must be a list of file names' }, 400)
+        if (names.length > MAX_ATTACHMENTS)
+            return c.json({ error: `at most ${MAX_ATTACHMENTS} files per message` }, 400)
         const attachments: Attachment[] = []
-        for (const name of names as string[]) {
+        for (const name of names) {
             const file = tasks.inbox.get(conversation.id, name)
             if (!file) return c.json({ error: `attachment "${name}" not found; upload it again` }, 400)
             attachments.push(file)
@@ -156,7 +164,10 @@ export function conversationRoutes(): Hono<Env> {
         if (!file) return c.json({ error: 'file not found' }, 404)
         const inline = isPreviewable(file.type)
         c.header('Content-Type', inline ? file.type : 'application/octet-stream')
-        c.header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${file.name.replace(/"/g, '')}"`)
+        c.header(
+            'Content-Disposition',
+            `${inline ? 'inline' : 'attachment'}; filename="${file.name.replace(/"/g, '')}"`
+        )
         c.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
         return c.body(fs.readFileSync(file.path))
     })

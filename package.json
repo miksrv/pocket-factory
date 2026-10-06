@@ -11,13 +11,40 @@
     ],
     "scripts": {
         "dev": "yarn workspace @pocket-factory/supervisor dev",
+        "dev:web": "yarn workspace @pocket-factory/web dev",
         "build": "yarn workspaces foreach -A run build",
-        "typecheck": "yarn workspaces foreach -A run typecheck",
+        "typecheck": "yarn workspaces foreach -A run typecheck && tsc -p tsconfig.json",
+        "lint": "eslint --max-warnings=0 .",
+        "lint:fix": "eslint --fix .",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage",
+        "test:e2e": "playwright test",
+        "check": "yarn format:check && yarn lint && yarn typecheck && yarn test",
         "up": "docker compose up -d --build",
-        "logs": "docker compose logs -f supervisor",
-        "dev:web": "yarn workspace @pocket-factory/web dev"
+        "logs": "docker compose logs -f supervisor"
     },
     "engines": {
         "node": ">=22"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@playwright/test": "^1.63.0",
+        "@types/node": "^22.15.0",
+        "@vitest/coverage-v8": "^5.0.3",
+        "@vitest/eslint-plugin": "^1.6.27",
+        "eslint": "^10.12.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-playwright": "^2.12.1",
+        "eslint-plugin-react-hooks": "^7.1.1",
+        "eslint-plugin-simple-import-sort": "^14.0.0",
+        "globals": "^17.13.0",
+        "prettier": "^3.9.9",
+        "typescript": "^5.9.0",
+        "typescript-eslint": "^8.71.1",
+        "vite": "^6.4.0",
+        "vitest": "^5.0.3"
     }
 }

@@ -3,7 +3,12 @@ import { Hono } from 'hono'
 import type { AuditQuery } from '../../store/index.js'
 import type { Env } from '../context.js'
 
-const PERIODS: Record<string, number> = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 }
+const PERIODS: Record<string, number> = {
+    '1h': 3_600_000,
+    '24h': 86_400_000,
+    '7d': 7 * 86_400_000,
+    '30d': 30 * 86_400_000
+}
 const KINDS = new Set<NonNullable<AuditQuery['kind']>>(['all', 'llm', 'tools', 'files', 'agents', 'sessions', 'limits'])
 
 /**

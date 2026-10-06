@@ -3,12 +3,18 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { api } from '../lib/api'
 import { setFaviconBadge } from '../lib/favicon'
-import { notificationsBlocked, notificationsEnabled, notificationsSupported, notify, toggleNotifications } from '../lib/notify'
+import {
+    notificationsBlocked,
+    notificationsEnabled,
+    notificationsSupported,
+    notify,
+    toggleNotifications
+} from '../lib/notify'
 import { useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
+import { useAuth } from './Auth'
 import { Icon, type IconName } from './Icon'
 import { LimitsInline } from './Limits'
-import { useAuth } from './Auth'
 import { Button, CloseButton } from './ui'
 
 const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }> = [
@@ -50,7 +56,8 @@ export function Layout() {
     const needsReply = status.data?.stats.chat_needs_reply ?? 0
     const chatActive = status.data?.stats.chat_active ?? 0
     // Schedules that need the owner: an invalid file or a prefilter that fails (a missed minute is told on the page and in Telegram).
-    const schedulesBad = (status.data?.stats.schedules?.invalid ?? 0) + (status.data?.stats.schedules?.failing.length ?? 0)
+    const schedulesBad =
+        (status.data?.stats.schedules?.invalid ?? 0) + (status.data?.stats.schedules?.failing.length ?? 0)
     // One badge per item: the Chat item shows what needs the owner first —
     // replies not seen yet, then questions waiting for an answer, then work in progress.
     const chatBadge =
@@ -75,7 +82,13 @@ export function Layout() {
         document.title = unread > 0 ? `(${unread}) Pocket Factory` : 'Pocket Factory'
     }, [unread])
     useEffect(() => {
-        setFaviconBadge(chatBadge ? (chatBadge.kind === 'running' ? { kind: 'running' } : { kind: chatBadge.kind, count: chatBadge.count }) : null)
+        setFaviconBadge(
+            chatBadge
+                ? chatBadge.kind === 'running'
+                    ? { kind: 'running' }
+                    : { kind: chatBadge.kind, count: chatBadge.count }
+                : null
+        )
     }, [chatBadge?.kind, chatBadge?.count]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // A desktop notification when a reply lands or a question opens while the tab is hidden
@@ -139,44 +152,80 @@ export function Layout() {
     }, [])
 
     const live = status.data ? (status.data.claude.logged_in ? '' : ' warn') : status.error ? ' off' : ' warn'
-    const liveText = status.data ? (status.data.claude.logged_in ? 'Live' : 'Not logged in') : status.error ? 'API unreachable' : 'connecting…'
+    const liveText = status.data
+        ? status.data.claude.logged_in
+            ? 'Live'
+            : 'Not logged in'
+        : status.error
+          ? 'API unreachable'
+          : 'connecting…'
 
     return (
         <div className={`app${collapsed ? ' collapsed' : ''}${open ? ' drawer-open' : ''}`}>
-            <header className="topbar">
-                <Button className="icon-btn" aria-label="Menu" onClick={() => setOpen(true)}>
+            <header className='topbar'>
+                <Button
+                    className='icon-btn'
+                    aria-label='Menu'
+                    onClick={() => setOpen(true)}
+                >
                     ☰
                 </Button>
-                <span className="brand" style={{ padding: 0 }}>
+                <span
+                    className='brand'
+                    style={{ padding: 0 }}
+                >
                     <Logo />
                     Pocket Factory
                 </span>
-                <span className={`live${live}`} title={liveText} />
+                <span
+                    className={`live${live}`}
+                    title={liveText}
+                />
             </header>
-            <div className="scrim" onClick={() => setOpen(false)} />
-            <aside className="sidebar">
-                <div className="brand">
+            <div
+                className='scrim'
+                onClick={() => setOpen(false)}
+            />
+            <aside className='sidebar'>
+                <div className='brand'>
                     <Logo />
-                    <span className="label">Pocket Factory</span>
-                    <CloseButton className="icon-btn mobile-only" label="Close menu" onClick={() => setOpen(false)} />
+                    <span className='label'>Pocket Factory</span>
+                    <CloseButton
+                        className='icon-btn mobile-only'
+                        label='Close menu'
+                        onClick={() => setOpen(false)}
+                    />
                 </div>
-                <nav className="nav">
+                <nav className='nav'>
                     {NAV.map((item) => (
                         <div key={item.to}>
-                            {item.section && <div className="section">{collapsed ? '·' : item.section}</div>}
-                            <NavLink to={item.to} end={item.to === '/'} title={item.label} onClick={guard(item.to)}>
-                                <span className="icon">
+                            {item.section && <div className='section'>{collapsed ? '·' : item.section}</div>}
+                            <NavLink
+                                to={item.to}
+                                end={item.to === '/'}
+                                title={item.label}
+                                onClick={guard(item.to)}
+                            >
+                                <span className='icon'>
                                     <Icon name={item.icon} />
                                 </span>
-                                <span className="grow label">{item.label}</span>
-                                {item.to === '/tasks' && running > 0 && <span className="badge running count">{running}</span>}
+                                <span className='grow label'>{item.label}</span>
+                                {item.to === '/tasks' && running > 0 && (
+                                    <span className='badge running count'>{running}</span>
+                                )}
                                 {item.to === '/schedules' && schedulesBad > 0 && (
-                                    <span className="badge ask count" title={`${schedulesBad} schedule(s) need attention`}>
+                                    <span
+                                        className='badge ask count'
+                                        title={`${schedulesBad} schedule(s) need attention`}
+                                    >
                                         {schedulesBad}
                                     </span>
                                 )}
                                 {item.to === '/chat' && chatBadge && (
-                                    <span className={`badge ${chatBadge.kind} count`} title={chatBadge.title}>
+                                    <span
+                                        className={`badge ${chatBadge.kind} count`}
+                                        title={chatBadge.title}
+                                    >
                                         {chatBadge.count}
                                     </span>
                                 )}
@@ -184,14 +233,17 @@ export function Layout() {
                         </div>
                     ))}
                 </nav>
-                <div className="foot">
-                    <div className="foot-row">
-                        <div className={`live${live}`} title={liveText}>
-                            <span className="label">{liveText}</span>
+                <div className='foot'>
+                    <div className='foot-row'>
+                        <div
+                            className={`live${live}`}
+                            title={liveText}
+                        >
+                            <span className='label'>{liveText}</span>
                         </div>
-                        <span className="foot-actions">
+                        <span className='foot-actions'>
                             <Button
-                                variant="ghost"
+                                variant='ghost'
                                 className={`foot-btn notify-toggle${notifyOn ? ' on' : ''}`}
                                 title={notifyTitle}
                                 aria-label={notifyTitle}
@@ -199,30 +251,63 @@ export function Layout() {
                                 disabled={!notificationsSupported || notificationsBlocked()}
                                 onClick={() => toggleNotifications().then(setNotifyOn)}
                             >
-                                <Icon name={notifyOn ? 'bell' : 'bellOff'} size={14} />
+                                <Icon
+                                    name={notifyOn ? 'bell' : 'bellOff'}
+                                    size={14}
+                                />
                             </Button>
                             {auth.mode === 'password' && (
-                                <Button variant="ghost" className="foot-btn" title={`Sign out (${auth.user})`} aria-label="Sign out" onClick={() => leave(() => void signOut())}>
-                                    <Icon name="logout" size={14} />
+                                <Button
+                                    variant='ghost'
+                                    className='foot-btn'
+                                    title={`Sign out (${auth.user})`}
+                                    aria-label='Sign out'
+                                    onClick={() => leave(() => void signOut())}
+                                >
+                                    <Icon
+                                        name='logout'
+                                        size={14}
+                                    />
                                 </Button>
                             )}
                         </span>
                     </div>
-                    <div className="label" style={{ marginTop: 4 }} title={status.data ? `Pocket Factory ${status.data.version} · Claude Code ${status.data.claude.version ?? '?'}` : undefined}>
+                    <div
+                        className='label'
+                        style={{ marginTop: 4 }}
+                        title={
+                            status.data
+                                ? `Pocket Factory ${status.data.version} · Claude Code ${status.data.claude.version ?? '?'}`
+                                : undefined
+                        }
+                    >
                         {status.data ? `v${status.data.version} · ${status.data.claude.version ?? ''}` : ''}
                     </div>
-                    <div className="label">{status.data ? `model: ${status.data.claude.model ?? 'default'}` : ''}</div>
-                    <NavLink to="/" className="label limits-foot" title="Subscription limits — see Overview">
+                    <div className='label'>{status.data ? `model: ${status.data.claude.model ?? 'default'}` : ''}</div>
+                    <NavLink
+                        to='/'
+                        className='label limits-foot'
+                        title='Subscription limits — see Overview'
+                    >
                         <LimitsInline limits={status.data?.limits} />
                     </NavLink>
                 </div>
-                <Button variant="ghost" className="collapse desktop-only" onClick={() => setCollapsed((v) => !v)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label="Toggle sidebar">
+                <Button
+                    variant='ghost'
+                    className='collapse desktop-only'
+                    onClick={() => setCollapsed((v) => !v)}
+                    title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                    aria-label='Toggle sidebar'
+                >
                     {collapsed ? '»' : '«'}
-                    <span className="label"> Collapse</span>
+                    <span className='label'> Collapse</span>
                 </Button>
             </aside>
-            <main className="main">
-                <PageBoundary key={location.pathname.split('/')[1] ?? ''} resetKey={location.pathname}>
+            <main className='main'>
+                <PageBoundary
+                    key={location.pathname.split('/')[1] ?? ''}
+                    resetKey={location.pathname}
+                >
                     <Outlet />
                 </PageBoundary>
             </main>
@@ -255,11 +340,15 @@ class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, 
     render() {
         if (!this.state.error) return this.props.children
         return (
-            <div className="page">
-                <div className="card error">
+            <div className='page'>
+                <div className='card error'>
                     <strong>This page hit an error.</strong>
                     <pre style={{ marginBottom: 0 }}>{this.state.error.message}</pre>
-                    <Button size="sm" style={{ marginTop: 10 }} onClick={() => this.setState({ error: null })}>
+                    <Button
+                        size='sm'
+                        style={{ marginTop: 10 }}
+                        onClick={() => this.setState({ error: null })}
+                    >
                         Try again
                     </Button>
                 </div>
@@ -269,5 +358,13 @@ class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, 
 }
 
 function Logo() {
-    return <img className="logo" src="/icon-192.png" alt="" width={30} height={30} />
+    return (
+        <img
+            className='logo'
+            src='/icon-192.png'
+            alt=''
+            width={30}
+            height={30}
+        />
+    )
 }

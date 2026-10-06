@@ -26,12 +26,14 @@ export function parseMarkdown<T = Record<string, unknown>>(source: string): Mark
         error ??= 'frontmatter is not a mapping'
     }
     const body = source.slice(match[0].length)
-    return error ? { frontmatter: frontmatter as T, body, frontmatter_error: error } : { frontmatter: frontmatter as T, body }
+    return error
+        ? { frontmatter: frontmatter as T, body, frontmatter_error: error }
+        : { frontmatter: frontmatter as T, body }
 }
 
 export function serializeMarkdown(doc: MarkdownDoc<unknown>): string {
     const frontmatter = doc.frontmatter && typeof doc.frontmatter === 'object' ? doc.frontmatter : {}
-    const hasKeys = Object.keys(frontmatter as object).length > 0
+    const hasKeys = Object.keys(frontmatter).length > 0
     const body = doc.body.replace(/^\n+/, '')
     if (!hasKeys) return body
     const yaml = YAML.stringify(frontmatter, { lineWidth: 0 }).trimEnd()

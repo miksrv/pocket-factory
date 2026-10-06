@@ -50,13 +50,21 @@ export type RunnerEvent = EventOrigin &
          * `AskUserQuestion`, or a permission request for another tool. The run waits until
          * `RunHandle.answer` is called with this `requestId`.
          */
-        | { type: 'ask'; requestId: string; toolName: string; toolUseId: string; input: Record<string, unknown>; requiresUserInteraction: boolean }
+        | {
+              type: 'ask'
+              requestId: string
+              toolName: string
+              toolUseId: string
+              input: Record<string, unknown>
+              requiresUserInteraction: boolean
+          }
         /** The CLI withdrew a pending request (the turn was interrupted). */
         | { type: 'ask_cancelled'; requestId: string }
     )
 
 /** The supervisor's answer to an `ask`: let the tool run (with the owner's answers folded into its input) or refuse it. */
-export type AskResponse = { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }
+export type AskResponse =
+    { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }
 
 /** An MCP server as the CLI reported it at session start. */
 export interface McpServerStatus {
@@ -78,7 +86,7 @@ export interface RateLimitWindow {
  * in the interactive CLI; there is no separate endpoint a setup-token may call.
  */
 export interface RateLimits {
-    status: 'allowed' | 'allowed_warning' | 'rejected' | string
+    status: 'allowed' | 'allowed_warning' | 'rejected' | (string & {})
     five_hour: RateLimitWindow | null
     seven_day: RateLimitWindow | null
     /** The window the status is about (`five_hour`, `seven_day`, …) and when it resets, as far as the CLI said; what a `rejected` task waits for. */
@@ -241,9 +249,7 @@ function parseRateLimits(info: NonNullable<StreamEvent['rate_limit_info']>): Rat
 
 function blockText(content: ContentBlock['content']): string {
     if (typeof content === 'string') return content
-    return (content ?? [])
-        .map((part) => (part.type === 'text' ? (part.text ?? '') : ''))
-        .join('')
+    return (content ?? []).map((part) => (part.type === 'text' ? (part.text ?? '') : '')).join('')
 }
 
 /**
@@ -275,7 +281,8 @@ export function runClaude(options: RunOptions): RunHandle {
     if (options.model) args.push('--model', options.model)
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
     if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig)
-    if (options.settings && Object.keys(options.settings).length) args.push('--settings', JSON.stringify(options.settings))
+    if (options.settings && Object.keys(options.settings).length)
+        args.push('--settings', JSON.stringify(options.settings))
     for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
@@ -363,7 +370,7 @@ export function runClaude(options: RunOptions): RunHandle {
         try {
             options.onEvent?.(event)
         } catch (error) {
-            log.warn(`onEvent handler threw: ${error instanceof Error ? error.message : error}`)
+            log.warn(`onEvent handler threw: ${error instanceof Error ? error.message : String(error)}`)
         }
     }
 
@@ -407,12 +414,22 @@ export function runClaude(options: RunOptions): RunHandle {
                         requestId: event.request_id,
                         toolName: request.tool_name,
                         toolUseId: request.tool_use_id ?? '',
-                        input: (request.input && typeof request.input === 'object' ? request.input : {}) as Record<string, unknown>,
+                        input: (request.input && typeof request.input === 'object' ? request.input : {}) as Record<
+                            string,
+                            unknown
+                        >,
                         requiresUserInteraction: request.requires_user_interaction ?? false
                     })
                 } else {
                     // Hooks and other host services were not offered in the handshake; refuse anything else politely.
-                    write({ type: 'control_response', response: { subtype: 'error', request_id: event.request_id, error: `unsupported request ${request.subtype ?? '?'}` } })
+                    write({
+                        type: 'control_response',
+                        response: {
+                            subtype: 'error',
+                            request_id: event.request_id,
+                            error: `unsupported request ${request.subtype ?? '?'}`
+                        }
+                    })
                 }
                 return
             }
@@ -426,12 +443,29 @@ export function runClaude(options: RunOptions): RunHandle {
             if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
                 sessionFromInit = event.session_id
                 resolveSession(event.session_id)
-                const tools = (event.tools ?? []).map((t) => (typeof t === 'string' ? t : (t.name ?? ''))).filter(Boolean)
-                const mcpServers = (event.mcp_servers ?? []).filter((s) => s.name).map((s) => ({ name: s.name!, status: s.status ?? 'unknown', source: s.source ?? null }))
-                if (tools.length) emit({ type: 'init', agent: null, parentToolUseId: null, tools, model: event.model ?? '', mcpServers })
+                const tools = (event.tools ?? [])
+                    .map((t) => (typeof t === 'string' ? t : (t.name ?? '')))
+                    .filter(Boolean)
+                const mcpServers = (event.mcp_servers ?? [])
+                    .filter((s) => s.name)
+                    .map((s) => ({ name: s.name!, status: s.status ?? 'unknown', source: s.source ?? null }))
+                if (tools.length)
+                    emit({
+                        type: 'init',
+                        agent: null,
+                        parentToolUseId: null,
+                        tools,
+                        model: event.model ?? '',
+                        mcpServers
+                    })
                 return
             }
-            if (event.type === 'system' && event.subtype === 'task_started' && event.tool_use_id && event.subagent_type) {
+            if (
+                event.type === 'system' &&
+                event.subtype === 'task_started' &&
+                event.tool_use_id &&
+                event.subagent_type
+            ) {
                 agentsByToolUse.set(event.tool_use_id, event.subagent_type)
                 openAgents.add(event.tool_use_id)
                 emit({
@@ -448,7 +482,8 @@ export function runClaude(options: RunOptions): RunHandle {
                 const agent = agentsByToolUse.get(event.tool_use_id)
                 if (!agent) return
                 openAgents.delete(event.tool_use_id)
-                const usage = (event as { usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number } }).usage
+                const usage = (event as { usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number } })
+                    .usage
                 emit({
                     type: 'agent',
                     phase: event.status === 'completed' ? 'completed' : 'failed',
@@ -481,7 +516,9 @@ export function runClaude(options: RunOptions): RunHandle {
             const parentToolUseId = event.parent_tool_use_id ?? null
             const origin: EventOrigin = {
                 parentToolUseId,
-                agent: parentToolUseId ? (event.subagent_type ?? agentsByToolUse.get(parentToolUseId) ?? 'sub-agent') : null
+                agent: parentToolUseId
+                    ? (event.subagent_type ?? agentsByToolUse.get(parentToolUseId) ?? 'sub-agent')
+                    : null
             }
             if (event.type === 'assistant') {
                 // The CLI emits one line per content block, all carrying the

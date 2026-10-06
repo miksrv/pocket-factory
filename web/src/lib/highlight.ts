@@ -72,7 +72,18 @@ export function highlight(code: string, language?: string): { html: string; lang
         return { html: result.value, language: result.language ?? language }
     }
     if (code.length < 20_000) {
-        const result = hljs.highlightAuto(code, ['typescript', 'javascript', 'json', 'bash', 'diff', 'python', 'yaml', 'xml', 'css', 'sql'])
+        const result = hljs.highlightAuto(code, [
+            'typescript',
+            'javascript',
+            'json',
+            'bash',
+            'diff',
+            'python',
+            'yaml',
+            'xml',
+            'css',
+            'sql'
+        ])
         if (result.language && (result.relevance ?? 0) >= 5) return { html: result.value, language: result.language }
     }
     return { html: escape(code), language: 'plaintext' }

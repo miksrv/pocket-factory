@@ -1,0 +1,25 @@
+# Dependencies, build output, reports
+node_modules/
+.yarn/
+dist/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Runtime state and lockfiles
+data/
+yarn.lock
+
+# Content the UI edits and renders itself (prose is unwrapped on purpose, see CLAUDE.md)
+templates/
+presets/
+docs/
+*.md
+
+# Generated assets
+web/public/
+
+# End-to-end run data
+.e2e/
+playwright/

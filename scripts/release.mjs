@@ -19,13 +19,17 @@ const fail = (message) => {
     console.error(`release: ${message}`)
     process.exit(1)
 }
-const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim()
+const sh = (cmd, args, opts = {}) =>
+    execFileSync(cmd, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim()
 const currentVersion = () => JSON.parse(fs.readFileSync(PACKAGES[0], 'utf8')).version
 
 /** The `## [x.y.z] - date` section of CHANGELOG.md, heading excluded, or null. */
 function notesOf(version) {
     const text = fs.readFileSync(CHANGELOG, 'utf8')
-    const re = new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|(?![\\s\\S]))`, 'm')
+    const re = new RegExp(
+        `^## \\[${version.replace(/\./g, '\\.')}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|(?![\\s\\S]))`,
+        'm'
+    )
     const m = text.match(re)
     return m ? m[1].trim() : null
 }
@@ -69,7 +73,8 @@ function tag(args) {
     const version = currentVersion()
     const name = `v${version}`
     const notesText = notesOf(version)
-    if (notesText === null || !/^- \S/m.test(notesText)) fail(`CHANGELOG.md needs a section for ${version} with at least one bullet`)
+    if (notesText === null || !/^- \S/m.test(notesText))
+        fail(`CHANGELOG.md needs a section for ${version} with at least one bullet`)
     if (sh('git', ['rev-parse', '--abbrev-ref', 'HEAD']) !== 'main') fail('switch to main first (git checkout main)')
     if (sh('git', ['status', '--porcelain'])) fail('the working tree is not clean')
     sh('git', ['fetch', 'origin', 'main', '--tags'])

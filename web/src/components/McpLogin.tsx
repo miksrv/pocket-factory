@@ -15,7 +15,15 @@ import { Button } from './ui'
  * callback may finish the sign-in without a paste) and cancels the sign-in
  * when closed early.
  */
-export function McpLoginDialog({ server, onClose, onChanged }: { server: McpEntry; onClose: () => void; onChanged: () => void }) {
+export function McpLoginDialog({
+    server,
+    onClose,
+    onChanged
+}: {
+    server: McpEntry
+    onClose: () => void
+    onChanged: () => void
+}) {
     const [login, setLogin] = useState<McpLogin | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [pasted, setPasted] = useState('')
@@ -34,9 +42,9 @@ export function McpLoginDialog({ server, onClose, onChanged }: { server: McpEntr
         return () => {
             alive = false
             const current = loginRef.current
-            if (current && (current.state === 'starting' || current.state === 'waiting')) void api.cancelMcpLogin(current.id).catch(() => {})
+            if (current && (current.state === 'starting' || current.state === 'waiting'))
+                void api.cancelMcpLogin(current.id).catch(() => {})
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [server.name])
 
     // Follow the CLI while it waits.
@@ -97,67 +105,128 @@ export function McpLoginDialog({ server, onClose, onChanged }: { server: McpEntr
     const footer =
         login?.mode === 'connector' && login.state === 'done' ? (
             <>
-                <Button onClick={onClose} disabled={busy}>
+                <Button
+                    onClick={onClose}
+                    disabled={busy}
+                >
                     Later
                 </Button>
-                <Button variant="primary" onClick={refresh} disabled={busy}>
+                <Button
+                    variant='primary'
+                    onClick={refresh}
+                    disabled={busy}
+                >
                     {busy ? 'Asking the CLI…' : 'Refresh statuses'}
                 </Button>
             </>
         ) : login?.state === 'waiting' ? (
             <>
-                <Button onClick={onClose} disabled={busy}>
+                <Button
+                    onClick={onClose}
+                    disabled={busy}
+                >
                     Cancel
                 </Button>
-                <Button variant="primary" onClick={complete} disabled={busy || !pasted.trim()}>
+                <Button
+                    variant='primary'
+                    onClick={complete}
+                    disabled={busy || !pasted.trim()}
+                >
                     {busy ? 'Completing…' : 'Complete sign-in'}
                 </Button>
             </>
         ) : (
-            <Button onClick={onClose} disabled={busy} data-autofocus={finished || undefined}>
+            <Button
+                onClick={onClose}
+                disabled={busy}
+                data-autofocus={finished || undefined}
+            >
                 {finished || error ? 'Close' : 'Cancel'}
             </Button>
         )
 
     return (
-        <Modal open onClose={onClose} title={`Authorize ${server.label}`} icon="key" busy={busy} closeButton={false} footer={footer}>
-            <div className="stack" style={{ marginTop: 8 }}>
-                {!login && !error && <div className="dim small">Asking the CLI for the sign-in link… (a few seconds)</div>}
+        <Modal
+            open
+            onClose={onClose}
+            title={`Authorize ${server.label}`}
+            icon='key'
+            busy={busy}
+            closeButton={false}
+            footer={footer}
+        >
+            <div
+                className='stack'
+                style={{ marginTop: 8 }}
+            >
+                {!login && !error && (
+                    <div className='dim small'>Asking the CLI for the sign-in link… (a few seconds)</div>
+                )}
                 {login?.url && (
-                    <div className="row wrap" style={{ gap: 8 }}>
-                        <a href={login.url} target="_blank" rel="noopener noreferrer" data-autofocus>
+                    <div
+                        className='row wrap'
+                        style={{ gap: 8 }}
+                    >
+                        <a
+                            href={login.url}
+                            target='_blank'
+                            rel='noopener noreferrer'
+                            data-autofocus
+                        >
                             Open the sign-in page ↗
                         </a>
-                        <Button size="sm" onClick={copy}>
+                        <Button
+                            size='sm'
+                            onClick={copy}
+                        >
                             {copied ? 'Copied' : 'Copy link'}
                         </Button>
                     </div>
                 )}
-                {login?.state === 'starting' && login.url && <div className="dim small">Waiting for the CLI to say what comes next…</div>}
+                {login?.state === 'starting' && login.url && (
+                    <div className='dim small'>Waiting for the CLI to say what comes next…</div>
+                )}
                 {login?.mode === 'connector' && login.state === 'done' && (
-                    <div className="modal-text">Sign in on claude.ai in that tab. Once it says the connector is connected, refresh the statuses here: the agents get its tools from the next session on.</div>
+                    <div className='modal-text'>
+                        Sign in on claude.ai in that tab. Once it says the connector is connected, refresh the statuses
+                        here: the agents get its tools from the next session on.
+                    </div>
                 )}
                 {login?.state === 'waiting' && (
                     <>
-                        <div className="modal-text">
-                            After you approve, the browser is sent to an address starting with <code>http://localhost</code> that cannot load from here. Copy that whole address from the address bar and paste it below.
+                        <div className='modal-text'>
+                            After you approve, the browser is sent to an address starting with{' '}
+                            <code>http://localhost</code> that cannot load from here. Copy that whole address from the
+                            address bar and paste it below.
                         </div>
                         <input
-                            className="mono"
+                            className='mono'
                             value={pasted}
                             onChange={(e) => setPasted(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && void complete()}
-                            placeholder="http://localhost:12345/callback?code=…&state=…"
+                            placeholder='http://localhost:12345/callback?code=…&state=…'
                             spellCheck={false}
                             disabled={busy}
                         />
                     </>
                 )}
-                {login?.state === 'done' && login.mode === 'redirect' && <div className="small" style={{ color: 'var(--green)' }}>Authorized — {login.message}</div>}
-                {login?.state === 'failed' && <div className="error small">{login.message ?? 'The sign-in failed'}</div>}
-                {login?.state === 'cancelled' && <div className="dim small">{login.message ?? 'Cancelled.'}</div>}
+                {login?.state === 'done' && login.mode === 'redirect' && (
+                    <div
+                        className='small'
+                        style={{ color: 'var(--green)' }}
+                    >
+                        Authorized — {login.message}
+                    </div>
+                )}
+                {login?.state === 'failed' && (
+                    <div className='error small'>{login.message ?? 'The sign-in failed'}</div>
+                )}
+                {login?.state === 'cancelled' && <div className='dim small'>{login.message ?? 'Cancelled.'}</div>}
                 {error && (
-                    <div className="error small modal-error" role="alert">
+                    <div
+                        className='error small modal-error'
+                        role='alert'
+                    >
                         {error}
                     </div>
                 )}

@@ -225,8 +225,18 @@ export function Sprite({ name, sprite }: { name?: string; sprite?: string }) {
     // Pixels are drawn as a path of unit squares in currentColor; the tile sets the colour.
     const path = rows.flatMap((row, y) => [...row].map((c, x) => (c === '#' ? `M${x} ${y}h1v1h-1z` : ''))).join('')
     return (
-        <svg className="sprite" viewBox={`0 0 ${width} ${height}`} width="1em" height="1em" aria-hidden shapeRendering="crispEdges">
-            <path d={path} fill="currentColor" />
+        <svg
+            className='sprite'
+            viewBox={`0 0 ${width} ${height}`}
+            width='1em'
+            height='1em'
+            aria-hidden
+            shapeRendering='crispEdges'
+        >
+            <path
+                d={path}
+                fill='currentColor'
+            />
         </svg>
     )
 }

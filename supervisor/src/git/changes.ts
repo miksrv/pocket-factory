@@ -86,7 +86,12 @@ export async function snapshot(cwd: string): Promise<{ head: string; branch: str
  */
 export function snapshotSync(cwd: string): { head: string; branch: string | null } | null {
     try {
-        const out = execFileSync('git', ['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'], { cwd, timeout: 10_000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        const out = execFileSync('git', ['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'], {
+            cwd,
+            timeout: 10_000,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore']
+        })
         const [head, branch] = out.trim().split('\n')
         return head ? { head, branch: !branch || branch === 'HEAD' ? null : branch } : null
     } catch {
@@ -166,11 +171,14 @@ export async function measure(cwd: string, start: Pick<TaskGit, 'start_head' | '
 /** Every file changed in `base..head`, with line counts; renames followed. */
 export async function listFiles(cwd: string, base: string, head: string): Promise<ChangedFile[]> {
     if (base === head) return []
-    const [numstat, names] = await Promise.all([git(cwd, ['diff', '--numstat', '-M', '-z', base, head]), git(cwd, ['diff', '--name-status', '-M', '-z', base, head])])
+    const [numstat, names] = await Promise.all([
+        git(cwd, ['diff', '--numstat', '-M', '-z', base, head]),
+        git(cwd, ['diff', '--name-status', '-M', '-z', base, head])
+    ])
     // --name-status -z: STATUS \0 path \0 (or STATUS \0 from \0 to \0 for R / C)
     const status = new Map<string, { status: string; from?: string }>()
     const parts = names.split('\0')
-    for (let i = 0; i < parts.length && parts[i]; ) {
+    for (let i = 0; i < parts.length && parts[i];) {
         const code = parts[i]
         if (code.startsWith('R') || code.startsWith('C')) {
             status.set(parts[i + 2], { status: code[0], from: parts[i + 1] })
@@ -183,7 +191,7 @@ export async function listFiles(cwd: string, base: string, head: string): Promis
     // --numstat -z: "added\tremoved\tpath\0", or "added\tremoved\t\0from\0to\0" for a rename
     const files: ChangedFile[] = []
     const fields = numstat.split('\0')
-    for (let i = 0; i < fields.length && fields[i]; ) {
+    for (let i = 0; i < fields.length && fields[i];) {
         const [added, removed, inline] = fields[i].split('\t')
         let file = inline
         let from: string | undefined
@@ -210,10 +218,17 @@ export async function listFiles(cwd: string, base: string, head: string): Promis
 }
 
 /** The unified diff of one file in `base..head`, cut at a size a phone can show. */
-export async function filePatch(cwd: string, base: string, head: string, file: ChangedFile): Promise<{ patch: string; truncated: boolean }> {
+export async function filePatch(
+    cwd: string,
+    base: string,
+    head: string,
+    file: ChangedFile
+): Promise<{ patch: string; truncated: boolean }> {
     const paths = file.from ? [file.from, file.path] : [file.path]
     const patch = await git(cwd, ['diff', '-M', '--no-color', base, head, '--', ...paths])
-    return patch.length > MAX_PATCH_BYTES ? { patch: patch.slice(0, MAX_PATCH_BYTES), truncated: true } : { patch, truncated: false }
+    return patch.length > MAX_PATCH_BYTES
+        ? { patch: patch.slice(0, MAX_PATCH_BYTES), truncated: true }
+        : { patch, truncated: false }
 }
 
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeout = 60_000): Promise<string> {
@@ -226,9 +241,31 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
 }
 
 /** The pull request whose head is this branch (open, else the latest), or null: no `gh`, no remote, none yet. */
-export async function findPullRequest(cwd: string, branch: string, env: NodeJS.ProcessEnv, timeout = 20_000): Promise<PullRequest | null> {
+export async function findPullRequest(
+    cwd: string,
+    branch: string,
+    env: NodeJS.ProcessEnv,
+    timeout = 20_000
+): Promise<PullRequest | null> {
     try {
-        const out = await run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,state,title,isDraft'], cwd, env, timeout)
+        const out = await run(
+            'gh',
+            [
+                'pr',
+                'list',
+                '--head',
+                branch,
+                '--state',
+                'all',
+                '--limit',
+                '1',
+                '--json',
+                'number,url,state,title,isDraft'
+            ],
+            cwd,
+            env,
+            timeout
+        )
         const list = JSON.parse(out) as PullRequest[]
         return list[0] ?? null
     } catch {
@@ -241,7 +278,12 @@ export async function findPullRequest(cwd: string, branch: string, env: NodeJS.P
  * branch, titled and described from the commits (`--fill`); an existing PR
  * of the branch is returned instead of a second one.
  */
-export async function createPullRequest(cwd: string, branch: string, base: string, env: NodeJS.ProcessEnv): Promise<PullRequest> {
+export async function createPullRequest(
+    cwd: string,
+    branch: string,
+    base: string,
+    env: NodeJS.ProcessEnv
+): Promise<PullRequest> {
     const existing = await findPullRequest(cwd, branch, env)
     if (existing && existing.state === 'OPEN') return existing
     await run('git', ['push', '--set-upstream', 'origin', branch], cwd, env, 120_000)

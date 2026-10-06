@@ -68,7 +68,8 @@ export function parseCron(expression: string): Cron {
     const source = expression.trim()
     const text = ALIASES[source.toLowerCase()] ?? source
     const fields = text.split(/\s+/)
-    if (fields.length !== 5) throw new Error(`a cron expression has five fields (minute hour day month weekday), got ${fields.length}`)
+    if (fields.length !== 5)
+        throw new Error(`a cron expression has five fields (minute hour day month weekday), got ${fields.length}`)
     const dow = parseField(fields[4], 0, 7, DAYS, 'weekday')
     if (dow.has(7)) {
         dow.delete(7)
@@ -112,7 +113,16 @@ export function isTimeZone(tz: string): boolean {
 export function localTime(date: Date, tz: string): LocalTime {
     let fmt = formatters.get(tz)
     if (!fmt) {
-        fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short' })
+        fmt = new Intl.DateTimeFormat('en-US', {
+            timeZone: tz,
+            hourCycle: 'h23',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            weekday: 'short'
+        })
         formatters.set(tz, fmt)
     }
     const parts: Record<string, string> = {}
@@ -173,7 +183,8 @@ export function parseWindow(raw: unknown): Window {
     const { days, hours } = raw as { days?: unknown; hours?: unknown }
     const window: Window = {}
     if (days !== undefined) {
-        if (typeof days !== 'string' || !days.trim()) throw new Error('window.days must be like "mon-fri" or "mon,wed,fri"')
+        if (typeof days !== 'string' || !days.trim())
+            throw new Error('window.days must be like "mon-fri" or "mon,wed,fri"')
         window.days = parseField(days.trim(), 0, 7, DAYS, 'window.days')
         if (window.days.has(7)) {
             window.days.delete(7)
@@ -181,11 +192,13 @@ export function parseWindow(raw: unknown): Window {
         }
     }
     if (hours !== undefined) {
-        const m = typeof hours === 'string' ? /^\s*(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*$/.exec(hours) : null
+        const m =
+            typeof hours === 'string' ? /^\s*(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*$/.exec(hours) : null
         if (!m) throw new Error('window.hours must be like "09:00-18:00"')
         const from = Number(m[1]) * 60 + Number(m[2] ?? 0)
         const to = Number(m[3]) * 60 + Number(m[4] ?? 0)
-        if (from > 24 * 60 || to > 24 * 60 || Number(m[2] ?? 0) > 59 || Number(m[4] ?? 0) > 59) throw new Error('window.hours: hours 0-24, minutes 0-59')
+        if (from > 24 * 60 || to > 24 * 60 || Number(m[2] ?? 0) > 59 || Number(m[4] ?? 0) > 59)
+            throw new Error('window.hours: hours 0-24, minutes 0-59')
         if (from === to) throw new Error('window.hours: the window is empty')
         window.hours = { from, to }
     }
@@ -237,10 +250,17 @@ const cap = (w: string) => w.replace(/^./, (c) => c.toUpperCase())
 function ranges(values: number[], name: (n: number) => string): string[] {
     const sorted = [...values].sort((a, b) => a - b)
     const out: string[] = []
-    for (let i = 0; i < sorted.length; ) {
+    for (let i = 0; i < sorted.length;) {
         let j = i
         while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++
-        out.push(j - i >= 2 ? `${name(sorted[i])}–${name(sorted[j])}` : sorted.slice(i, j + 1).map(name).join(', '))
+        out.push(
+            j - i >= 2
+                ? `${name(sorted[i])}–${name(sorted[j])}`
+                : sorted
+                      .slice(i, j + 1)
+                      .map(name)
+                      .join(', ')
+        )
         i = j + 1
     }
     return out
@@ -276,17 +296,26 @@ export function describeCron(cron: Cron): string {
     else if (minuteStep) time = `every ${minuteStep} min ${hourWindow(hours)}`
     else if (minutes.length === 1 && allHours) time = `hourly at :${two(minutes[0])}`
     else if (minutes.length === 1 && hourStep) time = `every ${hourStep} hours at :${two(minutes[0])}`
-    else if (minutes.length === 1 && hours.length <= 6) time = `at ${hours.map((h) => `${two(h)}:${two(minutes[0])}`).join(', ')}`
+    else if (minutes.length === 1 && hours.length <= 6)
+        time = `at ${hours.map((h) => `${two(h)}:${two(minutes[0])}`).join(', ')}`
     else if (minutes.length === 1) time = `at :${two(minutes[0])} ${hourWindow(hours)}`
     else if (allHours) time = `at minutes ${ranges(minutes, String).join(', ')} of every hour`
-    else if (minutes.length * hours.length <= 6) time = `at ${hours.flatMap((h) => minutes.map((m) => `${two(h)}:${two(m)}`)).join(', ')}`
+    else if (minutes.length * hours.length <= 6)
+        time = `at ${hours.flatMap((h) => minutes.map((m) => `${two(h)}:${two(m)}`)).join(', ')}`
     else time = `at minutes ${ranges(minutes, String).join(', ')} ${hourWindow(hours)}`
 
     // ---- days ----
     const days: string[] = []
     const dow = [...cron.dow].sort((a, b) => a - b)
     const dom = [...cron.dom].sort((a, b) => a - b)
-    const dowText = dow.join(',') === '1,2,3,4,5' ? 'on weekdays' : dow.join(',') === '0,6' ? 'at weekends' : dow.length === 7 ? '' : `on ${ranges(dow, (d) => cap(DAYS[d])).join(', ')}`
+    const dowText =
+        dow.join(',') === '1,2,3,4,5'
+            ? 'on weekdays'
+            : dow.join(',') === '0,6'
+              ? 'at weekends'
+              : dow.length === 7
+                ? ''
+                : `on ${ranges(dow, (d) => cap(DAYS[d])).join(', ')}`
     const domText = dom.length === 31 ? '' : `on day ${ranges(dom, String).join(', ')} of the month`
     if (!cron.domAny && !cron.dowAny) days.push([domText, dowText].filter(Boolean).join(' or '))
     else if (!cron.dowAny) days.push(dowText)

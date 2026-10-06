@@ -96,13 +96,16 @@ export interface ParsedSchedule {
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
-const bool = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : typeof v === 'string' ? !['false', 'no', 'off', '0'].includes(v.toLowerCase()) : fallback)
+const bool = (v: unknown, fallback: boolean): boolean =>
+    typeof v === 'boolean'
+        ? v
+        : typeof v === 'string'
+          ? !['false', 'no', 'off', '0'].includes(v.toLowerCase())
+          : fallback
 const int = (v: unknown, fallback: number, min: number, max: number): number => {
     const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN
     return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback
 }
-const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).map((s) => s.trim()).filter(Boolean) : typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : [])
-
 /** `hosts:` entries: `- host: <name>` with optional path / notes (the project form), or bare names (the first schedule form). */
 function hostList(raw: unknown): ScheduleHost[] {
     if (!Array.isArray(raw)) return []
@@ -132,14 +135,24 @@ function parsePrefilter(raw: unknown, errors: string[]): Prefilter | null {
         }
         case 'github-prs': {
             const filter = str(p.filter) ?? 'open'
-            if (!['open', 'review-requested', 'mentioned'].includes(filter)) errors.push(`prefilter.filter must be open, review-requested or mentioned (got "${filter}")`)
+            if (!['open', 'review-requested', 'mentioned'].includes(filter))
+                errors.push(`prefilter.filter must be open, review-requested or mentioned (got "${filter}")`)
             const repo = str(p.repo)
             if (repo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) errors.push('prefilter.repo must be owner/name')
-            return { kind, repo, filter: filter as GithubPrefilter['filter'], mine: bool(p.mine, false), drafts: bool(p.drafts, false) }
+            return {
+                kind,
+                repo,
+                filter: filter as GithubPrefilter['filter'],
+                mine: bool(p.mine, false),
+                drafts: bool(p.drafts, false)
+            }
         }
         case 'trac': {
             const query = str(p.query) ?? ''
-            if (!query) errors.push('prefilter.query is required for kind trac (a Trac query string, e.g. status=new&component=Foo)')
+            if (!query)
+                errors.push(
+                    'prefilter.query is required for kind trac (a Trac query string, e.g. status=new&component=Foo)'
+                )
             const url = str(p.url)
             if (url && !/^https?:\/\//.test(url)) errors.push('prefilter.url must start with http:// or https://')
             return { kind, url, query, on_change: bool(p.on_change, true), max: int(p.max, 100, 1, 500) }
@@ -179,7 +192,8 @@ export function parseSchedule(entry: CatalogEntry, defaults: { tz: string }, ref
     }
 
     const project = str(fm.project) ?? null
-    if (project && !refs.projectExists(project)) errors.push(`project "${project}" has no file or its checkout is missing`)
+    if (project && !refs.projectExists(project))
+        errors.push(`project "${project}" has no file or its checkout is missing`)
     const hosts = hostList(fm.hosts)
     for (const h of hosts) if (!refs.hostExists(h.host)) warnings.push(`host "${h.host}" is not in hosts.yaml`)
     const skill = str(fm.skill) ?? null
@@ -188,10 +202,12 @@ export function parseSchedule(entry: CatalogEntry, defaults: { tz: string }, ref
     if (agent && !refs.agentExists(agent)) warnings.push(`agent "${agent}" does not exist`)
     const modelRaw = str(fm.model)
     const model = !modelRaw || modelRaw === 'inherit' ? null : modelRaw
-    if (model && !isModelAlias(model)) errors.push(`model must be inherit or one of ${MODEL_ALIASES.join(', ')} (got "${model}")`)
+    if (model && !isModelAlias(model))
+        errors.push(`model must be inherit or one of ${MODEL_ALIASES.join(', ')} (got "${model}")`)
 
     const prefilter = parsePrefilter(fm.prefilter, errors)
-    if (prefilter?.kind === 'github-prs' && !prefilter.repo && !project) errors.push('prefilter github-prs needs a `repo` or a `project` with a repository')
+    if (prefilter?.kind === 'github-prs' && !prefilter.repo && !project)
+        errors.push('prefilter github-prs needs a `repo` or a `project` with a repository')
 
     const notify = str(fm.notify) ?? 'telegram'
     if (notify !== 'telegram' && notify !== 'none') errors.push('notify must be telegram or none')

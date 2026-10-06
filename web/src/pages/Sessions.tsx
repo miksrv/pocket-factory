@@ -19,11 +19,14 @@ export function SessionsPage() {
         pollMs: 15_000
     })
     return (
-        <div className="page fill">
-            <PageHead title="Sessions" sub="Claude Code transcripts on the volume — the log of record. Nothing is duplicated; this reads the JSONL files." />
+        <div className='page fill'>
+            <PageHead
+                title='Sessions'
+                sub='Claude Code transcripts on the volume — the log of record. Nothing is duplicated; this reads the JSONL files.'
+            />
             <ErrorBox error={sessions.error} />
-            <div className="card pad0">
-                <div className="card-scroll">
+            <div className='card pad0'>
+                <div className='card-scroll'>
                     {sessions.items.length ? (
                         <table>
                             <thead>
@@ -38,23 +41,26 @@ export function SessionsPage() {
                             <tbody>
                                 {sessions.items.map((s) => (
                                     <tr key={s.session_id}>
-                                        <td className="mono">
+                                        <td className='mono'>
                                             <Link to={`/sessions/${s.session_id}`}>{s.session_id.slice(0, 8)}</Link>
                                         </td>
-                                        <td className="col-main">
-                                            {s.first_prompt ?? <span className="dim">—</span>}
+                                        <td className='col-main'>
+                                            {s.first_prompt ?? <span className='dim'>—</span>}
                                             {s.task_id && (
-                                                <span className="dim small">
+                                                <span className='dim small'>
                                                     {' '}
                                                     · <Link to={`/tasks/${s.task_id}`}>task</Link>
                                                 </span>
                                             )}
                                         </td>
                                         <td title={s.cwd ?? s.workspace}>
-                                            <Project project={s.project} fallback={s.workspace} />
+                                            <Project
+                                                project={s.project}
+                                                fallback={s.workspace}
+                                            />
                                         </td>
-                                        <td className="dim nowrap">{fmt.bytes(s.size)}</td>
-                                        <td className="dim nowrap">{fmt.ago(s.updated_at)}</td>
+                                        <td className='dim nowrap'>{fmt.bytes(s.size)}</td>
+                                        <td className='dim nowrap'>{fmt.ago(s.updated_at)}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -62,7 +68,13 @@ export function SessionsPage() {
                     ) : (
                         <Empty>{sessions.loading ? 'Loading…' : 'No transcripts yet.'}</Empty>
                     )}
-                    <LoadMore hasMore={sessions.hasMore} loading={sessions.loading} onMore={sessions.loadMore} shown={sessions.items.length} noun="sessions" />
+                    <LoadMore
+                        hasMore={sessions.hasMore}
+                        loading={sessions.loading}
+                        onMore={sessions.loadMore}
+                        shown={sessions.items.length}
+                        noun='sessions'
+                    />
                 </div>
             </div>
         </div>
@@ -71,22 +83,27 @@ export function SessionsPage() {
 
 /** The cwd relative to the workspaces root: a repository name, the root itself, or a path outside it. */
 function Project({ project, fallback }: { project: string | null; fallback: string }) {
-    if (project === null) return <span className="dim mono small">{fallback}</span>
-    if (project === '.') return <span className="dim">workspaces root</span>
-    if (project.startsWith('/')) return <span className="dim mono small">{project}</span>
-    return <span className="badge plain">{project}</span>
+    if (project === null) return <span className='dim mono small'>{fallback}</span>
+    if (project === '.') return <span className='dim'>workspaces root</span>
+    if (project.startsWith('/')) return <span className='dim mono small'>{project}</span>
+    return <span className='badge plain'>{project}</span>
 }
 
 function textOf(content: NonNullable<TranscriptEntry['message']>['content']): string {
     if (typeof content === 'string') return content
     return (content ?? [])
         .map((block) => {
-            const b = block as Record<string, unknown>
+            const b = block
             if (b.type === 'text') return String(b.text ?? '')
             if (b.type === 'tool_use') return `\n\`▸ ${String(b.name)}\` ${JSON.stringify(b.input).slice(0, 300)}\n`
             if (b.type === 'tool_result') {
                 const inner = b.content
-                const text = typeof inner === 'string' ? inner : Array.isArray(inner) ? inner.map((p) => String((p as Record<string, unknown>).text ?? '')).join('') : ''
+                const text =
+                    typeof inner === 'string'
+                        ? inner
+                        : Array.isArray(inner)
+                          ? inner.map((p) => String((p as Record<string, unknown>).text ?? '')).join('')
+                          : ''
                 return text ? `\n\`\`\`\n${text.slice(0, 1500)}${text.length > 1500 ? '\n…' : ''}\n\`\`\`\n` : ''
             }
             return ''
@@ -134,7 +151,11 @@ export function SessionPage() {
                         const fresh = detail.entries.filter((_, i) => detail.offset + i >= rangeRef.current.end)
                         return fresh.length ? [...prev, ...fresh] : prev
                     })
-                    setRange((prev) => (prev.end === 0 ? { start: detail.offset, end: detail.offset + detail.entries.length } : { ...prev, end: Math.max(prev.end, detail.offset + detail.entries.length) }))
+                    setRange((prev) =>
+                        prev.end === 0
+                            ? { start: detail.offset, end: detail.offset + detail.entries.length }
+                            : { ...prev, end: Math.max(prev.end, detail.offset + detail.entries.length) }
+                    )
                 })
                 .catch((e: Error) => !cancelled && setError(e.message))
         void tail()
@@ -167,38 +188,74 @@ export function SessionPage() {
         }
     }
 
-    if (error && !session) return <div className="page"><ErrorBox error={error} /></div>
-    if (!session) return <div className="page dim">Loading…</div>
+    if (error && !session)
+        return (
+            <div className='page'>
+                <ErrorBox error={error} />
+            </div>
+        )
+    if (!session) return <div className='page dim'>Loading…</div>
     const s = session
     const turns = entries.filter((e) => (e.type === 'user' || e.type === 'assistant') && e.message)
 
     return (
-        <div className="page" ref={page}>
+        <div
+            className='page'
+            ref={page}
+        >
             <PageHead
                 title={`Session ${s.session_id.slice(0, 8)}`}
                 sub={
-                    <span className="row wrap">
-                        {s.cwd && <span className="mono dim small">{s.cwd}</span>}
-                        <span className="mono dim small">{s.path}</span>
+                    <span className='row wrap'>
+                        {s.cwd && <span className='mono dim small'>{s.cwd}</span>}
+                        <span className='mono dim small'>{s.path}</span>
                     </span>
                 }
             />
             <ErrorBox error={error} />
-            <div className="cards" style={{ marginBottom: 16 }}>
-                <Stat card label="Messages" value={s.stats.messages} />
-                <Stat card label="Input tokens (incl. cache)" value={fmt.tokens(s.stats.tokens_in)} />
-                <Stat card label="Output tokens" value={fmt.tokens(s.stats.tokens_out)} />
-                <Stat card label="Last activity" value={fmt.when(s.updated_at)} />
+            <div
+                className='cards'
+                style={{ marginBottom: 16 }}
+            >
+                <Stat
+                    card
+                    label='Messages'
+                    value={s.stats.messages}
+                />
+                <Stat
+                    card
+                    label='Input tokens (incl. cache)'
+                    value={fmt.tokens(s.stats.tokens_in)}
+                />
+                <Stat
+                    card
+                    label='Output tokens'
+                    value={fmt.tokens(s.stats.tokens_out)}
+                />
+                <Stat
+                    card
+                    label='Last activity'
+                    value={fmt.when(s.updated_at)}
+                />
             </div>
-            <div className="card">
-                {range.start > 0 && <LoadEarlier loading={loadingEarlier} onMore={loadEarlier} label={`Load earlier entries (${range.start.toLocaleString()} before this)`} />}
+            <div className='card'>
+                {range.start > 0 && (
+                    <LoadEarlier
+                        loading={loadingEarlier}
+                        onMore={loadEarlier}
+                        label={`Load earlier entries (${range.start.toLocaleString()} before this)`}
+                    />
+                )}
                 {turns.map((entry, i) => {
                     const role = entry.message?.role ?? entry.type
                     const text = textOf(entry.message?.content)
                     if (!text.trim()) return null
                     return (
-                        <div key={entry.uuid ?? i} className={`turn ${role}${entry.isSidechain ? ' sidechain' : ''}`}>
-                            <div className="who">
+                        <div
+                            key={entry.uuid ?? i}
+                            className={`turn ${role}${entry.isSidechain ? ' sidechain' : ''}`}
+                        >
+                            <div className='who'>
                                 {entry.isSidechain ? 'sub-agent · ' : ''}
                                 {role}
                                 {entry.message?.model ? ` · ${entry.message.model}` : ''}
@@ -208,7 +265,10 @@ export function SessionPage() {
                         </div>
                     )
                 })}
-                <div className="dim small" style={{ marginTop: 10 }}>
+                <div
+                    className='dim small'
+                    style={{ marginTop: 10 }}
+                >
                     entries {range.start + 1}–{range.end} of {s.stats.total.toLocaleString()}
                 </div>
             </div>

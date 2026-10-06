@@ -7,7 +7,9 @@ import { Button } from './ui'
 /** The questions of an `AskUserQuestion` call, as far as the input is well-formed. */
 export function askQuestions(ask: Ask): AskQuestion[] {
     const questions = ask.kind === 'question' ? (ask.input as { questions?: unknown }).questions : undefined
-    return Array.isArray(questions) ? questions.filter((q): q is AskQuestion => Boolean(q) && typeof (q as AskQuestion).question === 'string') : []
+    return Array.isArray(questions)
+        ? questions.filter((q): q is AskQuestion => Boolean(q) && typeof (q as AskQuestion).question === 'string')
+        : []
 }
 
 const OTHER = '\u0000other'
@@ -38,30 +40,59 @@ export function AskForm({ task, onAnswered }: { task: Task; onAnswered?: (task: 
 
     if (ask.kind === 'permission') {
         return (
-            <div className="ask-form">
-                <div className="ask-head">
-                    <span className="badge ask">Permission</span>
+            <div className='ask-form'>
+                <div className='ask-head'>
+                    <span className='badge ask'>Permission</span>
                     <span>
                         The agent wants to run <strong>{ask.tool_name}</strong>
                     </span>
                 </div>
-                <ToolInput name={ask.tool_name} input={ask.input} />
-                <div className="ask-actions">
-                    <Button variant="primary" size="sm" disabled={busy} onClick={() => send({ behavior: 'allow' })}>
+                <ToolInput
+                    name={ask.tool_name}
+                    input={ask.input}
+                />
+                <div className='ask-actions'>
+                    <Button
+                        variant='primary'
+                        size='sm'
+                        disabled={busy}
+                        onClick={() => send({ behavior: 'allow' })}
+                    >
                         Allow
                     </Button>
-                    <Button size="sm" disabled={busy} onClick={() => send({ behavior: 'deny' })}>
+                    <Button
+                        size='sm'
+                        disabled={busy}
+                        onClick={() => send({ behavior: 'deny' })}
+                    >
                         Deny
                     </Button>
-                    {error && <span className="error small">{error}</span>}
+                    {error && <span className='error small'>{error}</span>}
                 </div>
             </div>
         )
     }
-    return <QuestionForm ask={ask} busy={busy} error={error} onSubmit={(answers) => send({ answers })} />
+    return (
+        <QuestionForm
+            ask={ask}
+            busy={busy}
+            error={error}
+            onSubmit={(answers) => send({ answers })}
+        />
+    )
 }
 
-function QuestionForm({ ask, busy, error, onSubmit }: { ask: Ask; busy: boolean; error: string | null; onSubmit: (answers: Record<string, string>) => void }) {
+function QuestionForm({
+    ask,
+    busy,
+    error,
+    onSubmit
+}: {
+    ask: Ask
+    busy: boolean
+    error: string | null
+    onSubmit: (answers: Record<string, string>) => void
+}) {
     const questions = askQuestions(ask)
     const open = questions.filter((q) => !(q.question in ask.answers))
     // Per question: the picked labels (or OTHER) and the free-text line.
@@ -78,7 +109,11 @@ function QuestionForm({ ask, busy, error, onSubmit }: { ask: Ask; busy: boolean;
     const toggle = (q: AskQuestion, label: string) =>
         setPicked((prev) => {
             const current = prev[q.question] ?? []
-            if (q.multiSelect) return { ...prev, [q.question]: current.includes(label) ? current.filter((l) => l !== label) : [...current, label] }
+            if (q.multiSelect)
+                return {
+                    ...prev,
+                    [q.question]: current.includes(label) ? current.filter((l) => l !== label) : [...current, label]
+                }
             return { ...prev, [q.question]: [label] }
         })
     const submit = (e: FormEvent) => {
@@ -88,41 +123,63 @@ function QuestionForm({ ask, busy, error, onSubmit }: { ask: Ask; busy: boolean;
     }
 
     return (
-        <form className="ask-form" onSubmit={submit}>
-            <div className="ask-head">
-                <span className="badge ask">Question</span>
+        <form
+            className='ask-form'
+            onSubmit={submit}
+        >
+            <div className='ask-head'>
+                <span className='badge ask'>Question</span>
                 <span>The agent needs your answer to continue</span>
             </div>
             {questions.map((q) => {
                 const done = ask.answers[q.question]
                 const chosen = picked[q.question] ?? []
                 return (
-                    <fieldset key={q.question} className={`ask-q${done ? ' done' : ''}`} disabled={Boolean(done) || busy}>
+                    <fieldset
+                        key={q.question}
+                        className={`ask-q${done ? ' done' : ''}`}
+                        disabled={Boolean(done) || busy}
+                    >
                         <legend>
-                            {q.header && <span className="badge plain">{q.header}</span>}
+                            {q.header && <span className='badge plain'>{q.header}</span>}
                             {q.question}
                         </legend>
                         {done ? (
-                            <div className="ask-done">✓ {done}</div>
+                            <div className='ask-done'>✓ {done}</div>
                         ) : (
                             <>
                                 {(q.options ?? []).map((option) => (
-                                    <label key={option.label} className="ask-opt">
-                                        <input type={q.multiSelect ? 'checkbox' : 'radio'} name={q.question} checked={chosen.includes(option.label)} onChange={() => toggle(q, option.label)} />
+                                    <label
+                                        key={option.label}
+                                        className='ask-opt'
+                                    >
+                                        <input
+                                            type={q.multiSelect ? 'checkbox' : 'radio'}
+                                            name={q.question}
+                                            checked={chosen.includes(option.label)}
+                                            onChange={() => toggle(q, option.label)}
+                                        />
                                         <span>
-                                            <span className="ask-label">{option.label}</span>
-                                            {option.description && <span className="dim"> — {option.description}</span>}
+                                            <span className='ask-label'>{option.label}</span>
+                                            {option.description && <span className='dim'> — {option.description}</span>}
                                         </span>
                                     </label>
                                 ))}
-                                <label className="ask-opt">
-                                    <input type={q.multiSelect ? 'checkbox' : 'radio'} name={q.question} checked={chosen.includes(OTHER)} onChange={() => toggle(q, OTHER)} />
+                                <label className='ask-opt'>
                                     <input
-                                        type="text"
+                                        type={q.multiSelect ? 'checkbox' : 'radio'}
+                                        name={q.question}
+                                        checked={chosen.includes(OTHER)}
+                                        onChange={() => toggle(q, OTHER)}
+                                    />
+                                    <input
+                                        type='text'
                                         placeholder={q.options?.length ? 'Other…' : 'Your answer…'}
                                         value={other[q.question] ?? ''}
                                         onFocus={() => !chosen.includes(OTHER) && toggle(q, OTHER)}
-                                        onChange={(e) => setOther((prev) => ({ ...prev, [q.question]: e.target.value }))}
+                                        onChange={(e) =>
+                                            setOther((prev) => ({ ...prev, [q.question]: e.target.value }))
+                                        }
                                     />
                                 </label>
                             </>
@@ -130,12 +187,17 @@ function QuestionForm({ ask, busy, error, onSubmit }: { ask: Ask; busy: boolean;
                     </fieldset>
                 )
             })}
-            <div className="ask-actions">
-                <Button variant="primary" size="sm" type="submit" disabled={!complete || busy}>
+            <div className='ask-actions'>
+                <Button
+                    variant='primary'
+                    size='sm'
+                    type='submit'
+                    disabled={!complete || busy}
+                >
                     {busy ? 'Sending…' : 'Answer'}
                 </Button>
-                <span className="dim small">or type the answer in the composer below</span>
-                {error && <span className="error small">{error}</span>}
+                <span className='dim small'>or type the answer in the composer below</span>
+                {error && <span className='error small'>{error}</span>}
             </div>
         </form>
     )

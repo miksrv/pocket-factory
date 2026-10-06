@@ -53,7 +53,8 @@ const isRef = (value: string) => /\$\{[A-Z_][A-Z0-9_]*(?::-[^}]*)?\}/.test(value
 
 /** The config for the editor: literal secrets (anything in headers / env that is not a `${VAR}` reference) are withheld. */
 function masked(server: McpServer): McpServer {
-    const hide = (record?: Record<string, string>) => (record ? Object.fromEntries(Object.entries(record).map(([k, v]) => [k, isRef(v) ? v : KEPT])) : undefined)
+    const hide = (record?: Record<string, string>) =>
+        record ? Object.fromEntries(Object.entries(record).map(([k, v]) => [k, isRef(v) ? v : KEPT])) : undefined
     return { ...server, headers: hide(server.headers), env: hide(server.env) }
 }
 
@@ -76,7 +77,7 @@ function normalise(name: string, input: McpServer, previous: McpServer | undefin
         if (!record) return undefined
         const entries = Object.entries(record)
             .filter(([k]) => k.trim())
-            .map(([k, v]) => {
+            .map(([k, v]): [string, string] => {
                 if (v === KEPT) {
                     if (stored?.[k] === undefined) throw new Error(`${name}: "${k}" has no stored value to keep`)
                     return [k.trim(), stored[k]]
@@ -141,7 +142,9 @@ export function mcpRoutes(): Hono<Env> {
         const file = path.join(config.paths.configRoot, 'mcp.json')
         const global = readServers(file)
         const own = new Set(Object.keys(global.servers))
-        const registry = tasks.mcpRegistry().map((entry) => ({ ...entry, source: own.has(entry.name) ? 'factory' : entry.source }))
+        const registry = tasks
+            .mcpRegistry()
+            .map((entry) => ({ ...entry, source: own.has(entry.name) ? 'factory' : entry.source }))
         // The connectors by URL (`claude mcp list` printed it): a project or factory server with the
         // same URL is the same server under another name, and the connector already serves every session.
         const connectors = new Map<string, { key: string; label: string }>()
@@ -154,7 +157,10 @@ export function mcpRoutes(): Hono<Env> {
         for (const [name, server] of Object.entries(global.servers)) declaredUrl.set(name, sameUrl(server.url))
         // What each checkout declares, for the project form's `mcp:` allowlist.
         const projects = catalog.list('projects').map((entry) => {
-            const dir = typeof entry.frontmatter.path === 'string' && entry.frontmatter.path ? entry.frontmatter.path : path.join(config.paths.workspacesRoot, entry.name)
+            const dir =
+                typeof entry.frontmatter.path === 'string' && entry.frontmatter.path
+                    ? entry.frontmatter.path
+                    : path.join(config.paths.workspacesRoot, entry.name)
             const declared = readServers(path.join(dir, '.mcp.json'))
             const servers = Object.entries(declared.servers).map(([name, server]) => {
                 const url = sameUrl(server.url)
@@ -166,7 +172,11 @@ export function mcpRoutes(): Hono<Env> {
         const servers = registry.map((entry) => {
             const url = entry.source === 'connector' ? null : (declaredUrl.get(entry.name) ?? sameUrl(entry.target))
             const twin = url ? connectors.get(url) : undefined
-            return { ...entry, tools: entry.tools.length, duplicate_of: twin && twin.key !== entry.key ? twin.key : null }
+            return {
+                ...entry,
+                tools: entry.tools.length,
+                duplicate_of: twin && twin.key !== entry.key ? twin.key : null
+            }
         })
         return c.json({
             servers,
@@ -174,7 +184,9 @@ export function mcpRoutes(): Hono<Env> {
             global: {
                 file,
                 servers: Object.entries(global.servers).map(([name, server]) => describe(name, server)),
-                config: Object.fromEntries(Object.entries(global.servers).map(([name, server]) => [name, masked(server)])),
+                config: Object.fromEntries(
+                    Object.entries(global.servers).map(([name, server]) => [name, masked(server)])
+                ),
                 error: global.error
             }
         })
@@ -184,7 +196,9 @@ export function mcpRoutes(): Hono<Env> {
         const { tasks } = c.get('app')
         try {
             const servers = await tasks.refreshMcp()
-            return c.json({ servers: servers.map((entry) => ({ ...entry, tools: entry.tools.length, duplicate_of: null })) })
+            return c.json({
+                servers: servers.map((entry) => ({ ...entry, tools: entry.tools.length, duplicate_of: null }))
+            })
         } catch (error) {
             return c.json({ error: (error as Error).message }, 502)
         }
@@ -237,7 +251,8 @@ export function mcpRoutes(): Hono<Env> {
         const { config } = c.get('app')
         const file = path.join(config.paths.configRoot, 'mcp.json')
         const body = (await c.req.json().catch(() => null)) as { mcpServers?: Record<string, McpServer> } | null
-        if (!body || typeof body.mcpServers !== 'object' || body.mcpServers === null || Array.isArray(body.mcpServers)) return c.json({ error: 'mcpServers object required' }, 400)
+        if (!body || typeof body.mcpServers !== 'object' || body.mcpServers === null || Array.isArray(body.mcpServers))
+            return c.json({ error: 'mcpServers object required' }, 400)
         let current: Record<string, unknown> = {}
         if (fs.existsSync(file)) {
             try {
@@ -249,7 +264,8 @@ export function mcpRoutes(): Hono<Env> {
         const previous = (current.mcpServers ?? {}) as Record<string, McpServer>
         const servers: Record<string, McpServer> = {}
         try {
-            for (const [name, server] of Object.entries(body.mcpServers)) servers[name] = normalise(name, server ?? {}, previous[name])
+            for (const [name, server] of Object.entries(body.mcpServers))
+                servers[name] = normalise(name, server ?? {}, previous[name])
         } catch (error) {
             return c.json({ error: (error as Error).message }, 400)
         }

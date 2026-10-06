@@ -26,7 +26,11 @@ export function reflow(text) {
         if (/ {2}$/.test(open.text)) {
             // a marked hard break: keep it, continue on a new line aligned under the text
             out.push(open.prefix + open.text)
-            open = { prefix: open.kind === 'item' ? ' '.repeat(open.prefix.length) : open.prefix, text: text.trim(), kind: open.kind }
+            open = {
+                prefix: open.kind === 'item' ? ' '.repeat(open.prefix.length) : open.prefix,
+                text: text.trim(),
+                kind: open.kind
+            }
         } else {
             open.text += ' ' + text.trim()
         }

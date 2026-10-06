@@ -5,28 +5,27 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-
-import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
 import { getCookie } from 'hono/cookie'
 import { secureHeaders } from 'hono/secure-headers'
 
-import { createLogger } from '../logger.js'
 import { BadName, NotFound } from '../files/catalog.js'
+import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
+import { createLogger } from '../logger.js'
 import { SESSION_COOKIE } from './auth.js'
 import type { AppContext, Env } from './context.js'
 import { clientIp, clientOf } from './request.js'
+import { activityRoutes } from './routes/activity.js'
+import { auditRoutes } from './routes/audit.js'
 import { authRoutes } from './routes/auth.js'
 import { conversationRoutes } from './routes/conversations.js'
 import { fileRoutes } from './routes/files.js'
 import { hostRoutes } from './routes/hosts.js'
 import { mcpRoutes } from './routes/mcp.js'
-import { activityRoutes } from './routes/activity.js'
-import { auditRoutes } from './routes/audit.js'
 import { toolRoutes } from './routes/models.js'
 import { presetRoutes } from './routes/presets.js'
 import { scheduleRoutes } from './routes/schedules.js'
-import { settingsRoutes } from './routes/settings.js'
 import { sessionRoutes } from './routes/sessions.js'
+import { settingsRoutes } from './routes/settings.js'
 import { statusRoutes } from './routes/status.js'
 import { taskRoutes } from './routes/tasks.js'
 import { usageRoutes } from './routes/usage.js'
@@ -40,7 +39,8 @@ function hostnameOf(header: string | undefined): string {
     return raw.split(':')[0]
 }
 
-const isLocal = (host: string) => host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')
+const isLocal = (host: string) =>
+    host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')
 
 export function createApp(app: AppContext): Hono<Env> {
     const hono = new Hono<Env>()
@@ -60,7 +60,11 @@ export function createApp(app: AppContext): Hono<Env> {
     // An uploaded file (a photo, a log) gets Telegram's own ceiling instead.
     const smallBodies = bodyLimit({ maxSize: 2 * 1024 * 1024 })
     const uploads = bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES + 64 * 1024 })
-    hono.use('/api/*', (c, next) => (c.req.method === 'POST' && /^\/api\/conversations\/[^/]+\/attachments$/.test(c.req.path) ? uploads(c, next) : smallBodies(c, next)))
+    hono.use('/api/*', (c, next) =>
+        c.req.method === 'POST' && /^\/api\/conversations\/[^/]+\/attachments$/.test(c.req.path)
+            ? uploads(c, next)
+            : smallBodies(c, next)
+    )
 
     hono.use('/api/*', async (c, next) => {
         // What the API answers is the owner's: never a shared cache's, never the browser's after sign-out.
@@ -105,7 +109,8 @@ export function createApp(app: AppContext): Hono<Env> {
             c.set('session', session)
             return next()
         }
-        if (c.req.path === '/api/auth/me' || (c.req.path === '/api/auth/login' && c.req.method === 'POST')) return next()
+        if (c.req.path === '/api/auth/me' || (c.req.path === '/api/auth/login' && c.req.method === 'POST'))
+            return next()
         if (auth.basic(c.req.header('authorization'), clientOf(c))) return next()
         return c.json({ error: 'sign in required' }, 401)
     })
@@ -143,7 +148,9 @@ export function createApp(app: AppContext): Hono<Env> {
         hono.use('/*', serveStatic({ root }))
         hono.get('/*', (c) =>
             // An unknown API path must not turn into the SPA shell.
-            c.req.path.startsWith('/api/') ? c.json({ error: 'not found' }, 404) : c.html(fs.readFileSync(path.join(web.distDir, 'index.html'), 'utf8'))
+            c.req.path.startsWith('/api/')
+                ? c.json({ error: 'not found' }, 404)
+                : c.html(fs.readFileSync(path.join(web.distDir, 'index.html'), 'utf8'))
         )
     } else {
         hono.get('/', (c) => c.text('Pocket Factory API is up; the web UI is not built (yarn build in web/).'))
@@ -156,6 +163,8 @@ export function startServer(app: AppContext): void {
     const { host, port, authPassword } = app.config.web
     const hono = createApp(app)
     serve({ fetch: hono.fetch, hostname: host, port }, (info) => {
-        log.info(`listening on http://${info.address}:${info.port}${authPassword ? ' (sign-in required)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`)
+        log.info(
+            `listening on http://${info.address}:${info.port}${authPassword ? ' (sign-in required)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`
+        )
     })
 }

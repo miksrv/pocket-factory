@@ -51,8 +51,11 @@ export class Catalog {
     }
 
     fileFor(kind: Kind, name: string): string {
-        if (!NAME.test(name)) throw new BadName(`Invalid ${kind} name "${name}": use letters, digits, dot, dash, underscore`)
-        return kind === 'skills' ? path.join(this.dirFor(kind), name, 'SKILL.md') : path.join(this.dirFor(kind), `${name}.md`)
+        if (!NAME.test(name))
+            throw new BadName(`Invalid ${kind} name "${name}": use letters, digits, dot, dash, underscore`)
+        return kind === 'skills'
+            ? path.join(this.dirFor(kind), name, 'SKILL.md')
+            : path.join(this.dirFor(kind), `${name}.md`)
     }
 
     list(kind: Kind): CatalogEntry[] {

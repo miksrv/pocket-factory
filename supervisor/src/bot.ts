@@ -2,18 +2,18 @@ import fs from 'node:fs'
 
 import { Bot, type Context, InlineKeyboard } from 'grammy'
 
+import { MODEL_ALIASES } from './claude/models.js'
 import type { Config } from './config.js'
 import { type Attachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './files/inbox.js'
 import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
+import type { Schedules } from './schedules/service.js'
 import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
-import type { Schedules } from './schedules/service.js'
-import { askQuestions, openQuestions, titleFrom, type TaskService } from './tasks/service.js'
+import { askQuestions, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
-import { MODEL_ALIASES } from './claude/models.js'
-import { describeUserAgent, type WebAuth } from './web/auth.js'
 import { VERSION } from './version.js'
+import { describeUserAgent, type WebAuth } from './web/auth.js'
 
 const log = createLogger('bot')
 
@@ -75,7 +75,9 @@ async function sendOne(bot: Bot, chatId: number, part: string): Promise<number> 
                 continue
             }
             // Telegram rejected the markup — better a plain message than none.
-            log.warn(`html reply rejected, falling back to plain text: ${error instanceof Error ? error.message : error}`)
+            log.warn(
+                `html reply rejected, falling back to plain text: ${error instanceof Error ? error.message : String(error)}`
+            )
             const sent = await bot.api.sendMessage(chatId, part)
             return sent.message_id
         }
@@ -91,7 +93,7 @@ async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<num
             ids.push(await sendOne(bot, chatId, part))
         } catch (error) {
             failed++
-            log.error(`chunk to chat ${chatId} failed: ${error instanceof Error ? error.message : error}`)
+            log.error(`chunk to chat ${chatId} failed: ${error instanceof Error ? error.message : String(error)}`)
         }
     }
     if (failed) throw new Error(`${failed} chunk(s) not delivered`)
@@ -118,7 +120,8 @@ function elapsed(iso: string): string {
     return `${Math.floor(ms / 86_400_000)} d`
 }
 
-const resetsAgo = (iso: string): string => (Date.now() - new Date(iso).getTime() < 60_000 ? 'just now' : `${elapsed(iso)} ago`)
+const resetsAgo = (iso: string): string =>
+    Date.now() - new Date(iso).getTime() < 60_000 ? 'just now' : `${elapsed(iso)} ago`
 
 /** One line: how full the subscription windows are, e.g. "5h 12% · week 31%". */
 function limitsLine(limits: RateLimitSnapshot | undefined): string | null {
@@ -130,10 +133,17 @@ function limitsLine(limits: RateLimitSnapshot | undefined): string | null {
 }
 
 function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
-    if (!limits) return ['Subscription limits: unknown yet — the CLI reports them with the first task, or send /usage refresh.']
+    if (!limits)
+        return ['Subscription limits: unknown yet — the CLI reports them with the first task, or send /usage refresh.']
     const lines: string[] = []
-    if (limits.five_hour) lines.push(`5-hour window: ${pct(limits.five_hour.used)} used · resets in ${resetsIn(limits.five_hour.resets_at)}`)
-    if (limits.seven_day) lines.push(`Weekly window: ${pct(limits.seven_day.used)} used · resets in ${resetsIn(limits.seven_day.resets_at)}`)
+    if (limits.five_hour)
+        lines.push(
+            `5-hour window: ${pct(limits.five_hour.used)} used · resets in ${resetsIn(limits.five_hour.resets_at)}`
+        )
+    if (limits.seven_day)
+        lines.push(
+            `Weekly window: ${pct(limits.seven_day.used)} used · resets in ${resetsIn(limits.seven_day.resets_at)}`
+        )
     if (limits.status !== 'allowed') lines.push(`Status: ${limits.status}`)
     lines.push(`As of ${new Date(limits.ts).toLocaleString('en-GB', { hour12: false })}`)
     return lines
@@ -151,11 +161,15 @@ function footer(task: Task, limits: RateLimitSnapshot | undefined, publicUrl: st
     const windows = [limitsLine(limits), share].filter(Boolean).join(' · ')
     // What the task changed, so the phone decides from the summary; the task page has the files and the diff.
     const changed = changesLine(task.git)
-    const pr = task.git?.pr ? `PR #${task.git.pr.number}${task.git.pr.state === 'OPEN' ? '' : ` (${task.git.pr.state.toLowerCase()})`} ${task.git.pr.url}` : null
+    const pr = task.git?.pr
+        ? `PR #${task.git.pr.number}${task.git.pr.state === 'OPEN' ? '' : ` (${task.git.pr.state.toLowerCase()})`} ${task.git.pr.url}`
+        : null
     const review = changed && publicUrl ? `${publicUrl}/tasks/${task.id}#changes` : null
     return [
         `— project: ${task.project ?? 'none (workspaces root)'}`,
-        changed ? `— changes: ${[changed, task.git?.branch ? `on ${task.git.branch}` : null].filter(Boolean).join(' ')}${task.git?.uncommitted ? ` · ${task.git.uncommitted} uncommitted` : ''}` : null,
+        changed
+            ? `— changes: ${[changed, task.git?.branch ? `on ${task.git.branch}` : null].filter(Boolean).join(' ')}${task.git?.uncommitted ? ` · ${task.git.uncommitted} uncommitted` : ''}`
+            : null,
         pr ? `— ${pr}` : null,
         review ? `— review: ${review}` : null,
         windows ? `— windows: ${windows}` : null
@@ -180,10 +194,24 @@ function permissionSummary(input: Record<string, unknown>): string {
  * the question otherwise (a scheduled run's question, say). A permission
  * request gets Allow / Deny.
  */
-function askMessage(task: Task, ask: Ask, inTopic: boolean): { key: string; text: string; keyboard: InlineKeyboard } | null {
+function askMessage(
+    task: Task,
+    ask: Ask,
+    inTopic: boolean
+): { key: string; text: string; keyboard: InlineKeyboard } | null {
     if (ask.kind === 'permission') {
-        const text = [`🔐 The agent asks to run ${ask.tool_name}:`, '', permissionSummary(ask.input), '', 'Allow it or deny it below.'].join('\n')
-        return { key: ask.request_id, text, keyboard: new InlineKeyboard().text('✅ Allow', `p|${task.id}|allow`).text('⛔ Deny', `p|${task.id}|deny`) }
+        const text = [
+            `🔐 The agent asks to run ${ask.tool_name}:`,
+            '',
+            permissionSummary(ask.input),
+            '',
+            'Allow it or deny it below.'
+        ].join('\n')
+        return {
+            key: ask.request_id,
+            text,
+            keyboard: new InlineKeyboard().text('✅ Allow', `p|${task.id}|allow`).text('⛔ Deny', `p|${task.id}|deny`)
+        }
     }
     const questions = askQuestions(ask)
     const next = openQuestions(ask)[0]
@@ -193,36 +221,59 @@ function askMessage(task: Task, ask: Ask, inTopic: boolean): { key: string; text
     const options = next.options ?? []
     if (options.length) {
         lines.push('')
-        for (const option of options) lines.push(`• ${option.label}${option.description ? ` — ${option.description}` : ''}`)
+        for (const option of options)
+            lines.push(`• ${option.label}${option.description ? ` — ${option.description}` : ''}`)
     }
     const typed = inTopic ? 'type your answer' : 'reply to this message with your answer'
-    lines.push('', options.length ? (next.multiSelect ? `Tap an option, or ${typed} (several: comma-separated).` : `Tap an option, or ${typed}.`) : `${cap(typed)}.`)
+    lines.push(
+        '',
+        options.length
+            ? next.multiSelect
+                ? `Tap an option, or ${typed} (several: comma-separated).`
+                : `Tap an option, or ${typed}.`
+            : `${cap(typed)}.`
+    )
     if (questions.length > 1) lines.push(`(question ${index + 1} of ${questions.length})`)
     const keyboard = new InlineKeyboard()
     options.forEach((option, i) => keyboard.text(option.label.slice(0, 60), `a|${task.id}|${index}|${i}`).row())
     return { key: `${ask.request_id}:${index}`, text: lines.join('\n'), keyboard }
 }
 
-export function createBot(config: Config, tasks: TaskService, store: Store, schedules?: Schedules, auth?: WebAuth): Bot {
+export function createBot(
+    config: Config,
+    tasks: TaskService,
+    store: Store,
+    schedules?: Schedules,
+    auth?: WebAuth
+): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
 
     // A chat talks to one conversation at a time — its topic: its own by
     // default, or the one the owner switched to by replying to a message of
     // the bot (a schedule's report, a question). `/new` switches back.
-    const topicFor = (chatId: number): Conversation => store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
+    const topicFor = (chatId: number): Conversation =>
+        store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
     const conversationFor = (ctx: Context) => topicFor(ctx.chat!.id)
     const isTopic = (chatId: number, conversationId: string) => topicFor(chatId).id === conversationId
     /** The bot sent a message about a conversation: a reply to it later continues that conversation. */
-    const remember = (chatId: number, messageIds: number | number[], conversationId: string, taskId: string | null = null) => {
-        for (const id of Array.isArray(messageIds) ? messageIds : [messageIds]) store.rememberTelegramMessage(chatId, id, conversationId, taskId)
+    const remember = (
+        chatId: number,
+        messageIds: number | number[],
+        conversationId: string,
+        taskId: string | null = null
+    ) => {
+        for (const id of Array.isArray(messageIds) ? messageIds : [messageIds])
+            store.rememberTelegramMessage(chatId, id, conversationId, taskId)
     }
-    const topicName = (conversation: Conversation) => conversation.title || (conversation.channel === 'telegram' ? 'this chat' : 'web conversation')
+    const topicName = (conversation: Conversation) =>
+        conversation.title || (conversation.channel === 'telegram' ? 'this chat' : 'web conversation')
     // Where scheduled runs report and ask: the owner's private chat (a user's chat id is the user id).
     const ownerChat = [...config.telegram.allowedUserIds][0]
     /** The chat a task talks to: its own for a Telegram task, the owner's for a scheduled one or a topic's, none otherwise. */
     const chatFor = (task: Task): number | null => {
-        if (task.source === 'cron') return task.schedule && schedules?.spec(task.schedule)?.notify === 'none' ? null : ownerChat ?? null
+        if (task.source === 'cron')
+            return task.schedule && schedules?.spec(task.schedule)?.notify === 'none' ? null : (ownerChat ?? null)
         const conversation = tasks.conversationOf(task)
         if (!conversation) return null
         if (conversation.channel === 'telegram') return Number(conversation.external_id) || null
@@ -250,9 +301,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
                 'Photos and files go with the task: send them with a caption, or first and then the text.',
                 '/new [project] — start a fresh session; with a project name, inside its checkout',
-                '    (the repository\'s MCP servers, agents and rules apply then)',
+                "    (the repository's MCP servers, agents and rules apply then)",
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
-                '/model [sonnet|opus|haiku|fable] — the orchestrator\'s model for every next task, in every chat',
+                "/model [sonnet|opus|haiku|fable] — the orchestrator's model for every next task, in every chat",
                 '/stop — cancel the running task',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)',
@@ -267,7 +318,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         if (!list.length) return void (await ctx.reply('No schedules yet — create one in the web UI (Schedules).'))
         const lines = list.map((s) => {
             const state = s.errors.length ? '⚠️ invalid' : s.enabled ? '🟢 on' : '⚪️ off'
-            const last = s.last_run ? `last ${s.last_run.status}${s.last_run.note ? ` (${s.last_run.note})` : ''} ${resetsAgo(s.last_run.fired_at)}` : 'never ran'
+            const last = s.last_run
+                ? `last ${s.last_run.status}${s.last_run.note ? ` (${s.last_run.note})` : ''} ${resetsAgo(s.last_run.fired_at)}`
+                : 'never ran'
             const next = s.next_run ? `next in ${resetsIn(s.next_run)}` : null
             return `${state} ${s.name} — ${s.cron_text ?? s.cron ?? '?'}${s.project ? ` · ${s.project}` : ''}\n    ${[last, next].filter(Boolean).join(' · ')}`
         })
@@ -280,7 +333,11 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         if (!name) return void (await ctx.reply('Usage: /run <schedule name>'))
         if (!schedules.get(name)) return void (await ctx.reply(`No schedule named "${name}". /schedules lists them.`))
         const run = await schedules.fire(name, 'manual')
-        const sent = await ctx.reply(run.status === 'queued' ? `▶️ ${name}: task queued (${run.note}). The report comes here when it is done; reply to it to follow up.` : `${name}: ${run.status}${run.note ? ` — ${run.note}` : ''}`)
+        const sent = await ctx.reply(
+            run.status === 'queued'
+                ? `▶️ ${name}: task queued (${run.note}). The report comes here when it is done; reply to it to follow up.`
+                : `${name}: ${run.status}${run.note ? ` — ${run.note}` : ''}`
+        )
         const task = run.task_id ? tasks.task(run.task_id) : undefined
         if (task) remember(ctx.chat.id, sent.message_id, task.conversation_id, task.id)
     })
@@ -290,27 +347,37 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     bot.command('new', async (ctx) => {
         const project = ctx.match.trim() || null
         if (project && !tasks.hasProject(project)) {
-            await ctx.reply(`Unknown project "${project}". Projects are the files in /data/config/projects; say "onboard project ${project}" to create one.`)
+            await ctx.reply(
+                `Unknown project "${project}". Projects are the files in /data/config/projects; say "onboard project ${project}" to create one.`
+            )
             return
         }
         const fresh = tasks.newConversation('telegram', String(ctx.chat.id), null, project)
         store.setTelegramTopic(ctx.chat.id, fresh.id)
         pending.delete(ctx.chat.id)
-        await ctx.reply(project ? `Fresh session in ${project}. Next message runs from its checkout.` : 'Fresh session. Next message starts from scratch.')
+        await ctx.reply(
+            project
+                ? `Fresh session in ${project}. Next message runs from its checkout.`
+                : 'Fresh session. Next message starts from scratch.'
+        )
     })
 
     // One model for the whole factory, applied to the next task everywhere; sub-agents keep the `model:` of their files.
     bot.command('model', async (ctx) => {
         const alias = ctx.match.trim().toLowerCase()
         if (!alias) {
-            await ctx.reply(`Model: ${tasks.model()}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; sub-agents keep their own.`)
+            await ctx.reply(
+                `Model: ${tasks.model()}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; sub-agents keep their own.`
+            )
             return
         }
         try {
             const model = tasks.setModel(alias)
-            await ctx.reply(`Model: ${model} from the next task on, in every chat. A running task keeps the one it started with.`)
+            await ctx.reply(
+                `Model: ${model} from the next task on, in every chat. A running task keeps the one it started with.`
+            )
         } catch (error) {
-            await ctx.reply(`❌ ${error instanceof Error ? error.message : error}`)
+            await ctx.reply(`❌ ${error instanceof Error ? error.message : String(error)}`)
         }
     })
 
@@ -332,7 +399,8 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     bot.command('status', async (ctx) => {
         const conversation = conversationFor(ctx)
         // A topic is an override: after `/new` the chat's own (newest) conversation is the topic too.
-        const switched = conversation.id !== tasks.conversationFor('telegram', String(ctx.chat.id)).id ? conversation : null
+        const switched =
+            conversation.id !== tasks.conversationFor('telegram', String(ctx.chat.id)).id ? conversation : null
         const active = tasks.activeTask(conversation.id)
         const queued = active ? undefined : tasks.queuedTask(conversation.id)
         const windows = limitsLine(tasks.limits())
@@ -344,7 +412,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         await ctx.reply(
             [
                 `Pocket Factory v${VERSION}`,
-                switched ? `Thread: ${topicName(switched)} (switched by your reply; /new comes back to this chat)` : null,
+                switched
+                    ? `Thread: ${topicName(switched)} (switched by your reply; /new comes back to this chat)`
+                    : null,
                 `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
                 `Running: ${running}`,
                 `Model: ${tasks.model()} (/model to switch)`,
@@ -368,11 +438,17 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
             await ctx.reply('Asking the CLI…')
             detached('usage refresh', async () => {
                 const snapshot = await tasks.probeLimits()
-                await ctx.reply(snapshot ? limitsReport(snapshot).join('\n') : '❌ The CLI reported no rate-limit status; see the supervisor log.')
+                await ctx.reply(
+                    snapshot
+                        ? limitsReport(snapshot).join('\n')
+                        : '❌ The CLI reported no rate-limit status; see the supervisor log.'
+                )
             })
             return
         }
-        await ctx.reply([...limitsReport(tasks.limits()), '', '/usage refresh — ask the CLI now (one Haiku turn)'].join('\n'))
+        await ctx.reply(
+            [...limitsReport(tasks.limits()), '', '/usage refresh — ask the CLI now (one Haiku turn)'].join('\n')
+        )
     })
 
     // A message that *starts* with an unknown command is a typo, not a task
@@ -408,7 +484,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         const task = tasks.submit(conversation.id, 'telegram', prompt, { attachments })
         const head = switched ? `↪️ ${topicName(switched)} · ` : ''
         const files = attachments.length ? ` 📎 ${attachments.length}` : ''
-        const sent = await ctx.reply(`${head}${answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…'}${files}`)
+        const sent = await ctx.reply(
+            `${head}${answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…'}${files}`
+        )
         remember(chatId, sent.message_id, conversation.id, task.id)
     }
 
@@ -433,7 +511,12 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 await ctx.answerCallbackQuery()
             }
         } catch (error) {
-            await ctx.answerCallbackQuery({ text: `❌ ${error instanceof Error ? error.message : error}`, show_alert: true }).catch(() => undefined)
+            await ctx
+                .answerCallbackQuery({
+                    text: `❌ ${error instanceof Error ? error.message : String(error)}`,
+                    show_alert: true
+                })
+                .catch(() => undefined)
         }
     })
 
@@ -445,7 +528,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     const download = async (ctx: Context, fileId: string): Promise<{ data: Buffer; filePath: string }> => {
         const file = await ctx.api.getFile(fileId)
         if (!file.file_path) throw new Error('Telegram returned no file path')
-        const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(60_000) })
+        const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`, {
+            signal: AbortSignal.timeout(60_000)
+        })
         if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
         return { data: Buffer.from(await response.arrayBuffer()), filePath: file.file_path }
     }
@@ -463,14 +548,24 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         // A file whose conversation was deleted in the web meanwhile is gone from the disk.
         return held && Date.now() - held.at < PENDING_MS ? held.files.filter((f) => fs.existsSync(f.path)) : []
     }
-    type Incoming = { ctx: Context; fileId: string; name: string; type: string | null; size: number | undefined; caption: string }
+    type Incoming = {
+        ctx: Context
+        fileId: string
+        name: string
+        type: string | null
+        size: number | undefined
+        caption: string
+    }
     const albums = new Map<string, Incoming[]>()
     const receive = async (items: Incoming[]) => {
         const { ctx } = items[0]
         const chatId = ctx.chat!.id
         try {
             const tooBig = items.find((i) => (i.size ?? 0) > MAX_ATTACHMENT_BYTES)
-            if (tooBig) throw new Error(`"${tooBig.name}" is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB, the most a bot may download`)
+            if (tooBig)
+                throw new Error(
+                    `"${tooBig.name}" is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB, the most a bot may download`
+                )
             // Saved where the next message will go; a reply that switches the topic still finds them by path.
             const conversation = conversationFor(ctx)
             const saved: Attachment[] = []
@@ -485,17 +580,22 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 return
             }
             const held = pending.get(chatId)
-            const files = [...(held && Date.now() - held.at < PENDING_MS ? held.files : []), ...saved].slice(-MAX_ATTACHMENTS)
+            const files = [...(held && Date.now() - held.at < PENDING_MS ? held.files : []), ...saved].slice(
+                -MAX_ATTACHMENTS
+            )
             pending.set(chatId, { files, at: Date.now() })
-            const what = files.length === 1 ? (files[0].type.startsWith('image/') ? 'Photo' : 'File') : `${files.length} files`
-            await ctx.reply(`📎 ${what} saved. Now send the task as text or voice (within 30 minutes), and ${files.length === 1 ? 'it goes' : 'they go'} with it.`)
+            const what =
+                files.length === 1 ? (files[0].type.startsWith('image/') ? 'Photo' : 'File') : `${files.length} files`
+            await ctx.reply(
+                `📎 ${what} saved. Now send the task as text or voice (within 30 minutes), and ${files.length === 1 ? 'it goes' : 'they go'} with it.`
+            )
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             log.error(`attachment handling failed: ${message}`)
             await ctx.reply(`❌ Could not take the file: ${message}`)
         }
     }
-    bot.on(['message:photo', 'message:document', 'message:video'], async (ctx) => {
+    bot.on(['message:photo', 'message:document', 'message:video'], (ctx) => {
         const m = ctx.message
         const photo = m.photo?.at(-1) // the largest size
         const media = photo ?? m.document ?? m.video
@@ -529,7 +629,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
             await ctx.reply('Voice messages are disabled: set GROQ_API_KEY in .env to enable transcription.')
             return
         }
-        const media = ctx.message.voice ?? ctx.message.audio!
+        const media = ctx.message.voice ?? ctx.message.audio
         const apiKey = config.stt.groqApiKey
         detached('voice message', async () => {
             try {
@@ -567,12 +667,15 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
             await bot.api.editMessageReplyMarkup(sent.chatId, sent.messageId)
             await bot.api.sendMessage(sent.chatId, note, { reply_parameters: { message_id: sent.messageId } })
         } catch (error) {
-            log.warn(`could not settle ask message ${sent.messageId}: ${error instanceof Error ? error.message : error}`)
+            log.warn(
+                `could not settle ask message ${sent.messageId}: ${error instanceof Error ? error.message : String(error)}`
+            )
         }
     }
     tasks.on('task', (task) => {
         if (task.status !== 'running') {
-            for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— the task ended before an answer')
+            for (const [key, sent] of sentAsks)
+                if (sent.taskId === task.id) void settle(key, '— the task ended before an answer')
             return
         }
         const chatId = chatFor(task)
@@ -584,7 +687,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         }
         const message = askMessage(task, task.ask, isTopic(chatId, task.conversation_id))
         if (!message || sentAsks.has(message.key)) return
-        const question = task.ask.kind === 'question' ? openQuestions(task.ask)[0]?.question ?? null : null
+        const question = task.ask.kind === 'question' ? (openQuestions(task.ask)[0]?.question ?? null) : null
         sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question })
         bot.api
             .sendMessage(chatId, message.text, { reply_markup: message.keyboard })
@@ -618,10 +721,18 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         const chatId = chatFor(task)
         if (!chatId) return
         const at = new Date(task.not_before)
-        const clock = at.toLocaleString('en-GB', { timeZone: config.timezone, weekday: 'short', hour: '2-digit', minute: '2-digit' })
+        const clock = at.toLocaleString('en-GB', {
+            timeZone: config.timezone,
+            weekday: 'short',
+            hour: '2-digit',
+            minute: '2-digit'
+        })
         const head = task.schedule ? `⏱ ${task.schedule}: ` : ''
         void bot.api
-            .sendMessage(chatId, `${head}⏸ Subscription limit reached. The task continues by itself at ${clock} (in ${resetsIn(task.not_before)}), in the same session. ${task.schedule ? 'Tasks in the web UI can cancel it.' : '/stop cancels it.'}`)
+            .sendMessage(
+                chatId,
+                `${head}⏸ Subscription limit reached. The task continues by itself at ${clock} (in ${resetsIn(task.not_before)}), in the same session. ${task.schedule ? 'Tasks in the web UI can cancel it.' : '/stop cancels it.'}`
+            )
             .then((sent) => remember(chatId, sent.message_id, task.conversation_id, task.id))
             .catch((error) => log.error(`limit notice to chat ${chatId} failed`, error))
     })
@@ -629,12 +740,17 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     // Deliver results of Telegram-originated tasks back to their chat, and of
     // scheduled runs to the owner (unless the schedule says notify: none).
     tasks.on('task', (task) => {
-        if ((task.source !== 'telegram' && task.source !== 'cron') || task.status === 'queued' || task.status === 'running') return
+        if (
+            (task.source !== 'telegram' && task.source !== 'cron') ||
+            task.status === 'queued' ||
+            task.status === 'running'
+        )
+            return
         const chatId = chatFor(task)
         if (!chatId) return
         const body =
             task.status === 'done'
-                ? task.result ?? ''
+                ? (task.result ?? '')
                 : task.status === 'cancelled'
                   ? '⏹ Stopped.'
                   : `❌ ${task.error || 'failed'}`

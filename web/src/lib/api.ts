@@ -100,7 +100,8 @@ export interface ChangedFile {
 }
 
 /** "7 files +210 −40", or null when nothing changed. */
-export const changesText = (g: TaskGit | null) => (g?.files ? `${g.files} file${g.files === 1 ? '' : 's'} +${g.added ?? 0} −${g.removed ?? 0}` : null)
+export const changesText = (g: TaskGit | null) =>
+    g?.files ? `${g.files} file${g.files === 1 ? '' : 's'} +${g.added ?? 0} −${g.removed ?? 0}` : null
 
 /** A file sent with a message, saved in the factory's inbox. */
 export interface Attachment {
@@ -113,7 +114,8 @@ export interface Attachment {
 /** Raster images the thread previews inline (the server serves only these inline). */
 export const isImage = (a: Attachment) => /^image\/(png|jpeg|gif|webp)$/.test(a.type)
 
-export const attachmentUrl = (conversationId: string, a: Attachment) => `/api/conversations/${conversationId}/attachments/${encodeURIComponent(a.name)}`
+export const attachmentUrl = (conversationId: string, a: Attachment) =>
+    `/api/conversations/${conversationId}/attachments/${encodeURIComponent(a.name)}`
 
 export interface TaskEvent {
     id: number
@@ -234,7 +236,7 @@ export interface RateLimits {
     id: number
     ts: string
     task_id: string | null
-    status: 'allowed' | 'allowed_warning' | 'rejected' | string
+    status: 'allowed' | 'allowed_warning' | 'rejected' | (string & {})
     five_hour: RateLimitWindow | null
     seven_day: RateLimitWindow | null
 }
@@ -514,7 +516,8 @@ export interface ScheduleView {
     seen: number
 }
 
-export type CronCheck = { ok: true; text: string; next: string | null; tz: string } | { ok: false; error: string; tz: string }
+export type CronCheck =
+    { ok: true; text: string; next: string | null; tz: string } | { ok: false; error: string; tz: string }
 
 export interface PrefilterItem {
     key: string
@@ -601,20 +604,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (!response.ok) {
         // A session that lapsed or was revoked: the whole UI goes back to the sign-in page, not one widget to an error.
         if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event(UNAUTHORIZED))
-        throw new ApiError(response.status, (body as { error?: string } | null)?.error ?? `${response.status} ${response.statusText}`, body)
+        throw new ApiError(
+            response.status,
+            (body as { error?: string } | null)?.error ?? `${response.status} ${response.statusText}`,
+            body
+        )
     }
     // A 200 that is not JSON must not become `{}`: every screen would then throw on a missing field.
-    if (body === null) throw new ApiError(response.status, 'The API returned something other than JSON — a proxy login page? Reload and sign in.')
+    if (body === null)
+        throw new ApiError(
+            response.status,
+            'The API returned something other than JSON — a proxy login page? Reload and sign in.'
+        )
     return body as T
 }
 
-const targetBody = (target: HostTarget) => ('name' in target ? target : { ssh: target.ssh, key: target.key || undefined })
+const targetBody = (target: HostTarget) =>
+    'name' in target ? target : { ssh: target.ssh, key: target.key || undefined }
 
 export const api = {
     auth: {
         me: () => request<AuthState>('/auth/me'),
         login: (username: string, password: string) =>
-            request<{ ok: true; user: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+            request<{ ok: true; user: string }>('/auth/login', {
+                method: 'POST',
+                body: JSON.stringify({ username, password })
+            }),
         logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
         logoutOthers: () => request<{ signed_out: number }>('/auth/logout-others', { method: 'POST' }),
         sessions: () => request<WebSession[]>('/auth/sessions'),
@@ -634,12 +649,16 @@ export const api = {
     taskProjects: () => request<string[]>('/tasks/projects'),
     task: (id: string) => request<Task & { events: TaskEvent[]; conversation: Conversation }>(`/tasks/${id}`),
     stopTask: (id: string) => request<{ stopped: boolean }>(`/tasks/${id}/stop`, { method: 'POST' }),
-    taskChanges: (id: string) => request<{ git: TaskGit; files: ChangedFile[]; pr: PullRequest | null }>(`/tasks/${id}/changes`),
-    taskChangeFile: (id: string, path: string) => request<{ patch: string; truncated: boolean }>(`/tasks/${id}/changes/file?path=${encodeURIComponent(path)}`),
+    taskChanges: (id: string) =>
+        request<{ git: TaskGit; files: ChangedFile[]; pr: PullRequest | null }>(`/tasks/${id}/changes`),
+    taskChangeFile: (id: string, path: string) =>
+        request<{ patch: string; truncated: boolean }>(`/tasks/${id}/changes/file?path=${encodeURIComponent(path)}`),
     createPullRequest: (id: string) => request<PullRequest>(`/tasks/${id}/pr`, { method: 'POST' }),
     /** Answer what a running task asked: `{ answers }` by question text, or `{ behavior: 'allow' | 'deny' }` for a permission. */
-    answerTask: (id: string, body: { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }) =>
-        request<Task>(`/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify(body) }),
+    answerTask: (
+        id: string,
+        body: { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }
+    ) => request<Task>(`/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify(body) }),
 
     audit: (q: { period: AuditPeriod; kind: AuditKind; agent?: string; project?: string; before?: number }) => {
         const params = new URLSearchParams({ period: q.period, kind: q.kind })
@@ -656,30 +675,51 @@ export const api = {
 
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 
-    conversations: (before?: Cursor, limit = 50) => request<Conversation[]>(`/conversations?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
+    conversations: (before?: Cursor, limit = 50) =>
+        request<Conversation[]>(
+            `/conversations?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`
+        ),
     conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
     deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
     /** The conversation is on screen: clears its `unread` flag. */
     markConversationRead: (id: string) => request<void>(`/conversations/${id}/read`, { method: 'POST' }),
     /** Tasks before the given one (the oldest shown), with their events. */
-    conversationHistory: (id: string, before: Cursor) => request<ConversationHistory>(`/conversations/${id}/history?${cursorParams(new URLSearchParams(), before)}`),
+    conversationHistory: (id: string, before: Cursor) =>
+        request<ConversationHistory>(`/conversations/${id}/history?${cursorParams(new URLSearchParams(), before)}`),
     /** `project` binds the conversation to a checkout: its tasks run there, with the repository's MCP servers and agents. */
     createConversation: (title?: string, project?: string | null) =>
-        request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({ title, project: project || undefined }) }),
+        request<Conversation>('/conversations', {
+            method: 'POST',
+            body: JSON.stringify({ title, project: project || undefined })
+        }),
     /** Rebind (or unbind with null); refused while a task runs. The Claude Code session restarts in the new directory. */
-    setConversationProject: (id: string, project: string | null) => request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ project }) }),
+    setConversationProject: (id: string, project: string | null) =>
+        request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ project }) }),
     mcp: () => request<McpOverview>('/mcp'),
     /** Runs `claude mcp list` in the factory (about 15 s) and returns the registry with fresh statuses. */
     refreshMcp: () => request<{ servers: McpEntry[] }>('/mcp/refresh', { method: 'POST' }),
-    startMcpLogin: (name: string) => request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
+    startMcpLogin: (name: string) =>
+        request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
     mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),
-    completeMcpLogin: (id: string, url: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify({ url }) }),
+    completeMcpLogin: (id: string, url: string) =>
+        request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}/complete`, {
+            method: 'POST',
+            body: JSON.stringify({ url })
+        }),
     cancelMcpLogin: (id: string) => request<void>(`/mcp/login/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     /** The orchestrator's model for every next task, in every conversation; sub-agents keep the `model:` of their files. */
-    setModel: (model: string) => request<{ model: string; aliases: string[] }>('/settings/model', { method: 'PUT', body: JSON.stringify({ model }) }),
-    saveMcp: (mcpServers: Record<string, McpServerConfig>) => request<{ saved: number }>('/mcp/global', { method: 'PUT', body: JSON.stringify({ mcpServers }) }),
+    setModel: (model: string) =>
+        request<{ model: string; aliases: string[] }>('/settings/model', {
+            method: 'PUT',
+            body: JSON.stringify({ model })
+        }),
+    saveMcp: (mcpServers: Record<string, McpServerConfig>) =>
+        request<{ saved: number }>('/mcp/global', { method: 'PUT', body: JSON.stringify({ mcpServers }) }),
     sendMessage: (id: string, prompt: string, attachments: string[] = []) =>
-        request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt, attachments }) }),
+        request<Task>(`/conversations/${id}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ prompt, attachments })
+        }),
     /** One file for the next message of the conversation; the reply names it for `sendMessage`. */
     uploadAttachment: (id: string, file: File) =>
         request<Attachment>(`/conversations/${id}/attachments?name=${encodeURIComponent(file.name || 'pasted.png')}`, {
@@ -690,48 +730,80 @@ export const api = {
 
     list: (kind: Kind) => request<CatalogEntry[]>(`/${kind}`),
     /** `create` refuses to replace a file that already exists (409); `updated_at` (the version the form edited) refuses to overwrite a newer file (409). */
-    save: (kind: Kind, name: string, doc: { frontmatter: Record<string, unknown>; body: string; updated_at?: string }, create = false) =>
-        request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(doc) }),
+    save: (
+        kind: Kind,
+        name: string,
+        doc: { frontmatter: Record<string, unknown>; body: string; updated_at?: string },
+        create = false
+    ) =>
+        request<CatalogEntry>(`/${kind}/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
+            method: 'PUT',
+            body: JSON.stringify(doc)
+        }),
     remove: (kind: Kind, name: string) => request<void>(`/${kind}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
-    sessions: (before?: Cursor, limit = 50) => request<SessionSummary[]>(`/sessions?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
+    sessions: (before?: Cursor, limit = 50) =>
+        request<SessionSummary[]>(`/sessions?${cursorParams(new URLSearchParams({ limit: String(limit) }), before)}`),
     /** A window of `limit` entries ending before index `before` (default: the end of the transcript). */
-    session: (id: string, before?: number, limit = 200) => request<SessionDetail>(`/sessions/${id}?limit=${limit}${before ? `&before=${before}` : ''}`),
+    session: (id: string, before?: number, limit = 200) =>
+        request<SessionDetail>(`/sessions/${id}?limit=${limit}${before ? `&before=${before}` : ''}`),
 
     /** Names of the SSH keys in data/secrets/ssh (never their contents). */
     sshKeys: () => request<SshKeys>('/hosts/keys'),
     /** `ssh -o BatchMode=yes user@host echo ok` with the chosen key, or for a shared host by name. */
-    testHost: (target: HostTarget) => request<HostTest>('/hosts/test', { method: 'POST', body: JSON.stringify(targetBody(target)) }),
+    testHost: (target: HostTarget) =>
+        request<HostTest>('/hosts/test', { method: 'POST', body: JSON.stringify(targetBody(target)) }),
     /** The keys the server offers, with fingerprints to compare before trusting. */
     keyscanHost: (target: HostTarget) =>
-        request<{ host: string; port: string | null; known: boolean; keys: HostKey[] }>('/hosts/keyscan', { method: 'POST', body: JSON.stringify(targetBody(target)) }),
+        request<{ host: string; port: string | null; known: boolean; keys: HostKey[] }>('/hosts/keyscan', {
+            method: 'POST',
+            body: JSON.stringify(targetBody(target))
+        }),
     /** Write the scanned lines into the factory's known_hosts; `replace` drops the server's old entries first. */
     trustHost: (target: HostTarget, lines: string[], replace: boolean) =>
-        request<{ file: string }>('/hosts/trust', { method: 'POST', body: JSON.stringify({ ...targetBody(target), lines, replace }) }),
+        request<{ file: string }>('/hosts/trust', {
+            method: 'POST',
+            body: JSON.stringify({ ...targetBody(target), lines, replace })
+        }),
     /** The shared hosts with the projects using each, plus hosts still written inside project files. */
     hosts: () => request<HostsOverview>('/hosts'),
     /** Create or update a shared host; a different `name` in the body renames it and the projects follow. `create` refuses to replace an existing name (409). */
     saveHost: (name: string, host: Omit<SharedHost, 'name'> & { name?: string }, create = false) =>
-        request<HostView>(`/hosts/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, { method: 'PUT', body: JSON.stringify(host) }),
+        request<HostView>(`/hosts/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
+            method: 'PUT',
+            body: JSON.stringify(host)
+        }),
     /** Remove a shared host; `detach` also drops it from the projects that use it (refused otherwise). */
-    deleteHost: (name: string, detach = false) => request<void>(`/hosts/${encodeURIComponent(name)}${detach ? '?detach=1' : ''}`, { method: 'DELETE' }),
+    deleteHost: (name: string, detach = false) =>
+        request<void>(`/hosts/${encodeURIComponent(name)}${detach ? '?detach=1' : ''}`, { method: 'DELETE' }),
 
     schedules: () => request<ScheduleView[]>('/schedules/status'),
     /** A cron expression read back: valid or not, in words, next firing in the factory's zone. */
     checkCron: (expr: string) => request<CronCheck>(`/schedules/cron?expr=${encodeURIComponent(expr)}`),
     schedule: (name: string) => request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/status`),
     /** The firings that mattered (a task, an error, a missed minute); `all` adds the empty polls and skips. */
-    scheduleRuns: (name: string, limit = 30, all = false) => request<ScheduleRun[]>(`/schedules/${encodeURIComponent(name)}/runs?limit=${limit}${all ? '&all=1' : ''}`),
+    scheduleRuns: (name: string, limit = 30, all = false) =>
+        request<ScheduleRun[]>(`/schedules/${encodeURIComponent(name)}/runs?limit=${limit}${all ? '&all=1' : ''}`),
     /** Fire now: ignores the cron, the window and the soft-stop; never overlaps a run in progress. */
-    runSchedule: (name: string) => request<ScheduleRun>(`/schedules/${encodeURIComponent(name)}/run`, { method: 'POST' }),
+    runSchedule: (name: string) =>
+        request<ScheduleRun>(`/schedules/${encodeURIComponent(name)}/run`, { method: 'POST' }),
     /** Run the prefilter and show what it finds without marking anything. */
-    previewSchedule: (name: string) => request<SchedulePreview>(`/schedules/${encodeURIComponent(name)}/preview`, { method: 'POST' }),
-    enableSchedule: (name: string, enabled: boolean) => request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
-    forgetScheduleSeen: (name: string) => request<{ forgotten: number }>(`/schedules/${encodeURIComponent(name)}/seen`, { method: 'DELETE' }),
+    previewSchedule: (name: string) =>
+        request<SchedulePreview>(`/schedules/${encodeURIComponent(name)}/preview`, { method: 'POST' }),
+    enableSchedule: (name: string, enabled: boolean) =>
+        request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/enabled`, {
+            method: 'PUT',
+            body: JSON.stringify({ enabled })
+        }),
+    forgetScheduleSeen: (name: string) =>
+        request<{ forgotten: number }>(`/schedules/${encodeURIComponent(name)}/seen`, { method: 'DELETE' }),
 
     presets: () => request<Preset[]>('/presets'),
     installPreset: (name: string, overwrite = false) =>
-        request<{ installed: Preset['files'] }>(`/presets/${name}/install`, { method: 'POST', body: JSON.stringify({ overwrite }) })
+        request<{ installed: Preset['files'] }>(`/presets/${name}/install`, {
+            method: 'POST',
+            body: JSON.stringify({ overwrite })
+        })
 }
 
 /**
@@ -753,8 +825,8 @@ export function streamConversation(
     const open = () => {
         if (closed) return
         source = new EventSource(`/api/conversations/${id}/stream?after=${after()}`)
-        source.addEventListener('task', (e) => handlers.onTask?.(JSON.parse((e as MessageEvent).data)))
-        source.addEventListener('event', (e) => handlers.onEvent?.(JSON.parse((e as MessageEvent).data)))
+        source.addEventListener('task', (e) => handlers.onTask?.(JSON.parse(e.data as string) as Task))
+        source.addEventListener('event', (e) => handlers.onEvent?.(JSON.parse(e.data as string) as TaskEvent))
         source.onopen = () => {
             if (connections++ > 0) handlers.onReconnect?.()
         }
@@ -773,16 +845,19 @@ export function streamConversation(
 }
 
 /** Every token the task sent or received, cache included — what the subscription meters. */
-export const taskTokens = (t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'>) =>
-    t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
+export const taskTokens = (
+    t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'>
+) => t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
 
 export const fmt = {
     /** "1 run", "3 runs". */
     plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`,
-    tokens: (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)),
+    tokens: (n: number) =>
+        n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n),
     pct: (share: number) => `${Math.round(share * 100)}%`,
     /** A task's share of the 5-hour window: "+3% of 5h", "<1% of 5h" or null. */
-    windowDelta: (share: number | null) => (share === null ? null : share < 0.01 ? '<1% of 5h' : `+${Math.round(share * 100)}% of 5h`),
+    windowDelta: (share: number | null) =>
+        share === null ? null : share < 0.01 ? '<1% of 5h' : `+${Math.round(share * 100)}% of 5h`,
     /** Time left until an ISO timestamp: "2h 15m", "3d", "now". */
     until: (iso: string) => {
         const ms = new Date(iso).getTime() - Date.now()
@@ -792,7 +867,8 @@ export const fmt = {
         if (h >= 48) return `${Math.round(h / 24)}d`
         return h > 0 ? `${h}h ${m}m` : `${m}m`
     },
-    duration: (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`),
+    duration: (ms: number) =>
+        ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`,
     when: (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—'),
     ago: (iso: string | null) => {
         if (!iso) return '—'
@@ -802,5 +878,6 @@ export const fmt = {
         if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h ago`
         return `${Math.floor(diff / 86_400_000)} d ago`
     },
-    bytes: (n: number) => (n < 1024 ? `${n} B` : n < 1_048_576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1_048_576).toFixed(1)} MB`)
+    bytes: (n: number) =>
+        n < 1024 ? `${n} B` : n < 1_048_576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1_048_576).toFixed(1)} MB`
 }

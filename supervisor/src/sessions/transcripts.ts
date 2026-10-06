@@ -80,9 +80,19 @@ export class Transcripts {
                 })
             }
         }
-        out.sort((a, b) => (a.updated_at === b.updated_at ? (a.session_id < b.session_id ? 1 : -1) : a.updated_at < b.updated_at ? 1 : -1))
+        out.sort((a, b) =>
+            a.updated_at === b.updated_at
+                ? a.session_id < b.session_id
+                    ? 1
+                    : -1
+                : a.updated_at < b.updated_at
+                  ? 1
+                  : -1
+        )
         const after = (entry: TranscriptSummary) =>
-            !before || entry.updated_at < before.ts || (entry.updated_at === before.ts && before.id !== undefined && entry.session_id < before.id)
+            !before ||
+            entry.updated_at < before.ts ||
+            (entry.updated_at === before.ts && before.id !== undefined && entry.session_id < before.id)
         return out.filter(after).slice(0, limit)
     }
 
@@ -96,7 +106,10 @@ export class Transcripts {
      * call; transcripts are append-only, so the indices are stable while a
      * client pages backwards.
      */
-    async read(sessionId: string, options: { before?: number; limit?: number } = {}): Promise<{ entries: TranscriptEntry[]; offset: number; stats: TranscriptStats } | null> {
+    async read(
+        sessionId: string,
+        options: { before?: number; limit?: number } = {}
+    ): Promise<{ entries: TranscriptEntry[]; offset: number; stats: TranscriptStats } | null> {
         const summary = this.find(sessionId)
         if (!summary) return null
         const all: TranscriptEntry[] = []
@@ -114,7 +127,8 @@ export class Transcripts {
             if ((entry.type === 'user' || entry.type === 'assistant') && entry.message) stats.messages++
             const u = entry.message?.usage
             if (u) {
-                stats.tokens_in += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+                stats.tokens_in +=
+                    (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
                 stats.tokens_out += u.output_tokens ?? 0
             }
         }
@@ -137,7 +151,9 @@ export class Transcripts {
                 const text =
                     typeof content === 'string'
                         ? content
-                        : (content ?? []).map((block) => (block.type === 'text' ? String(block.text ?? '') : '')).join('')
+                        : (content ?? [])
+                              .map((block) => (block.type === 'text' ? String(block.text ?? '') : ''))
+                              .join('')
                 if (text.trim()) firstPrompt = text.trim().slice(0, 120)
             } catch {
                 // ignore

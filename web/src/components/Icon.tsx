@@ -1,4 +1,31 @@
-import { Activity, Bell, BellOff, Bot, CalendarClock, ClipboardList, Eye, EyeOff, FileText, FolderGit2, Gauge, KeyRound, LayoutDashboard, ListChecks, LogOut, MessageSquare, Package, Send, Server, Settings, ShieldCheck, Trash2, TriangleAlert, type LucideIcon, X, Zap } from 'lucide-react'
+import {
+    Activity,
+    Bell,
+    BellOff,
+    Bot,
+    CalendarClock,
+    ClipboardList,
+    Eye,
+    EyeOff,
+    FileText,
+    FolderGit2,
+    Gauge,
+    KeyRound,
+    LayoutDashboard,
+    ListChecks,
+    LogOut,
+    type LucideIcon,
+    MessageSquare,
+    Package,
+    Send,
+    Server,
+    Settings,
+    ShieldCheck,
+    Trash2,
+    TriangleAlert,
+    X,
+    Zap
+} from 'lucide-react'
 
 /**
  * One icon per concept, used by the sidebar, tiles and card heads alike so
@@ -46,14 +73,24 @@ export type IconName = keyof typeof ICONS
 
 export function Icon({ name, size, className }: { name: IconName; size?: number; className?: string }) {
     const Component = ICONS[name]
-    return <Component size={size} strokeWidth={1.75} className={className} aria-hidden />
+    return (
+        <Component
+            size={size}
+            strokeWidth={1.75}
+            className={className}
+            aria-hidden
+        />
+    )
 }
 
 /** Inline "icon + word" for a conversation's channel; a schedule's conversation says so instead of "web". */
 export function Channel({ channel, schedule }: { channel: 'telegram' | 'web'; schedule?: boolean }) {
     return (
-        <span className="channel">
-            <Icon name={schedule ? 'schedules' : channel} size={12} />
+        <span className='channel'>
+            <Icon
+                name={schedule ? 'schedules' : channel}
+                size={12}
+            />
             {schedule ? 'schedule' : channel}
         </span>
     )

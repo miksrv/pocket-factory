@@ -95,7 +95,7 @@ export class Hosts {
         if (!fs.existsSync(this.file)) return { hosts: [], error: null }
         try {
             const doc = YAML.parse(fs.readFileSync(this.file, 'utf8')) as { hosts?: unknown } | null
-            const raw = Array.isArray(doc?.hosts) ? doc!.hosts : []
+            const raw = Array.isArray(doc?.hosts) ? doc.hosts : []
             const hosts = raw
                 .filter((h): h is Record<string, unknown> => Boolean(h) && typeof h === 'object')
                 .filter((h) => typeof h.name === 'string' && typeof h.ssh === 'string')
@@ -127,8 +127,13 @@ export class Hosts {
             this.catalog.list(kind).map((entry) => ({
                 kind,
                 slug: entry.name,
-                hosts: (Array.isArray(entry.frontmatter.hosts) ? entry.frontmatter.hosts : []).flatMap((h): ProjectHost[] =>
-                    h && typeof h === 'object' ? [h as ProjectHost] : kind === 'schedules' && typeof h === 'string' && h.trim() ? [{ host: h.trim() }] : []
+                hosts: (Array.isArray(entry.frontmatter.hosts) ? entry.frontmatter.hosts : []).flatMap(
+                    (h): ProjectHost[] =>
+                        h && typeof h === 'object'
+                            ? [h as ProjectHost]
+                            : kind === 'schedules' && typeof h === 'string' && h.trim()
+                              ? [{ host: h.trim() }]
+                              : []
                 )
             }))
         )
@@ -144,7 +149,10 @@ export class Hosts {
                 if (isHostRef(h)) {
                     const view = views.find((v) => v.name === h.host)
                     // A dangling reference still shows, so the owner sees the broken link and can fix it.
-                    if (view) view.projects.push(clean({ project: slug, kind: usageKind, path: str(h.path), notes: str(h.notes) }))
+                    if (view)
+                        view.projects.push(
+                            clean({ project: slug, kind: usageKind, path: str(h.path), notes: str(h.notes) })
+                        )
                     else views.push({ name: h.host, ssh: '', projects: [{ project: slug, kind: usageKind }] })
                     return
                 }
@@ -163,14 +171,16 @@ export class Hosts {
      */
     save(name: string, host: Omit<SharedHost, 'name'> & { name?: string }): HostView {
         const target = host.name?.trim() || name
-        for (const n of [name, target]) if (!NAME.test(n)) throw new BadName(`Invalid host name "${n}": use letters, digits, dot, dash, underscore`)
+        for (const n of [name, target])
+            if (!NAME.test(n)) throw new BadName(`Invalid host name "${n}": use letters, digits, dot, dash, underscore`)
         const ssh = host.ssh.trim()
         if (!SSH_TARGET.test(ssh)) throw new BadName('ssh target must look like user@host or user@host:port')
         if (host.key && !KEY_NAME.test(host.key)) throw new BadName('invalid key name')
         const { hosts, error } = this.read()
         if (error) throw new Error(`hosts.yaml is not valid YAML (${error}); fix the file by hand first`)
         const index = hosts.findIndex((h) => h.name === name)
-        if (target !== name && hosts.some((h) => h.name === target)) throw new BadName(`a host named "${target}" already exists`)
+        if (target !== name && hosts.some((h) => h.name === target))
+            throw new BadName(`a host named "${target}" already exists`)
         const next = clean({ name: target, ssh, key: host.key?.trim() })
         if (index >= 0) hosts[index] = next
         else hosts.push(next)
@@ -185,7 +195,11 @@ export class Hosts {
         if (error) throw new Error(`hosts.yaml is not valid YAML (${error}); fix the file by hand first`)
         if (!hosts.some((h) => h.name === name)) throw new NotFound(`host "${name}" not found`)
         const used = this.list().hosts.find((h) => h.name === name)?.projects ?? []
-        if (used.length && !detach) throw new InUse(`host "${name}" is used by ${used.map((u) => u.project).join(', ')}`, used.map((u) => u.project))
+        if (used.length && !detach)
+            throw new InUse(
+                `host "${name}" is used by ${used.map((u) => u.project).join(', ')}`,
+                used.map((u) => u.project)
+            )
         if (used.length) this.rewriteRefs(name, () => null)
         this.write(hosts.filter((h) => h.name !== name))
     }
@@ -219,5 +233,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 
 /** Drop empty optional fields so the YAML stays as short as the owner wrote it. */
 function clean<T extends object>(obj: T): T {
-    return Object.fromEntries(Object.entries(obj as Record<string, unknown>).filter(([, v]) => v !== undefined && v !== '')) as T
+    return Object.fromEntries(
+        Object.entries(obj as Record<string, unknown>).filter(([, v]) => v !== undefined && v !== '')
+    ) as T
 }

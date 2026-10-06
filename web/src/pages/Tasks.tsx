@@ -1,41 +1,66 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import { EventFeed } from '../components/EventFeed'
-import { LoadMore } from '../components/LoadMore'
 import { AskForm } from '../components/Ask'
 import { SentAttachments } from '../components/Attachments'
 import { Changes } from '../components/Changes'
+import { EventFeed } from '../components/EventFeed'
+import { LoadMore } from '../components/LoadMore'
 import { Empty, ErrorBox, FilterSelect, PageHead, Stat, StatusBadge, StopButton, Tabs } from '../components/ui'
-import { api, fmt, taskTokens, type TaskStatus } from '../lib/api'
+import { api, fmt, type TaskStatus, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { usePaged } from '../lib/usePaged'
 
-const FILTERS = (['all', 'running', 'queued', 'done', 'failed', 'cancelled'] as const).map((value) => ({ value, label: value }))
+const FILTERS = (['all', 'running', 'queued', 'done', 'failed', 'cancelled'] as const).map((value) => ({
+    value,
+    label: value
+}))
 const PAGE = 50
 
 export function TasksPage() {
     const [filter, setFilter] = useState<TaskStatus | 'all'>('all')
     const [project, setProject] = useState('')
     const projects = useAsync(() => api.taskProjects(), [], 30_000)
-    const tasks = usePaged((before) => api.tasks({ status: filter === 'all' ? undefined : filter, project: project || undefined, before, limit: PAGE }), {
-        key: (t) => t.id,
-        cursor: (t) => t.created_at,
-        pageSize: PAGE,
-        deps: [filter, project],
-        pollMs: 5_000
-    })
+    const tasks = usePaged(
+        (before) =>
+            api.tasks({
+                status: filter === 'all' ? undefined : filter,
+                project: project || undefined,
+                before,
+                limit: PAGE
+            }),
+        {
+            key: (t) => t.id,
+            cursor: (t) => t.created_at,
+            pageSize: PAGE,
+            deps: [filter, project],
+            pollMs: 5_000
+        }
+    )
 
     return (
-        <div className="page fill">
-            <PageHead title="Tasks" sub="Every task from every channel — Telegram, web, schedules." />
+        <div className='page fill'>
+            <PageHead
+                title='Tasks'
+                sub='Every task from every channel — Telegram, web, schedules.'
+            />
             <ErrorBox error={tasks.error} />
-            <div className="card pad0">
-                <div className="audit-bar">
-                    <Tabs items={FILTERS} value={filter} onChange={setFilter} />
-                    <FilterSelect label="Project" all="all projects" value={project} onChange={setProject} options={projects.data ?? []} />
+            <div className='card pad0'>
+                <div className='audit-bar'>
+                    <Tabs
+                        items={FILTERS}
+                        value={filter}
+                        onChange={setFilter}
+                    />
+                    <FilterSelect
+                        label='Project'
+                        all='all projects'
+                        value={project}
+                        onChange={setProject}
+                        options={projects.data ?? []}
+                    />
                 </div>
-                <div className="card-scroll">
+                <div className='card-scroll'>
                     {tasks.items.length ? (
                         <table>
                             <thead>
@@ -58,27 +83,45 @@ export function TasksPage() {
                                         <td>
                                             <StatusBadge status={task.status} />
                                         </td>
-                                        <td className="col-main">
+                                        <td className='col-main'>
                                             <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
-                                            {task.error && task.status === 'failed' && <div className="error small">{task.error.slice(0, 160)}</div>}
+                                            {task.error && task.status === 'failed' && (
+                                                <div className='error small'>{task.error.slice(0, 160)}</div>
+                                            )}
                                         </td>
-                                        <td>{task.project ? <span className="badge plain">{task.project}</span> : <span className="dim">—</span>}</td>
+                                        <td>
+                                            {task.project ? (
+                                                <span className='badge plain'>{task.project}</span>
+                                            ) : (
+                                                <span className='dim'>—</span>
+                                            )}
+                                        </td>
                                         <td>
                                             {task.schedule ? (
-                                                <Link to={`/schedules/${task.schedule}`} className="badge plain" title="Queued by this schedule">
+                                                <Link
+                                                    to={`/schedules/${task.schedule}`}
+                                                    className='badge plain'
+                                                    title='Queued by this schedule'
+                                                >
                                                     ⏱ {task.schedule}
                                                 </Link>
                                             ) : (
-                                                <span className="badge plain">{task.source}</span>
+                                                <span className='badge plain'>{task.source}</span>
                                             )}
                                         </td>
                                         <td>{task.num_turns}</td>
-                                        <td className="nowrap">{fmt.tokens(taskTokens(task))}</td>
-                                        <td className="dim nowrap">{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
-                                        <td className="nowrap">{fmt.duration(task.duration_ms)}</td>
-                                        <td className="dim nowrap">{fmt.ago(task.created_at)}</td>
+                                        <td className='nowrap'>{fmt.tokens(taskTokens(task))}</td>
+                                        <td className='dim nowrap'>{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
+                                        <td className='nowrap'>{fmt.duration(task.duration_ms)}</td>
+                                        <td className='dim nowrap'>{fmt.ago(task.created_at)}</td>
                                         <td>
-                                            {(task.status === 'running' || task.status === 'queued') && <StopButton taskId={task.id} size="sm" onStopped={tasks.reload} />}
+                                            {(task.status === 'running' || task.status === 'queued') && (
+                                                <StopButton
+                                                    taskId={task.id}
+                                                    size='sm'
+                                                    onStopped={tasks.reload}
+                                                />
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
@@ -87,7 +130,13 @@ export function TasksPage() {
                     ) : (
                         <Empty>{tasks.loading ? 'Loading…' : 'No tasks.'}</Empty>
                     )}
-                    <LoadMore hasMore={tasks.hasMore} loading={tasks.loading} onMore={tasks.loadMore} shown={tasks.items.length} noun="tasks" />
+                    <LoadMore
+                        hasMore={tasks.hasMore}
+                        loading={tasks.loading}
+                        onMore={tasks.loadMore}
+                        shown={tasks.items.length}
+                        noun='tasks'
+                    />
                 </div>
             </div>
         </div>
@@ -104,59 +153,116 @@ export function TaskPage() {
     useEffect(() => setLive(!t || active), [t, active])
 
     // A transient poll error must not replace the task on screen: it shows above it.
-    if (task.error && !t) return <div className="page"><ErrorBox error={task.error} /></div>
-    if (!t) return <div className="page dim">Loading…</div>
+    if (task.error && !t)
+        return (
+            <div className='page'>
+                <ErrorBox error={task.error} />
+            </div>
+        )
+    if (!t) return <div className='page dim'>Loading…</div>
 
     return (
-        <div className="page">
+        <div className='page'>
             <ErrorBox error={task.error} />
             <PageHead
-                title="Task"
+                title='Task'
                 sub={
-                    <span className="row wrap">
+                    <span className='row wrap'>
                         <StatusBadge status={t.status} />
-                        {t.project && <span className="badge plain">{t.project}</span>}
-                        <span className="dim">{t.source}</span>
-                        <span className="dim">{fmt.when(t.created_at)}</span>
+                        {t.project && <span className='badge plain'>{t.project}</span>}
+                        <span className='dim'>{t.source}</span>
+                        <span className='dim'>{fmt.when(t.created_at)}</span>
                         {t.conversation && <Link to={`/chat/${t.conversation_id}`}>open conversation</Link>}
                         {t.session_id && <Link to={`/sessions/${t.session_id}`}>transcript</Link>}
                     </span>
                 }
             >
-                {(t.status === 'running' || t.status === 'queued') && <StopButton taskId={t.id} onStopped={task.reload} />}
+                {(t.status === 'running' || t.status === 'queued') && (
+                    <StopButton
+                        taskId={t.id}
+                        onStopped={task.reload}
+                    />
+                )}
             </PageHead>
 
-            <div className="cards" style={{ marginBottom: 16 }}>
-                <Stat card label="Turns" value={t.num_turns} />
-                <Stat card label="Duration" value={fmt.duration(t.duration_ms)} />
-                <Stat card label="Tokens" value={fmt.tokens(taskTokens(t))} sub={`${fmt.tokens(t.input_tokens)} in · ${fmt.tokens(t.output_tokens)} out · ${fmt.tokens(t.cache_read_tokens)} cache read · ${fmt.tokens(t.cache_creation_tokens)} cache write`} />
-                <Stat card label="5-hour window" value={fmt.windowDelta(t.window_5h_delta) ?? '—'} sub={t.window_5h_delta === null ? 'not reported by the CLI' : 'share of the window this task consumed'} />
+            <div
+                className='cards'
+                style={{ marginBottom: 16 }}
+            >
+                <Stat
+                    card
+                    label='Turns'
+                    value={t.num_turns}
+                />
+                <Stat
+                    card
+                    label='Duration'
+                    value={fmt.duration(t.duration_ms)}
+                />
+                <Stat
+                    card
+                    label='Tokens'
+                    value={fmt.tokens(taskTokens(t))}
+                    sub={`${fmt.tokens(t.input_tokens)} in · ${fmt.tokens(t.output_tokens)} out · ${fmt.tokens(t.cache_read_tokens)} cache read · ${fmt.tokens(t.cache_creation_tokens)} cache write`}
+                />
+                <Stat
+                    card
+                    label='5-hour window'
+                    value={fmt.windowDelta(t.window_5h_delta) ?? '—'}
+                    sub={
+                        t.window_5h_delta === null
+                            ? 'not reported by the CLI'
+                            : 'share of the window this task consumed'
+                    }
+                />
             </div>
 
-            <Changes task={t} onChanged={task.reload} />
+            <Changes
+                task={t}
+                onChanged={task.reload}
+            />
 
             <h2>Prompt</h2>
-            <div className="card" style={{ whiteSpace: 'pre-wrap' }}>
+            <div
+                className='card'
+                style={{ whiteSpace: 'pre-wrap' }}
+            >
                 {t.prompt}
-                <SentAttachments conversationId={t.conversation_id} attachments={t.attachments} removed={Boolean(t.conversation?.deleted_at)} />
+                <SentAttachments
+                    conversationId={t.conversation_id}
+                    attachments={t.attachments}
+                    removed={Boolean(t.conversation?.deleted_at)}
+                />
             </div>
 
             {t.status === 'queued' && t.not_before && (
-                <div className="card working waiting" style={{ marginTop: 12 }} title={fmt.when(t.not_before)}>
-                    ⏸ Subscription limit reached. The task continues by itself in {fmt.until(t.not_before)}, in the same session.
+                <div
+                    className='card working waiting'
+                    style={{ marginTop: 12 }}
+                    title={fmt.when(t.not_before)}
+                >
+                    ⏸ Subscription limit reached. The task continues by itself in {fmt.until(t.not_before)}, in the same
+                    session.
                 </div>
             )}
 
             {t.status === 'running' && t.ask && (
                 <>
                     <h2>Waiting for you</h2>
-                    <AskForm task={t} onAnswered={task.reload} />
+                    <AskForm
+                        task={t}
+                        onAnswered={task.reload}
+                    />
                 </>
             )}
 
             <h2>Output</h2>
-            <div className="card">
-                <EventFeed events={t.events} finalText={t.status === 'done' ? t.result : null} error={t.status === 'failed' ? t.error : null} />
+            <div className='card'>
+                <EventFeed
+                    events={t.events}
+                    finalText={t.status === 'done' ? t.result : null}
+                    error={t.status === 'failed' ? t.error : null}
+                />
             </div>
         </div>
     )

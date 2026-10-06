@@ -37,7 +37,20 @@ export interface ModalProps {
     content?: ReactNode
 }
 
-export function Modal({ open, onClose, title, description, icon, tone, footer, busy, closeButton = true, size, children, content }: ModalProps) {
+export function Modal({
+    open,
+    onClose,
+    title,
+    description,
+    icon,
+    tone,
+    footer,
+    busy,
+    closeButton = true,
+    size,
+    children,
+    content
+}: ModalProps) {
     const ref = useRef<HTMLDialogElement>(null)
     const id = useId()
     const downOnBackdrop = useRef(false)
@@ -88,25 +101,41 @@ export function Modal({ open, onClose, title, description, icon, tone, footer, b
             onPointerDown={onPointerDown}
             onClick={onClick}
         >
-            <div className="modal-body">
-                {icon && <Tile icon={icon} color={tone === 'danger' ? 'red' : 'gray'} />}
-                <div className="grow modal-main">
-                    <h2 id={`${id}-title`} className="modal-title">
+            <div className='modal-body'>
+                {icon && (
+                    <Tile
+                        icon={icon}
+                        color={tone === 'danger' ? 'red' : 'gray'}
+                    />
+                )}
+                <div className='grow modal-main'>
+                    <h2
+                        id={`${id}-title`}
+                        className='modal-title'
+                    >
                         {title}
                     </h2>
                     {description && (
-                        <div id={`${id}-desc`} className="modal-text">
+                        <div
+                            id={`${id}-desc`}
+                            className='modal-text'
+                        >
                             {description}
                         </div>
                     )}
                     {children}
                 </div>
                 {closeButton && (
-                    <CloseButton className="modal-close" label="Close" onClick={dismiss} disabled={busy} />
+                    <CloseButton
+                        className='modal-close'
+                        label='Close'
+                        onClick={dismiss}
+                        disabled={busy}
+                    />
                 )}
             </div>
-            {content && <div className="modal-content">{content}</div>}
-            {footer && <div className="modal-foot">{footer}</div>}
+            {content && <div className='modal-content'>{content}</div>}
+            {footer && <div className='modal-foot'>{footer}</div>}
         </dialog>
     )
 }
@@ -145,7 +174,13 @@ export function ConfirmDialog({
     error,
     onConfirm,
     onCancel
-}: Omit<ConfirmOptions, 'onConfirm'> & { open: boolean; busy?: boolean; error?: string | null; onConfirm: () => void; onCancel: () => void }) {
+}: Omit<ConfirmOptions, 'onConfirm'> & {
+    open: boolean
+    busy?: boolean
+    error?: string | null
+    onConfirm: () => void
+    onCancel: () => void
+}) {
     return (
         <Modal
             open={open}
@@ -158,17 +193,29 @@ export function ConfirmDialog({
             closeButton={false}
             footer={
                 <>
-                    <Button onClick={onCancel} disabled={busy} data-autofocus={danger || undefined}>
+                    <Button
+                        onClick={onCancel}
+                        disabled={busy}
+                        data-autofocus={danger || undefined}
+                    >
                         {cancel}
                     </Button>
-                    <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm} disabled={busy} data-autofocus={!danger || undefined}>
+                    <Button
+                        variant={danger ? 'danger' : 'primary'}
+                        onClick={onConfirm}
+                        disabled={busy}
+                        data-autofocus={!danger || undefined}
+                    >
                         {busy ? (pending ?? `${action}…`) : action}
                     </Button>
                 </>
             }
         >
             {error && (
-                <div className="error small modal-error" role="alert">
+                <div
+                    className='error small modal-error'
+                    role='alert'
+                >
                     {error}
                 </div>
             )}
@@ -229,7 +276,16 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     return (
         <ConfirmContext.Provider value={confirm}>
             {children}
-            {request && <ConfirmDialog {...request.options} open={open} busy={busy} error={error} onConfirm={() => void run()} onCancel={() => !busy && settle(false)} />}
+            {request && (
+                <ConfirmDialog
+                    {...request.options}
+                    open={open}
+                    busy={busy}
+                    error={error}
+                    onConfirm={() => void run()}
+                    onCancel={() => !busy && settle(false)}
+                />
+            )}
         </ConfirmContext.Provider>
     )
 }

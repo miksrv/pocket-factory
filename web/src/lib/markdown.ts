@@ -44,5 +44,5 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
  * rendered with `breaks: false` so the wraps disappear.
  */
 export function renderMarkdown(source: string, options: { breaks?: boolean } = {}): string {
-    return DOMPurify.sanitize(marked.parse(source, { async: false, breaks: options.breaks ?? true }) as string)
+    return DOMPurify.sanitize(marked.parse(source, { async: false, breaks: options.breaks ?? true }))
 }

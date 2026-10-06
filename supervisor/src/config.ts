@@ -60,14 +60,6 @@ export interface Config {
     }
 }
 
-function required(name: string): string {
-    const value = process.env[name]?.trim()
-    if (!value) {
-        throw new Error(`Missing required environment variable ${name}`)
-    }
-    return value
-}
-
 function optional(name: string): string | undefined {
     const value = process.env[name]?.trim()
     return value ? value : undefined
@@ -117,7 +109,8 @@ export function loadConfig(): Config {
             dataRoot,
             // WORKSPACES_ROOT is set by the image; WORKSPACES_DIR is the host-side
             // .env value, reused here so `yarn dev` sees the same repositories.
-            workspacesRoot: optional('WORKSPACES_ROOT') ?? optional('WORKSPACES_DIR') ?? path.join(dataRoot, 'workspaces'),
+            workspacesRoot:
+                optional('WORKSPACES_ROOT') ?? optional('WORKSPACES_DIR') ?? path.join(dataRoot, 'workspaces'),
             configRoot: path.join(dataRoot, 'config'),
             dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
         },
@@ -176,7 +169,8 @@ function timeZone(tz: string): string {
 function share(name: string, fallback: number): number {
     const value = number(name, fallback)
     const normalized = value > 1 ? value / 100 : value
-    if (normalized < 0 || normalized > 1) throw new Error(`${name} must be between 0 and 1 (or 0 and 100), got "${value}"`)
+    if (normalized < 0 || normalized > 1)
+        throw new Error(`${name} must be between 0 and 1 (or 0 and 100), got "${value}"`)
     return normalized
 }
 

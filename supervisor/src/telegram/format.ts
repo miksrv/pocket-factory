@@ -22,13 +22,16 @@ function inline(text: string): string {
         return `\u0000${kept.length - 1}\u0000`
     }
     let out = text.replace(/`([^`\n]+)`/g, (_, code: string) => keep(`<code>${escapeHtml(code)}</code>`))
-    out = out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label: string, url: string) => keep(`<a href="${escapeHtml(url).replace(/"/g, '&quot;')}">${escapeHtml(label)}</a>`))
+    out = out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label: string, url: string) =>
+        keep(`<a href="${escapeHtml(url).replace(/"/g, '&quot;')}">${escapeHtml(label)}</a>`)
+    )
     out = escapeHtml(out)
     out = out.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
     out = out.replace(/__([^_\n]+)__/g, '<b>$1</b>')
     out = out.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<i>$2</i>')
     out = out.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<i>$2</i>')
     out = out.replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
+    // eslint-disable-next-line no-control-regex -- NUL marks the placeholders of the kept spans
     return out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => kept[Number(i)])
 }
 

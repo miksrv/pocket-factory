@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 
 import { createBot } from './bot.js'
@@ -12,10 +13,9 @@ import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
 import { TaskService, type Workspace } from './tasks/service.js'
-import fs from 'node:fs'
+import { VERSION } from './version.js'
 import { WebAuth } from './web/auth.js'
 import { startServer } from './web/server.js'
-import { VERSION } from './version.js'
 
 const log = createLogger('supervisor')
 
@@ -38,7 +38,10 @@ async function main(): Promise<void> {
     const store = new Store(openDatabase(config.paths.dbFile))
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)
     const hosts = new Hosts(path.join(config.paths.configRoot, 'hosts.yaml'), catalog)
-    const knownHosts = new KnownHosts(path.join(config.paths.configRoot, 'known_hosts'), path.join(config.paths.dataRoot, 'secrets', 'ssh', 'known_hosts'))
+    const knownHosts = new KnownHosts(
+        path.join(config.paths.configRoot, 'known_hosts'),
+        path.join(config.paths.dataRoot, 'secrets', 'ssh', 'known_hosts')
+    )
     const transcripts = new Transcripts(config.claude.configDir)
     // What the session manager needs from the project files and the transcript index.
     // A project is named by its file, but tasks name it by the checkout directory
@@ -48,7 +51,10 @@ async function main(): Promise<void> {
         if (catalog.exists('projects', slug)) return catalog.get('projects', slug)
         const wanted = slug.toLowerCase()
         return catalog.list('projects').find((entry) => {
-            const dir = typeof entry.frontmatter.path === 'string' && entry.frontmatter.path ? entry.frontmatter.path : path.join(config.paths.workspacesRoot, entry.name)
+            const dir =
+                typeof entry.frontmatter.path === 'string' && entry.frontmatter.path
+                    ? entry.frontmatter.path
+                    : path.join(config.paths.workspacesRoot, entry.name)
             return entry.name.toLowerCase() === wanted || path.basename(dir).toLowerCase() === wanted
         })
     }
@@ -56,14 +62,24 @@ async function main(): Promise<void> {
         projectPath: (slug) => {
             const entry = projectEntry(slug)
             if (!entry) return null
-            const dir = typeof entry.frontmatter.path === 'string' && entry.frontmatter.path ? entry.frontmatter.path : path.join(config.paths.workspacesRoot, entry.name)
+            const dir =
+                typeof entry.frontmatter.path === 'string' && entry.frontmatter.path
+                    ? entry.frontmatter.path
+                    : path.join(config.paths.workspacesRoot, entry.name)
             return fs.existsSync(dir) ? dir : null
         },
         projectMcp: (slug) => {
             const dir = workspace.projectPath(slug)
             let declared: string[] = []
             try {
-                if (dir) declared = Object.keys((JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8')) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {})
+                if (dir)
+                    declared = Object.keys(
+                        (
+                            JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8')) as {
+                                mcpServers?: Record<string, unknown>
+                            }
+                        ).mcpServers ?? {}
+                    )
             } catch {
                 // no .mcp.json or not JSON
             }
@@ -75,7 +91,13 @@ async function main(): Promise<void> {
             catalog.list('agents').flatMap((entry) => {
                 const list = entry.frontmatter.mcpServers
                 if (!Array.isArray(list)) return []
-                return list.flatMap((item) => (item && typeof item === 'object' ? Object.keys(item as object) : typeof item === 'string' ? [item] : []))
+                return list.flatMap((item) =>
+                    item && typeof item === 'object'
+                        ? Object.keys(item as object)
+                        : typeof item === 'string'
+                          ? [item]
+                          : []
+                )
             }),
         sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null
     }
@@ -145,7 +167,7 @@ async function main(): Promise<void> {
             { command: 'run', description: 'Fire a schedule now: /run <name>' }
         ])
     } catch (error) {
-        log.warn(`could not register Telegram commands: ${error instanceof Error ? error.message : error}`)
+        log.warn(`could not register Telegram commands: ${error instanceof Error ? error.message : String(error)}`)
     }
     bot.start({
         onStart: (info) => log.info(`polling as @${info.username}`)
