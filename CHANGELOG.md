@@ -9,6 +9,37 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.1.1] - 2026-10-06
+
+Long tasks with sub-agents no longer end half-done with a "waiting for the report" reply, and a
+question asked right after such a task gets an answer instead of an empty reply.
+
+### Fixed
+
+- **Background sub-agents are no longer killed after 10 minutes.** In `-p` the CLI waits for
+  background work after the orchestrator's last turn only 10 minutes, then stops it and answers
+  with whatever was said last. A sub-agent continued with SendMessage always runs in the
+  background, so a long one was cut off mid-work and the task showed "done" with "Waiting for
+  the client report." as its result. The factory now starts the CLI with
+  `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` (wait for them; `CLAUDE_TASK_TIMEOUT_MIN` is the limit,
+  and the variable in `.env` still overrides).
+- **An empty reply to the next message.** A resumed session first ran a turn of its own about the
+  background tasks the previous run left behind and produced an empty result; the factory took it
+  as the answer and closed the CLI before it read the prompt. The CLI now echoes the prompt
+  (`--replay-user-messages`) and only the result after that echo counts; a CLI that exits before
+  taking the prompt fails the task with that reason.
+- A reply whose sub-agents were stopped before finishing, after the reply was written, now says so
+  ("A sub-agent stopped before finishing … Say "continue" to pick it up.") like a reply that came
+  while sub-agents were still running.
+
+### Changed
+
+- Dispatcher rules (`templates/claude/CLAUDE.md`): a sub-agent continued with SendMessage reports
+  back by a notification; a short status while it works is fine, a background `sleep` as a
+  fallback timer is not.
+- `CLAUDE.md`: the first real feature run is done, the toolchains plan (`docs/plans/toolchains.md`)
+  is on the list.
+
 ## [1.1.0] - 2026-10-06
 
 Photos and files with a task, tasks that wait out the subscription limit instead of failing, and

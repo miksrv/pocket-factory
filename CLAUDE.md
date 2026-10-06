@@ -553,8 +553,9 @@ the history up to the evening of 2026-09-28). Since then (all committed by 2026-
 Not done / next:
 
 1. Commit the batch above (the owner sets the commit budget).
-2. First real feature-to-pr / fullstack-feature run on a real repository, end to end from
-   Telegram: branch → developer → reviewer → checks → PR link.
+2. ~~First real feature-to-pr / fullstack-feature run on a real repository, end to end from
+   Telegram~~ — passed on mikserver (owner, 2026-10-06). Gap found: the container has no project
+   toolchains (Go, swag, golangci-lint, PHP, composer, phpunit), so checks cannot run there.
 3. Onboarding of the other three work repos (MCP sign-ins now go through Settings → MCP →
    Authorize; the console flow stays as the fallback).
 4. Email assistant: preset on the claude.ai Gmail connector, installed; the owner blanks
@@ -580,9 +581,12 @@ Not done / next:
    open PR) and mail cadence; an IMAP prefilter for mail.
 6. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram;
    README for forkers.
-7. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
+7. **Toolchains in the factory** (planned 2026-10-06, not started): mise + `data/tools`, PHP 8.2
+   from sury in the image, an optional `docker:dind` sidecar for test services; the owner's rule is
+   cleanliness (nothing on the host, nothing left after removal). Plan: `docs/plans/toolchains.md`.
+8. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
    audit log export.
-8. Release 1.1 from the October survey: ~~photos and files in~~ and ~~auto-continue after a window
+9. Release 1.1 from the October survey: ~~photos and files in~~ and ~~auto-continue after a window
    reset~~ and ~~the Changes panel~~ done 2026-10-06 (branch `feature/attachments-and-auto-continue`,
    not committed); next: Merge from the UI, files back to the chat. From the landscape survey (`docs/LANDSCAPE.md`), in priority order: ~~permission prompts /
    `AskUserQuestion` from Telegram and the web~~ (done 2026-09-30 over stream-json, see above;

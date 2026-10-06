@@ -6,6 +6,11 @@
 //   any prompt            → "Echo: <prompt>"
 //   a prompt with "ask"   → an AskUserQuestion control request first, then "You chose: <answer>"
 //   a prompt with "fail"  → an error result
+//   a prompt with "orphan" → first a result of the CLI's own (a resumed session's notifications
+//                           about background tasks left behind), then the answer
+//   a prompt with "stopped" → a sub-agent the CLI stops after the orchestrator's last turn
+//
+// With --replay-user-messages the prompt is echoed (`isReplay`, its `uuid`) once taken.
 import { randomUUID } from 'node:crypto'
 import readline from 'node:readline'
 
@@ -29,6 +34,7 @@ const resume = args.indexOf('--resume')
 const sessionId = resume >= 0 ? args[resume + 1] : randomUUID()
 const model = 'claude-sonnet-5-5'
 const ASK_ID = 'ask-1'
+const replay = args.includes('--replay-user-messages')
 let prompt = null
 
 const assistant = (text) =>
@@ -45,7 +51,7 @@ const assistant = (text) =>
         }
     })
 
-const finish = (text, isError = false) => {
+const finish = (text, isError = false, numTurns = 1) => {
     const now = Math.floor(Date.now() / 1000)
     out({
         type: 'rate_limit_event',
@@ -63,7 +69,7 @@ const finish = (text, isError = false) => {
         is_error: isError,
         result: text,
         session_id: sessionId,
-        num_turns: 1,
+        num_turns: numTurns,
         duration_ms: 42,
         total_cost_usd: 0,
         usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -92,8 +98,29 @@ rl.on('line', (line) => {
             tools: ['Read', 'Edit', 'Bash', 'AskUserQuestion'],
             mcp_servers: []
         })
+        if (/\borphan\b/i.test(prompt)) finish('', false, 0)
+        if (replay) out({ ...message, session_id: sessionId, parent_tool_use_id: null, isReplay: true })
         if (/\bfail\b/i.test(prompt)) {
             finish('Something went wrong on purpose.', true)
+        } else if (/\bstopped\b/i.test(prompt)) {
+            out({
+                type: 'system',
+                subtype: 'task_started',
+                session_id: sessionId,
+                tool_use_id: 'toolu_agent',
+                subagent_type: 'web-developer',
+                description: 'Build the client'
+            })
+            assistant('Waiting for the client report.')
+            out({
+                type: 'system',
+                subtype: 'task_notification',
+                session_id: sessionId,
+                tool_use_id: 'toolu_agent',
+                status: 'stopped',
+                summary: 'Build the client'
+            })
+            finish('Waiting for the client report.')
         } else if (/\bask\b/i.test(prompt)) {
             out({
                 type: 'control_request',
