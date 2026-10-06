@@ -1,6 +1,6 @@
 {
     "name": "pocket-factory",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "private": true,
     "description": "Personal software factory: Claude Code on a VPS, driven from Telegram by text or voice",
     "license": "MIT",

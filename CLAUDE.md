@@ -80,7 +80,13 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     switch sticks until the next reply elsewhere or `/new [project]`, which also resets it;
     `/status` names the current one. A Telegram task in a web conversation (a schedule's
     thread) reports back to the chat whose topic it is. A question from a task that is not
-    the chat's topic says "reply to this message with your answer"
+    the chat's topic says "reply to this message with your answer". **Web tasks in Telegram** (1.1.2):
+    `telegram/webNotify.ts` `WebNotifier` times a `web` task's reply (unread after
+    `TELEGRAM_WEB_NOTIFY_MIN`, default 2, by `read_at` vs `finished_at`) and its ask (same
+    request still open); then the bot sends it to the chat whose topic the thread is, else the
+    owner's, switches that chat's topic to the thread and marks the reply read. A task whose
+    question went there is escalated: its next questions and its reply go at once. Timers live
+    in memory, a restart forgets them
   - `files/catalog.ts` agents / skills / projects / schedules as Markdown+frontmatter; `files/hosts.ts` the
     shared SSH hosts (`data/config/hosts.yaml`, see below); `sessions/transcripts.ts`
     indexes Claude Code JSONL; `presets/`

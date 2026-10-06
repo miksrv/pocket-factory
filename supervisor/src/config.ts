@@ -5,6 +5,8 @@ export interface Config {
         /** Empty = Telegram disabled; the factory runs web-only. */
         botToken: string | undefined
         allowedUserIds: Set<number>
+        /** A web task's reply unread (or its question unanswered) in the web this long goes to Telegram; 0 = never. */
+        webNotifyAfterMs: number
     }
     claude: {
         configDir: string
@@ -92,7 +94,8 @@ export function loadConfig(): Config {
     return {
         telegram: {
             botToken,
-            allowedUserIds
+            allowedUserIds,
+            webNotifyAfterMs: Math.max(0, number('TELEGRAM_WEB_NOTIFY_MIN', 2)) * 60_000
         },
         claude: {
             // Also used outside Docker: with CLAUDE_CODE_OAUTH_TOKEN in .env the

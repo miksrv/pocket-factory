@@ -9,6 +9,23 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.1.2] - 2026-10-06
+
+A task started in the web UI no longer goes silent when the owner walks away from the laptop:
+Telegram hears about it and picks the thread up.
+
+### Added
+
+- **Web tasks reach Telegram when nobody is at the browser.** A reply of a web task that stays
+  unopened in the web for `TELEGRAM_WEB_NOTIFY_MIN` minutes (default 2; 0 = off) goes to
+  Telegram with the usual footer, and is then marked read. A question or permission request of
+  a web task unanswered for as long goes there too, with the buttons; once it did, the task's
+  next questions and its reply follow at once. "Opened" is the web's own read mark, so while
+  the thread is open in a visible tab Telegram stays quiet.
+- **The chat switches to that thread.** The message names the web thread, and the next text or
+  voice message in the chat continues it, exactly as after replying to a message of the bot;
+  `/new` comes back. Replying to any other message of the bot still switches to its thread.
+
 ## [1.1.1] - 2026-10-06
 
 Long tasks with sub-agents no longer end half-done with a "waiting for the report" reply, and a
