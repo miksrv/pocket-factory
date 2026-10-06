@@ -27,7 +27,8 @@ export interface HostKey {
     line: string
 }
 
-const KEY_TYPE = /^(?:ssh-(?:ed25519|rsa|dss)|ecdsa-sha2-nistp(?:256|384|521)|sk-(?:ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)$/
+const KEY_TYPE =
+    /^(?:ssh-(?:ed25519|rsa|dss)|ecdsa-sha2-nistp(?:256|384|521)|sk-(?:ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)$/
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
 
 /** The host as known_hosts names it: `host` on the default port, `[host]:port` otherwise. */
@@ -60,12 +61,23 @@ export class KnownHosts {
                     .filter((l) => l && !l.startsWith('#'))
                     .flatMap((line) => {
                         const parsed = parseLine(line)
-                        return parsed ? [{ ...parsed, line: `${hostSpec(host, port)} ${parsed.type} ${parsed.key}` }] : []
+                        return parsed
+                            ? [{ ...parsed, line: `${hostSpec(host, port)} ${parsed.type} ${parsed.key}` }]
+                            : []
                     })
                     .map(({ type, key, line }) => ({ type, fingerprint: fingerprint(key), line }))
                 if (keys.length) return resolve(keys)
-                const detail = stderr.trim().split('\n').filter((l) => l && !l.startsWith('#')).at(-1) ?? ''
-                reject(new Error(`no host key from ${hostSpec(host, port)}: ${detail || 'no answer within 10 s — wrong host or port, or a firewall in between'}`))
+                const detail =
+                    stderr
+                        .trim()
+                        .split('\n')
+                        .filter((l) => l && !l.startsWith('#'))
+                        .at(-1) ?? ''
+                reject(
+                    new Error(
+                        `no host key from ${hostSpec(host, port)}: ${detail || 'no answer within 10 s — wrong host or port, or a firewall in between'}`
+                    )
+                )
             })
         })
     }
@@ -88,16 +100,19 @@ export class KnownHosts {
         for (const raw of lines) {
             const line = raw.trim()
             const parsed = parseLine(line)
-            if (!parsed || parsed.host.toLowerCase() !== spec) throw new BadName(`not a host key line for ${spec}: "${line.slice(0, 40)}"`)
+            if (!parsed || parsed.host.toLowerCase() !== spec)
+                throw new BadName(`not a host key line for ${spec}: "${line.slice(0, 40)}"`)
             accepted.push(`${spec} ${parsed.type} ${parsed.key}`)
         }
         if (!accepted.length) throw new BadName('no host keys to trust')
         if (replace) await this.forget(host, port)
         fs.mkdirSync(path.dirname(this.file), { recursive: true })
-        const current = fs.existsSync(this.file) ? fs.readFileSync(this.file, 'utf8') : ''
+        const current = readIfExists(this.file)
         const fresh = accepted.filter((l) => !current.split('\n').some((c) => c.trim() === l))
         if (!fresh.length) return
-        fs.appendFileSync(this.file, `${current && !current.endsWith('\n') ? '\n' : ''}${fresh.join('\n')}\n`, { mode: 0o644 })
+        fs.appendFileSync(this.file, `${current && !current.endsWith('\n') ? '\n' : ''}${fresh.join('\n')}\n`, {
+            mode: 0o644
+        })
     }
 
     /** Drop every entry for the server (`ssh-keygen -R`); nothing to do when the file has none. */
@@ -129,4 +144,14 @@ function keygen(args: string[]): Promise<{ code: number; stdout: string; stderr:
             resolve({ code: error ? (typeof code === 'number' ? code : 1) : 0, stdout, stderr })
         })
     })
+}
+
+/** The file's text, or '' when it does not exist yet (read once: no exists-then-read race). */
+function readIfExists(file: string): string {
+    try {
+        return fs.readFileSync(file, 'utf8')
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+        throw error
+    }
 }

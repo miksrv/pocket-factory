@@ -9,7 +9,10 @@ import path from 'node:path'
  */
 function read(): string {
     try {
-        const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')) as { name?: string; version?: string }
+        const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')) as {
+            name?: string
+            version?: string
+        }
         if (pkg.name === 'pocket-factory' && typeof pkg.version === 'string') return pkg.version
     } catch {
         // fall through: a build layout without the root package.json

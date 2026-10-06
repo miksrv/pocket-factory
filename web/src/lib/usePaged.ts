@@ -25,7 +25,14 @@ export interface Paged<T> {
  */
 export function usePaged<T>(
     fetchPage: (before: Cursor | undefined) => Promise<T[]>,
-    options: { key: (item: T) => string; cursor: (item: T) => string; pageSize: number; deps?: unknown[]; pollMs?: number; hasMore?: (page: T[]) => boolean }
+    options: {
+        key: (item: T) => string
+        cursor: (item: T) => string
+        pageSize: number
+        deps?: unknown[]
+        pollMs?: number
+        hasMore?: (page: T[]) => boolean
+    }
 ): Paged<T> {
     const { key, cursor, pageSize, pollMs } = options
     const [items, setItems] = useState<T[]>([])
@@ -84,7 +91,12 @@ export function usePaged<T>(
                         // (finished, filtered out, deleted).
                         const fresh = new Set(page.map(key))
                         const floor = page.length ? page[page.length - 1] : undefined
-                        setItems((prev) => [...page, ...prev.filter((item) => !fresh.has(key(item)) && (floor === undefined || olderThan(item, floor)))])
+                        setItems((prev) => [
+                            ...page,
+                            ...prev.filter(
+                                (item) => !fresh.has(key(item)) && (floor === undefined || olderThan(item, floor))
+                            )
+                        ])
                     }
                 })
                 .catch((e: Error) => gen === generation.current && setError(e.message))

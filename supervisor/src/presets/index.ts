@@ -54,7 +54,7 @@ export class Presets {
         try {
             manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) as PresetManifest
         } catch (error) {
-            log.warn(`preset ${name}: preset.json is not valid JSON (${error instanceof Error ? error.message : error}); skipped`)
+            log.warn(`preset ${name}: preset.json is not valid JSON (${error instanceof Error ? error.message : String(error)}); skipped`)
             return undefined
         }
         const files: PresetFile[] = []

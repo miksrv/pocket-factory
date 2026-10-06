@@ -38,9 +38,24 @@ node scripts/release.mjs bump 1.2.0   # new version: package.json ×3 + a CHANGE
 node scripts/release.mjs tag          # after the merge, on a clean main in sync with origin: tag vX.Y.Z + GitHub release
 ```
 
-No test runner yet; smoke-test through the API (`curl localhost:8080/api/status`) or a scratch
-tsx script against `TaskService`. Lint/prettier not configured yet — follow the portfolio repo's
-style (4-space indent, single quotes, no trailing commas, 120 cols). For eyeballing the UI use
+Checks (2026-10-06, all run in CI, `.github/workflows/ci.yml`; `yarn check` runs the first four locally):
+
+```bash
+yarn format:check / yarn format   # Prettier (.prettierrc: 4 spaces, single quotes, no semis, no trailing commas, 120 cols)
+yarn lint / yarn lint:fix         # ESLint 10 flat config (eslint.config.mjs): typescript-eslint type-checked, react-hooks, import sort
+yarn typecheck                    # both workspaces + the root tsconfig (config files, e2e/)
+yarn test / yarn test:coverage    # Vitest projects: supervisor (node) + web (jsdom, Testing Library); coverage thresholds are a ratchet
+yarn build && yarn test:e2e       # Playwright against the built supervisor on :18099 with a fake `claude` (e2e/fixtures/bin/claude)
+```
+
+Unit tests sit next to the module (`foo.ts` → `foo.test.ts`); helpers in `supervisor/src/test/`
+(`createTestApp()`: a full AppContext on a temp DATA_ROOT, requests through `app.request`) and
+`web/src/test/` (`renderWithProviders`, `mockFetch`, a `<dialog>` stand-in for jsdom). A test that
+pins a known bug is `it.fails(...)` with a comment: fixing the bug turns it red, then drop `.fails`.
+The fake CLI answers "Echo: <prompt>", asks an AskUserQuestion for a prompt with "ask", fails for
+"fail". CI also runs actionlint, shellcheck on `docker/`, the Docker build + a smoke run of the
+image, dependency review and CodeQL; `CI passed` is the one check to require on `main`.
+For eyeballing the UI use
 `node scripts/screenshot.mjs <url> out.png` (DevTools protocol, no browser deps); plain
 `chrome --headless=new --screenshot` also works except on the Chat page, whose SSE stream keeps
 the load event from ever firing. Chrome's window is never narrower than 500px, so that is the

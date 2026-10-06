@@ -1,0 +1,212 @@
+name: CI
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+# A newer push to the same PR / branch cancels the run in progress.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+env:
+    FORCE_COLOR: '1'
+
+jobs:
+    lint:
+        name: Lint, format, types
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - uses: ./.github/actions/setup
+
+            - name: Prettier
+              run: yarn format:check
+
+            - name: ESLint
+              run: yarn lint --format stylish
+
+            - name: TypeScript
+              run: yarn typecheck
+
+            - name: Lint workflows (actionlint)
+              run: |
+                  bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash) 1.7.12
+                  ./actionlint -color
+
+            - name: Lint shell scripts (shellcheck)
+              # Warnings and errors; the info-level hints (ASCII ranges for GitHub logins) are deliberate.
+              run: shellcheck --severity=warning docker/entrypoint.sh docker/gh docker/gh-token docker/git-credential-owner
+
+    test:
+        name: Unit tests (Node ${{ matrix.node }})
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        strategy:
+            fail-fast: false
+            matrix:
+                # 22 is what the image runs; 24 is the current LTS the next image moves to.
+                node: ['22', '24']
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - uses: ./.github/actions/setup
+              with:
+                  node-version: ${{ matrix.node }}
+
+            # The tests make real git repositories in temp directories.
+            - name: Git identity
+              run: |
+                  git config --global user.name 'CI'
+                  git config --global user.email 'ci@example.invalid'
+                  git config --global init.defaultBranch main
+
+            - name: Vitest
+              run: yarn test:coverage --reporter=default --reporter=github-actions
+
+            - name: Coverage summary
+              if: ${{ !cancelled() && matrix.node == '22' }}
+              run: |
+                  # shellcheck disable=SC2016 # backticks are a JavaScript template, not shell
+                  node -e '
+                    const t = require("./coverage/coverage-summary.json").total
+                    const row = (k) => `| ${k} | ${t[k].covered}/${t[k].total} | ${t[k].pct}% |`
+                    console.log(["### Coverage", "", "| | covered | % |", "|---|---|---|", ...["lines", "statements", "functions", "branches"].map(row)].join("\n"))
+                  ' >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Upload coverage
+              if: ${{ !cancelled() && matrix.node == '22' }}
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: coverage
+                  path: coverage/
+                  retention-days: 14
+
+    e2e:
+        name: UI end-to-end (Playwright)
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - uses: ./.github/actions/setup
+
+            - name: Build supervisor and UI
+              run: yarn build
+
+            - name: Playwright version
+              id: playwright
+              run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+
+            - name: Cache browsers
+              id: browsers
+              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: ~/.cache/ms-playwright
+                  key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+            - name: Install Chromium
+              if: steps.browsers.outputs.cache-hit != 'true'
+              run: yarn playwright install --with-deps chromium
+
+            - name: Install Chromium system dependencies
+              if: steps.browsers.outputs.cache-hit == 'true'
+              run: yarn playwright install-deps chromium
+
+            - name: Playwright
+              run: yarn test:e2e
+
+            - name: Upload report
+              if: ${{ !cancelled() }}
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: playwright-report
+                  path: |
+                      playwright-report/
+                      test-results/
+                  retention-days: 14
+
+    docker:
+        name: Docker image
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+            - name: Build (no push)
+              uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+              with:
+                  context: .
+                  push: false
+                  load: true
+                  tags: pocket-factory:ci
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            # The image starts, answers on its port and reports its version: catches a broken
+            # entrypoint or a runtime file the Dockerfile forgot to copy.
+            - name: Smoke test
+              run: |
+                  docker run -d --name factory -p 8080:8080 \
+                    -e WEB_AUTH_PASSWORD=ci -e TELEGRAM_BOT_TOKEN= pocket-factory:ci
+                  for _ in $(seq 1 30); do
+                    if curl -fsS -u factory:ci http://127.0.0.1:8080/api/status -o status.json; then break; fi
+                    sleep 2
+                  done
+                  docker logs factory
+                  # shellcheck disable=SC2016 # backticks are a JavaScript template, not shell
+                  node -e 'const s = require("./status.json"); if (s.version !== require("./package.json").version) process.exit(1); console.log(`version ${s.version}`)'
+                  curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
+
+            - name: Stop container
+              if: always()
+              run: docker rm -f factory || true
+
+    dependency-review:
+        name: Dependency review
+        if: github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: read
+            pull-requests: write
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+              with:
+                  fail-on-severity: high
+                  comment-summary-in-pr: on-failure
+
+    # One required check for branch protection, whatever jobs are added later.
+    ci-ok:
+        name: CI passed
+        if: always()
+        needs: [lint, test, e2e, docker, dependency-review]
+        runs-on: ubuntu-latest
+        timeout-minutes: 2
+        steps:
+            - name: All jobs succeeded or were skipped
+              env:
+                  NEEDS: ${{ toJSON(needs) }}
+              run: |
+                  echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'

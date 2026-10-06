@@ -65,12 +65,14 @@ const PROMPT = /paste the redirect URL here/i
 const CONNECTOR = /available the next time you start Claude Code/i
 
 /** ANSI CSI / OSC sequences (the CLI wraps the URL in an OSC 8 hyperlink even with TERM=dumb) and carriage returns. */
+/* eslint-disable no-control-regex -- matching terminal escapes is the point */
 const strip = (text: string) =>
     text
         .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
         .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
         .replace(/\x1b[()][A-Za-z0-9]/g, '')
         .replace(/\r/g, '')
+/* eslint-enable no-control-regex */
 
 const shellQuote = (argv: string[]) => argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ')
 
@@ -135,7 +137,8 @@ export class McpLogins {
 
     /** Start a sign-in; resolves once the CLI printed the URL and said what comes next, or gave up, or after 30 s. */
     async start(name: string, options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<McpLoginView> {
-        for (const other of this.logins.values()) if (other.name === name && (other.state === 'starting' || other.state === 'waiting')) this.cancel(other.id)
+        for (const other of this.logins.values())
+            if (other.name === name && (other.state === 'starting' || other.state === 'waiting')) this.cancel(other.id)
         const argv = ['claude', 'mcp', 'login', name, '--no-browser']
         const { command, args } = ptyCommand(argv)
         const child = spawn(command, args, {
@@ -170,7 +173,9 @@ export class McpLogins {
         child.stderr?.on('data', onData)
         child.on('error', (error) => {
             login.state = 'failed'
-            login.message = error.message.includes('ENOENT') ? `${command} is not installed: the sign-in needs a pseudo-terminal` : error.message
+            login.message = error.message.includes('ENOENT')
+                ? `${command} is not installed: the sign-in needs a pseudo-terminal`
+                : error.message
             this.notify(login)
         })
         child.on('exit', (code, signal) => {
@@ -180,9 +185,14 @@ export class McpLogins {
                 login.state = 'failed'
                 login.message = `The CLI printed no sign-in link: ${rest.at(-1) ?? 'no output'}`
             } else if (code === 0) {
-                if (login.url && login.mode !== 'redirect' && (CONNECTOR.test(login.output) || !PROMPT.test(login.output))) {
+                if (
+                    login.url &&
+                    login.mode !== 'redirect' &&
+                    (CONNECTOR.test(login.output) || !PROMPT.test(login.output))
+                ) {
                     login.mode = 'connector'
-                    login.message = 'Sign in on claude.ai in that tab; the connector is available to the agents once the statuses are refreshed.'
+                    login.message =
+                        'Sign in on claude.ai in that tab; the connector is available to the agents once the statuses are refreshed.'
                 } else {
                     login.message = rest.at(-1) ?? 'Authorized.'
                     if (login.mode === 'redirect') this.onAuthorized(login.name)
@@ -224,7 +234,11 @@ export class McpLogins {
         await this.until(login, () => login.state !== 'waiting' || this.rejected(login), COMPLETE_WAIT_MS)
         if (login.state === 'waiting') {
             const rest = this.rest(login)
-            throw new Error(this.rejected(login) ? (rest.at(-1) ?? 'The CLI did not accept that URL') : 'The CLI has not answered yet: wait a moment and try again')
+            throw new Error(
+                this.rejected(login)
+                    ? (rest.at(-1) ?? 'The CLI did not accept that URL')
+                    : 'The CLI has not answered yet: wait a moment and try again'
+            )
         }
         if (login.state === 'failed') throw new Error(login.message ?? 'The sign-in failed')
         return this.view(login)
@@ -275,7 +289,13 @@ export class McpLogins {
         return after
             .split('\n')
             .map((line) => line.replace(/^Or paste the redirect URL here:\s*/i, '').trim())
-            .filter((line) => line && !/^Waiting for authorization/i.test(line) && !/^\[mcp-sdk\]/.test(line) && !(login.pasted && line.includes(login.pasted)))
+            .filter(
+                (line) =>
+                    line &&
+                    !/^Waiting for authorization/i.test(line) &&
+                    !line.startsWith('[mcp-sdk]') &&
+                    !(login.pasted && line.includes(login.pasted))
+            )
     }
 
     private signal(login: Login, sig: NodeJS.Signals): void {

@@ -54,7 +54,11 @@ export function uploadName(filename: string, mimeType?: string): string {
 export async function transcribe(audio: Buffer, filename: string, options: SttOptions): Promise<string> {
     const name = uploadName(filename, options.mimeType)
     const form = new FormData()
-    form.append('file', new Blob([new Uint8Array(audio)], options.mimeType ? { type: options.mimeType } : undefined), name)
+    form.append(
+        'file',
+        new Blob([new Uint8Array(audio)], options.mimeType ? { type: options.mimeType } : undefined),
+        name
+    )
     form.append('model', options.model)
     form.append('response_format', 'json')
     if (options.language) form.append('language', options.language)
@@ -72,6 +76,8 @@ export async function transcribe(audio: Buffer, filename: string, options: SttOp
     }
     const json = (await response.json()) as { text?: string }
     const text = (json.text ?? '').trim()
-    log.info(`transcribed ${audio.length} bytes in ${Date.now() - started}ms: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`)
+    log.info(
+        `transcribed ${audio.length} bytes in ${Date.now() - started}ms: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`
+    )
     return text
 }

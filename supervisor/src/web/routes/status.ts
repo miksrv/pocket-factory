@@ -6,8 +6,8 @@ import { promisify } from 'node:util'
 import { Hono } from 'hono'
 
 import { startOfDay } from '../../schedules/cron.js'
-import type { Env } from '../context.js'
 import { VERSION } from '../../version.js'
+import type { Env } from '../context.js'
 
 const run = promisify(execFile)
 
@@ -30,7 +30,14 @@ let versions: { at: number; value: Promise<[string | null, string | null, string
 
 function toolVersions(): Promise<[string | null, string | null, string | null]> {
     if (!versions || Date.now() - versions.at > VERSIONS_TTL_MS) {
-        versions = { at: Date.now(), value: Promise.all([version('claude', ['--version']), version('gh', ['--version']), version('git', ['--version'])]) }
+        versions = {
+            at: Date.now(),
+            value: Promise.all([
+                version('claude', ['--version']),
+                version('gh', ['--version']),
+                version('git', ['--version'])
+            ])
+        }
     }
     return versions.value
 }
@@ -46,7 +53,9 @@ function tokenOwners(): string[] {
 /** What `.credentials.json` holds: a claude.ai login (with its subscription type), or nothing usable. */
 function loginOf(configDir: string): 'none' | `claude.ai (${string})` {
     try {
-        const creds = JSON.parse(fs.readFileSync(path.join(configDir, '.credentials.json'), 'utf8')) as { claudeAiOauth?: { subscriptionType?: string; scopes?: string[] } }
+        const creds = JSON.parse(fs.readFileSync(path.join(configDir, '.credentials.json'), 'utf8')) as {
+            claudeAiOauth?: { subscriptionType?: string; scopes?: string[] }
+        }
         const oauth = creds.claudeAiOauth
         if (!oauth) return 'none'
         return `claude.ai (${[oauth.subscriptionType ?? 'subscription', oauth.scopes?.includes('user:mcp_servers') ? 'connectors' : 'no connectors'].join(', ')})`
@@ -81,7 +90,9 @@ export function statusRoutes(): Hono<Env> {
                     on: schedules.filter((s) => s.enabled && !s.errors.length).length,
                     // What needs the owner: an invalid file, a prefilter that fails, a run the factory slept through.
                     invalid: schedules.filter((s) => s.errors.length).length,
-                    failing: schedules.filter((s) => !s.errors.length && s.last_run?.status === 'error').map((s) => s.name),
+                    failing: schedules
+                        .filter((s) => !s.errors.length && s.last_run?.status === 'error')
+                        .map((s) => s.name),
                     missed: schedules.filter((s) => s.last_run?.status === 'missed').map((s) => s.name),
                     next: upcoming ? { name: upcoming.name, at: upcoming.next_run } : null
                 }
@@ -100,9 +111,20 @@ export function statusRoutes(): Hono<Env> {
             },
             github: { cli: gh, token: Boolean(process.env.GH_TOKEN), owners: tokenOwners() },
             git: { version: git },
-            telegram: { enabled: Boolean(config.telegram.botToken), allowed_user_ids: [...config.telegram.allowedUserIds] },
-            stt: { enabled: Boolean(config.stt.groqApiKey), model: config.stt.model, language: config.stt.language ?? null },
-            paths: { data: config.paths.dataRoot, workspaces: config.paths.workspacesRoot, config: config.paths.configRoot },
+            telegram: {
+                enabled: Boolean(config.telegram.botToken),
+                allowed_user_ids: [...config.telegram.allowedUserIds]
+            },
+            stt: {
+                enabled: Boolean(config.stt.groqApiKey),
+                model: config.stt.model,
+                language: config.stt.language ?? null
+            },
+            paths: {
+                data: config.paths.dataRoot,
+                workspaces: config.paths.workspacesRoot,
+                config: config.paths.configRoot
+            },
             max_concurrent_sessions: config.maxConcurrentSessions,
             workspaces
         })

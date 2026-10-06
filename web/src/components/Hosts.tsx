@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { api, type HostKey, type HostsOverview, type HostTarget, type HostTest, type HostView, type InlineHost, isHostRef, type ProjectHost, type SharedHost, type SshKeys } from '../lib/api'
+import {
+    api,
+    type HostKey,
+    type HostsOverview,
+    type HostTarget,
+    type HostTest,
+    type HostView,
+    type InlineHost,
+    isHostRef,
+    type ProjectHost,
+    type SharedHost,
+    type SshKeys
+} from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { Modal, useConfirm } from './Modal'
 import { Button, GrowingTextarea } from './ui'
@@ -17,20 +29,39 @@ import { Button, GrowingTextarea } from './ui'
 const EMPTY: SharedHost = { name: '', ssh: '', key: '' }
 
 /** The key in data/secrets/ssh that opens the host; the empty choice leaves it to ssh's own config. */
-function KeySelect({ value, onChange, keys }: { value: string; onChange: (key: string) => void; keys: SshKeys | undefined }) {
+function KeySelect({
+    value,
+    onChange,
+    keys
+}: {
+    value: string
+    onChange: (key: string) => void
+    keys: SshKeys | undefined
+}) {
     const names = keys?.keys ?? []
     return (
         <>
-            <select value={value} onChange={(e) => onChange(e.target.value)}>
-                <option value="">default (~/.ssh/config or id_*)</option>
+            <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+            >
+                <option value=''>default (~/.ssh/config or id_*)</option>
                 {value && !names.some((k) => k.name === value) && <option value={value}>{value} (missing)</option>}
                 {names.map((k) => (
-                    <option key={k.name} value={k.name}>
+                    <option
+                        key={k.name}
+                        value={k.name}
+                    >
                         {k.name}
                     </option>
                 ))}
             </select>
-            {keys && names.length === 0 && <span className="dim">No keys yet: `ssh-keygen -t ed25519 -f data/secrets/ssh/id_ed25519 -C pocket-factory`, add the .pub to the host.</span>}
+            {keys && names.length === 0 && (
+                <span className='dim'>
+                    No keys yet: `ssh-keygen -t ed25519 -f data/secrets/ssh/id_ed25519 -C pocket-factory`, add the .pub
+                    to the host.
+                </span>
+            )}
         </>
     )
 }
@@ -51,17 +82,31 @@ export function HostFields({
 }) {
     return (
         <div className={`host-card connection${compact ? ' compact' : ''}`}>
-            <label className="field">
+            <label className='field'>
                 <span>Name</span>
-                <input placeholder="staging-eu" value={value.name} onChange={(e) => onChange({ name: e.target.value })} autoFocus={autoFocus} />
+                <input
+                    placeholder='staging-eu'
+                    value={value.name}
+                    onChange={(e) => onChange({ name: e.target.value })}
+                    autoFocus={autoFocus}
+                />
             </label>
-            <label className="field">
+            <label className='field'>
                 <span>SSH target</span>
-                <input className="mono" placeholder="deploy@203.0.113.10 or deploy@host:2222" value={value.ssh} onChange={(e) => onChange({ ssh: e.target.value })} />
+                <input
+                    className='mono'
+                    placeholder='deploy@203.0.113.10 or deploy@host:2222'
+                    value={value.ssh}
+                    onChange={(e) => onChange({ ssh: e.target.value })}
+                />
             </label>
-            <label className="field">
+            <label className='field'>
                 <span>Key</span>
-                <KeySelect value={value.key ?? ''} onChange={(key) => onChange({ key })} keys={keys} />
+                <KeySelect
+                    value={value.key ?? ''}
+                    onChange={(key) => onChange({ key })}
+                    keys={keys}
+                />
             </label>
         </div>
     )
@@ -96,7 +141,12 @@ export function TestConnection({ target }: { target: HostTarget }) {
             const where = scan.port ? `${scan.host}:${scan.port}` : scan.host
             const done = await confirm({
                 title: changed ? `Replace the host key of ${where}?` : `Trust ${where}?`,
-                message: <Fingerprints keys={scan.keys} changed={changed} />,
+                message: (
+                    <Fingerprints
+                        keys={scan.keys}
+                        changed={changed}
+                    />
+                ),
                 action: changed ? 'Replace key' : 'Trust',
                 pending: 'Writing…',
                 danger: changed,
@@ -118,18 +168,36 @@ export function TestConnection({ target }: { target: HostTarget }) {
     }
     return (
         <>
-            <Button size="sm" onClick={run} disabled={test.busy || trusting || !ready} title="ssh -o BatchMode=yes <target> echo ok">
+            <Button
+                size='sm'
+                onClick={run}
+                disabled={test.busy || trusting || !ready}
+                title='ssh -o BatchMode=yes <target> echo ok'
+            >
                 {test.busy ? 'Connecting…' : 'Test connection'}
             </Button>
-            {test.ok === true && <span className="badge done">reachable · {test.ms} ms</span>}
-            {test.ok === false && <span className="badge failed">{changed ? 'host key changed' : test.host_key ? 'server not trusted yet' : 'failed'}</span>}
+            {test.ok === true && <span className='badge done'>reachable · {test.ms} ms</span>}
+            {test.ok === false && (
+                <span className='badge failed'>
+                    {changed ? 'host key changed' : test.host_key ? 'server not trusted yet' : 'failed'}
+                </span>
+            )}
             {test.host_key && (
-                <Button size="sm" variant={changed ? 'danger' : undefined} onClick={trust} disabled={trusting || test.busy} title="ssh-keyscan the server, show its fingerprints, write them to known_hosts once you confirm">
+                <Button
+                    size='sm'
+                    variant={changed ? 'danger' : undefined}
+                    onClick={trust}
+                    disabled={trusting || test.busy}
+                    title='ssh-keyscan the server, show its fingerprints, write them to known_hosts once you confirm'
+                >
                     {trusting ? 'Scanning…' : changed ? 'Replace host key…' : 'Trust host key…'}
                 </Button>
             )}
             {test.output && !test.host_key && (
-                <code className="host-output" title={test.output}>
+                <code
+                    className='host-output'
+                    title={test.output}
+                >
                     {test.output.split('\n').at(-1)}
                 </code>
             )}
@@ -140,21 +208,25 @@ export function TestConnection({ target }: { target: HostTarget }) {
 /** The keys a server offers, for the owner to compare with what the server prints for itself before trusting them. */
 function Fingerprints({ keys, changed }: { keys: HostKey[]; changed: boolean }) {
     return (
-        <div className="stack">
+        <div className='stack'>
             <span>
                 {changed
                     ? 'The key on record differs from what the server offers now: a reinstalled server, or someone in between. Replace it only if you know why it changed.'
                     : 'The factory has not seen this server before. To be sure it is the right one, compare with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the server:'}
             </span>
-            <ul className="host-fingerprints">
+            <ul className='host-fingerprints'>
                 {keys.map((k) => (
                     <li key={k.fingerprint}>
-                        <span className="badge plain">{k.type.replace(/^ssh-|-sha2/g, '').replace(/@openssh\.com$/, '')}</span>
+                        <span className='badge plain'>
+                            {k.type.replace(/^ssh-|-sha2/g, '').replace(/@openssh\.com$/, '')}
+                        </span>
                         <code>{k.fingerprint}</code>
                     </li>
                 ))}
             </ul>
-            <span className="dim small">Written to data/config/known_hosts; forgotten again once no host points at this server.</span>
+            <span className='dim small'>
+                Written to data/config/known_hosts; forgotten again once no host points at this server.
+            </span>
         </div>
     )
 }
@@ -246,8 +318,8 @@ export function HostDialog({
             open={open}
             onClose={onClose}
             title={title}
-            icon="host"
-            size="wide"
+            icon='host'
+            size='wide'
             description={
                 project
                     ? `The connection goes into the shared list (Settings → Hosts) and this ${owner} refers to it by name; the path and notes stay with the ${owner}.`
@@ -258,39 +330,59 @@ export function HostDialog({
             busy={busy}
             footer={
                 <>
-                    <span className="modal-foot-aside">
+                    <span className='modal-foot-aside'>
                         <TestConnection target={{ ssh: host.ssh, key: host.key }} />
                     </span>
-                    <Button onClick={onClose} disabled={busy}>
+                    <Button
+                        onClick={onClose}
+                        disabled={busy}
+                    >
                         Cancel
                     </Button>
-                    <Button variant="primary" onClick={save} disabled={busy || !host.name.trim() || !host.ssh.trim() || nameTaken}>
+                    <Button
+                        variant='primary'
+                        onClick={save}
+                        disabled={busy || !host.name.trim() || !host.ssh.trim() || nameTaken}
+                    >
                         {busy ? 'Saving…' : editing ? 'Save' : 'Save host'}
                     </Button>
                 </>
             }
         >
-            <div className="stack">
-                <HostFields value={host} onChange={(patch) => setHost((h) => ({ ...h, ...patch }))} keys={keys} autoFocus compact />
-                {nameTaken && <div className="error small">{`A shared host named "${host.name.trim()}" already exists — pick another name, or open that host from Settings → Hosts to edit it.`}</div>}
+            <div className='stack'>
+                <HostFields
+                    value={host}
+                    onChange={(patch) => setHost((h) => ({ ...h, ...patch }))}
+                    keys={keys}
+                    autoFocus
+                    compact
+                />
+                {nameTaken && (
+                    <div className='error small'>{`A shared host named "${host.name.trim()}" already exists — pick another name, or open that host from Settings → Hosts to edit it.`}</div>
+                )}
                 {project && (
-                    <div className="host-card compact">
-                        <div className="wide dim small">Stays with this {owner}:</div>
-                        <label className="field">
+                    <div className='host-card compact'>
+                        <div className='wide dim small'>Stays with this {owner}:</div>
+                        <label className='field'>
                             <span>Path for this {owner}</span>
-                            <input className="mono" placeholder="/srv/app" value={own.path} onChange={(e) => setOwn((o) => ({ ...o, path: e.target.value }))} />
+                            <input
+                                className='mono'
+                                placeholder='/srv/app'
+                                value={own.path}
+                                onChange={(e) => setOwn((o) => ({ ...o, path: e.target.value }))}
+                            />
                         </label>
-                        <label className="field wide">
+                        <label className='field wide'>
                             <span>Notes for this {owner}</span>
                             <GrowingTextarea
-                                placeholder="what runs there for this project, how deploys work, where the logs are, what never to touch"
+                                placeholder='what runs there for this project, how deploys work, where the logs are, what never to touch'
                                 value={own.notes}
                                 onChange={(e) => setOwn((o) => ({ ...o, notes: e.target.value }))}
                             />
                         </label>
                     </div>
                 )}
-                {error && <div className="error small">{error}</div>}
+                {error && <div className='error small'>{error}</div>}
             </div>
         </Modal>
     )
@@ -323,44 +415,81 @@ export function HostsSection() {
         })
 
     return (
-        <div className="stack">
-            {data.error && <div className="error small">{data.error}</div>}
-            {overview?.error && <div className="error small">The file on disk is not valid YAML ({overview.error}); saving a host replaces it.</div>}
-            <div className="row between wrap">
-                <span className="dim small">
-                    {overview ? (overview.hosts.length ? `${overview.hosts.length} shared host${overview.hosts.length === 1 ? '' : 's'}` : 'No shared hosts yet') : 'Loading…'} · connections only,
-                    reached with the keys in {keys.data?.dir ?? 'data/secrets/ssh/'}; each project keeps its own path and notes · passwords are not supported on purpose
+        <div className='stack'>
+            {data.error && <div className='error small'>{data.error}</div>}
+            {overview?.error && (
+                <div className='error small'>
+                    The file on disk is not valid YAML ({overview.error}); saving a host replaces it.
+                </div>
+            )}
+            <div className='row between wrap'>
+                <span className='dim small'>
+                    {overview
+                        ? overview.hosts.length
+                            ? `${overview.hosts.length} shared host${overview.hosts.length === 1 ? '' : 's'}`
+                            : 'No shared hosts yet'
+                        : 'Loading…'}{' '}
+                    · connections only, reached with the keys in {keys.data?.dir ?? 'data/secrets/ssh/'}; each project
+                    keeps its own path and notes · passwords are not supported on purpose
                 </span>
-                <Button size="sm" variant="primary" onClick={() => setDialog({})}>
+                <Button
+                    size='sm'
+                    variant='primary'
+                    onClick={() => setDialog({})}
+                >
                     Add host
                 </Button>
             </div>
             {overview && overview.hosts.length > 0 && (
-                <div className="host-list">
+                <div className='host-list'>
                     {overview.hosts.map((h) => (
-                        <div key={h.name} className="host-row">
-                            <span className="host-id">
+                        <div
+                            key={h.name}
+                            className='host-row'
+                        >
+                            <span className='host-id'>
                                 <strong>{h.name}</strong>
-                                {h.ssh ? <span className="mono dim small">{h.ssh}</span> : <span className="badge failed">not in hosts.yaml</span>}
-                                {h.key && <span className="badge plain">key {h.key}</span>}
+                                {h.ssh ? (
+                                    <span className='mono dim small'>{h.ssh}</span>
+                                ) : (
+                                    <span className='badge failed'>not in hosts.yaml</span>
+                                )}
+                                {h.key && <span className='badge plain'>key {h.key}</span>}
                             </span>
-                            <span className="host-projects">
-                                {h.projects.length === 0 && <span className="dim small">not used yet</span>}
+                            <span className='host-projects'>
+                                {h.projects.length === 0 && <span className='dim small'>not used yet</span>}
                                 {h.projects.map((p) => (
-                                    <Link key={`${p.kind}-${p.project}`} to={`/${p.kind === 'schedule' ? 'schedules' : 'projects'}/${encodeURIComponent(p.project)}`} className="badge plain" title={[p.kind === 'schedule' ? 'schedule' : 'project', p.path ? `path ${p.path}` : null].filter(Boolean).join(' · ')}>
+                                    <Link
+                                        key={`${p.kind}-${p.project}`}
+                                        to={`/${p.kind === 'schedule' ? 'schedules' : 'projects'}/${encodeURIComponent(p.project)}`}
+                                        className='badge plain'
+                                        title={[
+                                            p.kind === 'schedule' ? 'schedule' : 'project',
+                                            p.path ? `path ${p.path}` : null
+                                        ]
+                                            .filter(Boolean)
+                                            .join(' · ')}
+                                    >
                                         {p.kind === 'schedule' ? '⏱ ' : ''}
                                         {p.project}
                                     </Link>
                                 ))}
                             </span>
-                            <span className="host-actions">
+                            <span className='host-actions'>
                                 {h.ssh && <TestConnection target={{ name: h.name }} />}
                                 {h.ssh && (
-                                    <Button size="sm" onClick={() => setDialog({ editing: h })}>
+                                    <Button
+                                        size='sm'
+                                        onClick={() => setDialog({ editing: h })}
+                                    >
                                         Edit
                                     </Button>
                                 )}
-                                <Button size="sm" variant="danger" onClick={() => remove(h)}>
+                                <Button
+                                    size='sm'
+                                    variant='danger'
+                                    onClick={() => remove(h)}
+                                >
                                     Delete
                                 </Button>
                             </span>
@@ -369,19 +498,34 @@ export function HostsSection() {
                 </div>
             )}
             {overview && overview.inline.length > 0 && (
-                <details className="tool-more" open>
-                    <summary className="dim">Written inside project files ({overview.inline.length}) — not shared; open the project to move one into the list</summary>
-                    <div className="host-list" style={{ marginTop: 6 }}>
+                <details
+                    className='tool-more'
+                    open
+                >
+                    <summary className='dim'>
+                        Written inside project files ({overview.inline.length}) — not shared; open the project to move
+                        one into the list
+                    </summary>
+                    <div
+                        className='host-list'
+                        style={{ marginTop: 6 }}
+                    >
                         {overview.inline.map((i) => (
-                            <div key={`${i.project}-${i.index}`} className="host-row">
-                                <span className="host-id">
+                            <div
+                                key={`${i.project}-${i.index}`}
+                                className='host-row'
+                            >
+                                <span className='host-id'>
                                     <strong>{i.host.name || i.host.ssh || 'unnamed'}</strong>
-                                    <span className="mono dim small">{i.host.ssh}</span>
-                                    {i.host.key && <span className="badge plain">key {i.host.key}</span>}
-                                    {i.same_as && <span className="dim small">· same as shared {i.same_as}</span>}
+                                    <span className='mono dim small'>{i.host.ssh}</span>
+                                    {i.host.key && <span className='badge plain'>key {i.host.key}</span>}
+                                    {i.same_as && <span className='dim small'>· same as shared {i.same_as}</span>}
                                 </span>
-                                <span className="host-projects">
-                                    <Link to={`/projects/${encodeURIComponent(i.project)}`} className="badge plain">
+                                <span className='host-projects'>
+                                    <Link
+                                        to={`/projects/${encodeURIComponent(i.project)}`}
+                                        className='badge plain'
+                                    >
                                         {i.project}
                                     </Link>
                                 </span>
@@ -390,7 +534,7 @@ export function HostsSection() {
                     </div>
                 </details>
             )}
-            <div className="dim small mono">{overview?.file}</div>
+            <div className='dim small mono'>{overview?.file}</div>
             <HostDialog
                 open={dialog !== null}
                 title={dialog?.editing ? `Edit host ${dialog.editing.name}` : 'New shared host'}
@@ -439,35 +583,46 @@ export function ProjectHosts({
     } | null>(null)
     const attached = new Set(value.filter(isHostRef).map((h) => h.host))
     const available = (shared?.hosts ?? []).filter((h) => h.ssh && !attached.has(h.name))
-    const update = (i: number, next: ProjectHost | null) => onChange(next ? value.map((h, j) => (j === i ? next : h)) : value.filter((_, j) => j !== i))
+    const update = (i: number, next: ProjectHost | null) =>
+        onChange(next ? value.map((h, j) => (j === i ? next : h)) : value.filter((_, j) => j !== i))
 
     return (
-        <div className="field wide hosts">
-            <div className="field-head">
+        <div className='field wide hosts'>
+            <div className='field-head'>
                 <span>
                     Hosts — servers this {owner} {owner === 'project' ? 'runs' : 'works'} on
-                    <span className="dim"> · the connection is shared (Settings → Hosts); path and notes are this {owner}'s</span>
+                    <span className='dim'>
+                        {' '}
+                        · the connection is shared (Settings → Hosts); path and notes are this {owner}'s
+                    </span>
                 </span>
             </div>
             <select
-                className="add-host"
-                value=""
-                aria-label="Add host"
+                className='add-host'
+                value=''
+                aria-label='Add host'
                 onChange={(e) => {
                     const pick = e.target.value
                     if (pick === '__new') setDialog({ index: null })
                     else if (pick) onChange([...value, { host: pick }])
                 }}
             >
-                <option value="">Add host…</option>
+                <option value=''>Add host…</option>
                 {available.map((h) => (
-                    <option key={h.name} value={h.name}>
+                    <option
+                        key={h.name}
+                        value={h.name}
+                    >
                         {h.name} — {h.ssh}
                     </option>
                 ))}
-                <option value="__new">＋ New shared host…</option>
+                <option value='__new'>＋ New shared host…</option>
             </select>
-            {value.length === 0 && <div className="dim small">No hosts. The agent can still work on the repository; host checks need at least one.</div>}
+            {value.length === 0 && (
+                <div className='dim small'>
+                    No hosts. The agent can still work on the repository; host checks need at least one.
+                </div>
+            )}
             {value.map((h, i) =>
                 isHostRef(h) ? (
                     <SharedHostCard
@@ -483,7 +638,9 @@ export function ProjectHosts({
                         key={`inline-${i}`}
                         host={h}
                         keys={keys}
-                        sameAs={shared?.hosts.find((s) => s.ssh === (h.ssh ?? '').trim() && (s.key ?? '') === (h.key ?? ''))}
+                        sameAs={shared?.hosts.find(
+                            (s) => s.ssh === (h.ssh ?? '').trim() && (s.key ?? '') === (h.key ?? '')
+                        )}
                         onChange={(patch) => update(i, { ...h, ...patch })}
                         onRemove={() => update(i, null)}
                         onMove={() =>
@@ -547,29 +704,40 @@ function SharedHostCard({
     owner: 'project' | 'schedule'
 }) {
     return (
-        <div className="host-card shared">
-            <div className="host-shared-head">
+        <div className='host-card shared'>
+            <div className='host-shared-head'>
                 <strong>{entry.host}</strong>
                 {host?.ssh ? (
                     <>
-                        <span className="mono dim">{host.ssh}</span>
-                        {host.key && <span className="badge plain">key {host.key}</span>}
+                        <span className='mono dim'>{host.ssh}</span>
+                        {host.key && <span className='badge plain'>key {host.key}</span>}
                     </>
                 ) : (
-                    <span className="badge failed" title="No shared host of this name in hosts.yaml">
+                    <span
+                        className='badge failed'
+                        title='No shared host of this name in hosts.yaml'
+                    >
                         missing in Settings → Hosts
                     </span>
                 )}
-                <span className="grow" />
-                <Link to="/settings#hosts" className="small">
+                <span className='grow' />
+                <Link
+                    to='/settings#hosts'
+                    className='small'
+                >
                     Edit in Settings
                 </Link>
             </div>
-            <label className="field wide">
+            <label className='field wide'>
                 <span>Path for this {owner}</span>
-                <input className="mono" placeholder="/srv/app" value={entry.path ?? ''} onChange={(e) => onChange({ path: e.target.value || undefined })} />
+                <input
+                    className='mono'
+                    placeholder='/srv/app'
+                    value={entry.path ?? ''}
+                    onChange={(e) => onChange({ path: e.target.value || undefined })}
+                />
             </label>
-            <label className="field wide">
+            <label className='field wide'>
                 <span>Notes for this {owner}</span>
                 <GrowingTextarea
                     placeholder={`what runs there for this ${owner}, how deploys work, where the logs are, what never to touch`}
@@ -577,10 +745,14 @@ function SharedHostCard({
                     onChange={(e) => onChange({ notes: e.target.value || undefined })}
                 />
             </label>
-            <div className="host-foot wide">
+            <div className='host-foot wide'>
                 {host?.ssh && <TestConnection target={{ name: host.name }} />}
-                <span className="grow" />
-                <Button size="sm" onClick={onRemove} title="The project stops referring to it; the host stays in Settings">
+                <span className='grow' />
+                <Button
+                    size='sm'
+                    onClick={onRemove}
+                    title='The project stops referring to it; the host stays in Settings'
+                >
                     Detach
                 </Button>
             </div>
@@ -607,43 +779,77 @@ function InlineHostCard({
     onLink: (name: string) => void
 }) {
     return (
-        <div className="host-card">
-            <div className="host-legacy wide">
+        <div className='host-card'>
+            <div className='host-legacy wide'>
                 <span>Written in this project only.</span>
                 {sameAs ? (
-                    <Button size="sm" onClick={() => onLink(sameAs.name)} title={`${sameAs.ssh} is already the shared host ${sameAs.name}: refer to it and keep these notes as the project's`}>
+                    <Button
+                        size='sm'
+                        onClick={() => onLink(sameAs.name)}
+                        title={`${sameAs.ssh} is already the shared host ${sameAs.name}: refer to it and keep these notes as the project's`}
+                    >
                         Link to shared host {sameAs.name}
                     </Button>
                 ) : (
-                    <Button size="sm" onClick={onMove}>
+                    <Button
+                        size='sm'
+                        onClick={onMove}
+                    >
                         Move to shared hosts
                     </Button>
                 )}
             </div>
-            <label className="field">
+            <label className='field'>
                 <span>Name</span>
-                <input placeholder="production" value={host.name ?? ''} onChange={(e) => onChange({ name: e.target.value })} />
+                <input
+                    placeholder='production'
+                    value={host.name ?? ''}
+                    onChange={(e) => onChange({ name: e.target.value })}
+                />
             </label>
-            <label className="field">
+            <label className='field'>
                 <span>SSH target</span>
-                <input className="mono" placeholder="deploy@203.0.113.10 or deploy@host:2222" value={host.ssh ?? ''} onChange={(e) => onChange({ ssh: e.target.value })} />
+                <input
+                    className='mono'
+                    placeholder='deploy@203.0.113.10 or deploy@host:2222'
+                    value={host.ssh ?? ''}
+                    onChange={(e) => onChange({ ssh: e.target.value })}
+                />
             </label>
-            <label className="field">
+            <label className='field'>
                 <span>Key</span>
-                <KeySelect value={host.key ?? ''} onChange={(key) => onChange({ key: key || undefined })} keys={keys} />
+                <KeySelect
+                    value={host.key ?? ''}
+                    onChange={(key) => onChange({ key: key || undefined })}
+                    keys={keys}
+                />
             </label>
-            <label className="field">
+            <label className='field'>
                 <span>Path</span>
-                <input className="mono" placeholder="/srv/app" value={host.path ?? ''} onChange={(e) => onChange({ path: e.target.value })} />
+                <input
+                    className='mono'
+                    placeholder='/srv/app'
+                    value={host.path ?? ''}
+                    onChange={(e) => onChange({ path: e.target.value })}
+                />
             </label>
-            <label className="field wide">
+            <label className='field wide'>
                 <span>Notes</span>
-                <GrowingTextarea placeholder="how to restart, where the logs are, what never to touch" value={host.notes ?? ''} onChange={(e) => onChange({ notes: e.target.value })} />
+                <GrowingTextarea
+                    placeholder='how to restart, where the logs are, what never to touch'
+                    value={host.notes ?? ''}
+                    onChange={(e) => onChange({ notes: e.target.value })}
+                />
             </label>
-            <div className="host-foot wide">
+            <div className='host-foot wide'>
                 <TestConnection target={{ ssh: host.ssh ?? '', key: host.key }} />
-                <span className="grow" />
-                <Button size="sm" variant="danger" onClick={onRemove} aria-label="Remove host">
+                <span className='grow' />
+                <Button
+                    size='sm'
+                    variant='danger'
+                    onClick={onRemove}
+                    aria-label='Remove host'
+                >
                     Remove
                 </Button>
             </div>

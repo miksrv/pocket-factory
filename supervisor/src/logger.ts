@@ -11,8 +11,11 @@ export function setLogLevel(level: Level): void {
 function emit(level: Level, scope: string, message: string, extra?: unknown): void {
     if (ORDER[level] < ORDER[threshold]) return
     const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${scope}] ${message}`
+    // The supervisor's one sink: stdout for info / debug, stderr for warnings and errors.
+    // eslint-disable-next-line no-console
     const out = level === 'error' || level === 'warn' ? console.error : console.log
-    extra === undefined ? out(line) : out(line, extra)
+    if (extra === undefined) out(line)
+    else out(line, extra)
 }
 
 export function createLogger(scope: string) {

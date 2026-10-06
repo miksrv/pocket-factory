@@ -32,7 +32,14 @@ function listKeys(dir: string): Array<{ name: string; public: boolean }> {
     if (!fs.existsSync(dir)) return []
     return fs
         .readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && !entry.name.endsWith('.pub') && !NOT_KEYS.has(entry.name) && KEY_NAME.test(entry.name))
+        .filter(
+            (entry) =>
+                entry.isFile() &&
+                !entry.name.startsWith('.') &&
+                !entry.name.endsWith('.pub') &&
+                !NOT_KEYS.has(entry.name) &&
+                KEY_NAME.test(entry.name)
+        )
         .map((entry) => ({ name: entry.name, public: fs.existsSync(path.join(dir, `${entry.name}.pub`)) }))
         .sort((a, b) => a.name.localeCompare(b.name))
 }
@@ -45,7 +52,10 @@ interface Target {
 }
 
 /** The `ssh` + `key` of the request, or of a shared host by `name`; null when the target is not user@host[:port]. */
-function resolveTarget(hosts: Hosts, body: { ssh?: unknown; key?: unknown; name?: unknown }): Target | { error: string; status: 400 | 404 } {
+function resolveTarget(
+    hosts: Hosts,
+    body: { ssh?: unknown; key?: unknown; name?: unknown }
+): Target | { error: string; status: 400 | 404 } {
     let ssh = body.ssh
     let key = body.key
     if (typeof body.name === 'string') {
@@ -56,8 +66,14 @@ function resolveTarget(hosts: Hosts, body: { ssh?: unknown; key?: unknown; name?
     }
     const match = SSH_TARGET.exec(typeof ssh === 'string' ? ssh.trim() : '')
     if (!match) return { error: 'ssh target must look like user@host or user@host:port', status: 400 }
-    if (key !== undefined && key !== null && key !== '' && (typeof key !== 'string' || !KEY_NAME.test(key))) return { error: 'unknown key', status: 400 }
-    return { user: match[1], host: match[2], port: match[3] || undefined, key: typeof key === 'string' && key ? key : undefined }
+    if (key !== undefined && key !== null && key !== '' && (typeof key !== 'string' || !KEY_NAME.test(key)))
+        return { error: 'unknown key', status: 400 }
+    return {
+        user: match[1],
+        host: match[2],
+        port: match[3] || undefined,
+        key: typeof key === 'string' && key ? key : undefined
+    }
 }
 
 /** Whether any shared or inline host still points at this server (host and port), other than the one being removed or moved. */
@@ -67,11 +83,19 @@ function serverStillUsed(hosts: Hosts, host: string, port: string | undefined, e
         return Boolean(m) && m![2].toLowerCase() === host.toLowerCase() && (m![3] || '22') === (port || '22')
     }
     const overview = hosts.list()
-    return overview.hosts.some((h) => h.name !== except && same(h.ssh)) || overview.inline.some((i) => !isHostRef(i.host) && same(i.host.ssh))
+    return (
+        overview.hosts.some((h) => h.name !== except && same(h.ssh)) ||
+        overview.inline.some((i) => !isHostRef(i.host) && same(i.host.ssh))
+    )
 }
 
 /** After a host left a server: forget its key unless another host still uses it. Never fails the request that triggered it. */
-async function forgetIfUnused(hosts: Hosts, knownHosts: KnownHosts, ssh: string | undefined, except?: string): Promise<void> {
+async function forgetIfUnused(
+    hosts: Hosts,
+    knownHosts: KnownHosts,
+    ssh: string | undefined,
+    except?: string
+): Promise<void> {
     const m = SSH_TARGET.exec((ssh ?? '').trim())
     if (!m || serverStillUsed(hosts, m[2], m[3] || undefined, except)) return
     await knownHosts.forget(m[2], m[3] || undefined).catch(() => undefined)
@@ -79,7 +103,8 @@ async function forgetIfUnused(hosts: Hosts, knownHosts: KnownHosts, ssh: string 
 
 /** What ssh's stderr says about the server's key under StrictHostKeyChecking=yes. */
 function hostKeyProblem(stderr: string): 'unknown' | 'changed' | undefined {
-    if (/REMOTE HOST IDENTIFICATION HAS CHANGED|has changed and you have requested strict checking/.test(stderr)) return 'changed'
+    if (/REMOTE HOST IDENTIFICATION HAS CHANGED|has changed and you have requested strict checking/.test(stderr))
+        return 'changed'
     if (/No .* host key is known|Host key verification failed/.test(stderr)) return 'unknown'
     return undefined
 }
@@ -100,13 +125,23 @@ export function hostRoutes(): Hono<Env> {
         const body = (await c.req.json().catch(() => null)) as { name?: unknown; ssh?: unknown; key?: unknown } | null
         if (!body || typeof body.ssh !== 'string') return c.json({ error: 'ssh is required' }, 400)
         for (const field of ['name', 'key'] as const) {
-            if (body[field] !== undefined && body[field] !== null && typeof body[field] !== 'string') return c.json({ error: `${field} must be a string` }, 400)
+            if (body[field] !== undefined && body[field] !== null && typeof body[field] !== 'string')
+                return c.json({ error: `${field} must be a string` }, 400)
         }
         const before = hosts.get(c.req.param('name'))
-        if (before && c.req.query('create')) return c.json({ error: `a host named "${before.name}" already exists — open it from the list to edit it` }, 409)
+        if (before && c.req.query('create'))
+            return c.json(
+                { error: `a host named "${before.name}" already exists — open it from the list to edit it` },
+                409
+            )
         try {
-            const saved = hosts.save(c.req.param('name'), { name: body.name as string | undefined, ssh: body.ssh, key: (body.key as string) || undefined })
-            if (before && before.ssh.trim() !== saved.ssh) await forgetIfUnused(hosts, c.get('app').knownHosts, before.ssh)
+            const saved = hosts.save(c.req.param('name'), {
+                name: body.name as string | undefined,
+                ssh: body.ssh,
+                key: (body.key as string) || undefined
+            })
+            if (before && before.ssh.trim() !== saved.ssh)
+                await forgetIfUnused(hosts, c.get('app').knownHosts, before.ssh)
             return c.json(saved)
         } catch (error) {
             return c.json({ error: (error as Error).message }, error instanceof BadName ? 400 : 409)
@@ -146,7 +181,16 @@ export function hostRoutes(): Hono<Env> {
         const target = resolveTarget(hosts, body)
         if ('error' in target) return c.json({ error: target.error }, target.status)
         const dir = keysDir(config.paths.dataRoot)
-        const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${knownHosts.file}`]
+        const args = [
+            '-o',
+            'BatchMode=yes',
+            '-o',
+            'ConnectTimeout=10',
+            '-o',
+            'StrictHostKeyChecking=yes',
+            '-o',
+            `UserKnownHostsFile=${knownHosts.file}`
+        ]
         if (target.key) {
             if (!listKeys(dir).some((k) => k.name === target.key)) return c.json({ error: 'unknown key' }, 400)
             args.push('-i', path.join(dir, target.key), '-o', 'IdentitiesOnly=yes')
@@ -154,13 +198,19 @@ export function hostRoutes(): Hono<Env> {
         if (target.port) args.push('-p', target.port)
         args.push(`${target.user}@${target.host}`, 'echo', 'ok')
         const started = Date.now()
-        const result = await new Promise<{ ok: boolean; output: string; host_key?: 'unknown' | 'changed' }>((resolve) => {
-            execFile('ssh', args, { timeout: 20_000 }, (error, stdout, stderr) => {
-                const output = `${stdout}${stderr}`.trim().split('\n').slice(-6).join('\n')
-                const ok = !error && stdout.trim() === 'ok'
-                resolve({ ok, output: output || (error ? error.message : ''), host_key: ok ? undefined : hostKeyProblem(stderr) })
-            })
-        })
+        const result = await new Promise<{ ok: boolean; output: string; host_key?: 'unknown' | 'changed' }>(
+            (resolve) => {
+                execFile('ssh', args, { timeout: 20_000 }, (error, stdout, stderr) => {
+                    const output = `${stdout}${stderr}`.trim().split('\n').slice(-6).join('\n')
+                    const ok = !error && stdout.trim() === 'ok'
+                    resolve({
+                        ok,
+                        output: output || (error ? error.message : ''),
+                        host_key: ok ? undefined : hostKeyProblem(stderr)
+                    })
+                })
+            }
+        )
         return c.json({ ...result, ms: Date.now() - started })
     })
 
@@ -172,7 +222,12 @@ export function hostRoutes(): Hono<Env> {
         if ('error' in target) return c.json({ error: target.error }, target.status)
         try {
             const keys = await knownHosts.scan(target.host, target.port)
-            return c.json({ host: target.host, port: target.port ?? null, known: await knownHosts.has(target.host, target.port), keys })
+            return c.json({
+                host: target.host,
+                port: target.port ?? null,
+                known: await knownHosts.has(target.host, target.port),
+                keys
+            })
         } catch (error) {
             return c.json({ error: (error as Error).message }, 502)
         }
@@ -181,12 +236,18 @@ export function hostRoutes(): Hono<Env> {
     /** Write the lines the owner confirmed into known_hosts; `replace` drops what the file had for that server first. */
     app.post('/trust', async (c) => {
         const { hosts, knownHosts } = c.get('app')
-        const body = (await c.req.json().catch(() => ({}))) as { ssh?: unknown; name?: unknown; lines?: unknown; replace?: unknown }
+        const body = (await c.req.json().catch(() => ({}))) as {
+            ssh?: unknown
+            name?: unknown
+            lines?: unknown
+            replace?: unknown
+        }
         const target = resolveTarget(hosts, body)
         if ('error' in target) return c.json({ error: target.error }, target.status)
-        if (!Array.isArray(body.lines) || !body.lines.every((l) => typeof l === 'string')) return c.json({ error: 'lines must be an array of strings' }, 400)
+        if (!Array.isArray(body.lines) || !body.lines.every((l) => typeof l === 'string'))
+            return c.json({ error: 'lines must be an array of strings' }, 400)
         try {
-            await knownHosts.trust(target.host, target.port, body.lines as string[], body.replace === true)
+            await knownHosts.trust(target.host, target.port, body.lines, body.replace === true)
             return c.json({ file: knownHosts.file })
         } catch (error) {
             return c.json({ error: (error as Error).message }, error instanceof BadName ? 400 : 500)

@@ -88,14 +88,20 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
     }
 
     get policy(): { max_failures: number; lock_minutes: number; session_days: number } {
-        return { max_failures: this.maxFailures, lock_minutes: this.lockMs / 60_000, session_days: this.sessionMs / 86_400_000 }
+        return {
+            max_failures: this.maxFailures,
+            lock_minutes: this.lockMs / 60_000,
+            session_days: this.sessionMs / 86_400_000
+        }
     }
 
     /** Housekeeping: expired sessions and old attempts go, now and once an hour. */
     start(): void {
         const sweep = () => {
             const sessions = this.store.purgeWebSessions()
-            const attempts = this.store.purgeLoginAttempts(new Date(Date.now() - ATTEMPTS_KEEP_DAYS * 86_400_000).toISOString())
+            const attempts = this.store.purgeLoginAttempts(
+                new Date(Date.now() - ATTEMPTS_KEEP_DAYS * 86_400_000).toISOString()
+            )
             if (sessions || attempts) log.debug(`swept ${sessions} expired session(s), ${attempts} old attempt(s)`)
         }
         sweep()
@@ -126,7 +132,15 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
         const token = randomBytes(32).toString('base64url')
         const session = this.store.createWebSession(hash(token), this.expiry(), ctx.ip, ctx.userAgent)
         log.info(`signed in from ${ctx.ip} (${describeUserAgent(ctx.userAgent)})`)
-        this.emit('notice', { kind: 'ok', ip: ctx.ip, username: verdict.username, userAgent: ctx.userAgent, at: session.created_at, failures: 0, locked_until: null })
+        this.emit('notice', {
+            kind: 'ok',
+            ip: ctx.ip,
+            username: verdict.username,
+            userAgent: ctx.userAgent,
+            at: session.created_at,
+            failures: 0,
+            locked_until: null
+        })
         return { ok: true, token, session }
     }
 
@@ -135,7 +149,11 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
      * success is left to the caller (a sign-in makes a session and a row, a
      * script's Basic header on every request must not).
      */
-    private verify(username: string, password: string, ctx: LoginContext): { ok: true; username: string } | Exclude<LoginOutcome, { ok: true }> {
+    private verify(
+        username: string,
+        password: string,
+        ctx: LoginContext
+    ): { ok: true; username: string } | Exclude<LoginOutcome, { ok: true }> {
         if (!this.password) throw new Error('sign-in is not enabled (WEB_AUTH_PASSWORD is empty)')
         const name = username.trim().slice(0, 200)
         const locked = this.lockedUntil(ctx.ip)
@@ -147,12 +165,27 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
         this.record(ctx, name, 'failed')
         const failures = this.store.loginFailures(ctx.ip, new Date(Date.now() - this.lockMs).toISOString()).count
         const lockedUntil = this.lockedUntil(ctx.ip)
-        log.warn(`failed sign-in from ${ctx.ip} as "${name}" (${failures}/${this.maxFailures}${lockedUntil ? `, locked until ${lockedUntil}` : ''})`)
+        log.warn(
+            `failed sign-in from ${ctx.ip} as "${name}" (${failures}/${this.maxFailures}${lockedUntil ? `, locked until ${lockedUntil}` : ''})`
+        )
         // The owner hears about the first failure of a streak and about the lock; the ones between would only repeat it.
         if (failures === 1 || lockedUntil) {
-            this.emit('notice', { kind: lockedUntil ? 'locked' : 'failed', ip: ctx.ip, username: name, userAgent: ctx.userAgent, at: new Date().toISOString(), failures, locked_until: lockedUntil })
+            this.emit('notice', {
+                kind: lockedUntil ? 'locked' : 'failed',
+                ip: ctx.ip,
+                username: name,
+                userAgent: ctx.userAgent,
+                at: new Date().toISOString(),
+                failures,
+                locked_until: lockedUntil
+            })
         }
-        return { ok: false, reason: 'failed', attempts_left: Math.max(0, this.maxFailures - failures), locked_until: lockedUntil }
+        return {
+            ok: false,
+            reason: 'failed',
+            attempts_left: Math.max(0, this.maxFailures - failures),
+            locked_until: lockedUntil
+        }
     }
 
     /** The session a cookie token names, if it is alive; its expiry slides on use. */
@@ -172,7 +205,7 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
     /** `Authorization: Basic …` from a script; the same credentials, the same lockout, no session. */
     basic(header: string | undefined, ctx: LoginContext): boolean {
         if (!header?.startsWith('Basic ')) return false
-        let decoded = ''
+        let decoded: string
         try {
             decoded = Buffer.from(header.slice(6).trim(), 'base64').toString('utf8')
         } catch {
@@ -242,8 +275,28 @@ function equal(a: string, b: string): boolean {
 export function describeUserAgent(ua: string | null): string {
     if (!ua) return 'unknown client'
     if (/^curl\//i.test(ua)) return 'curl'
-    const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : null
-    const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : null
+    const os = /iPhone|iPad/.test(ua)
+        ? 'iOS'
+        : /Android/.test(ua)
+          ? 'Android'
+          : /Mac OS X/.test(ua)
+            ? 'macOS'
+            : /Windows/.test(ua)
+              ? 'Windows'
+              : /Linux/.test(ua)
+                ? 'Linux'
+                : null
+    const browser = /Edg\//.test(ua)
+        ? 'Edge'
+        : /OPR\//.test(ua)
+          ? 'Opera'
+          : /Chrome\//.test(ua)
+            ? 'Chrome'
+            : /Firefox\//.test(ua)
+              ? 'Firefox'
+              : /Safari\//.test(ua)
+                ? 'Safari'
+                : null
     if (!browser && !os) return ua.slice(0, 40)
     return browser && os ? `${browser} on ${os}` : (browser ?? os ?? 'unknown client')
 }

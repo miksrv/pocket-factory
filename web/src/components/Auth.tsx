@@ -1,4 +1,13 @@
-import { createContext, type FormEvent, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import {
+    createContext,
+    type FormEvent,
+    type ReactNode,
+    useCallback,
+    useContext,
+    useEffect,
+    useRef,
+    useState
+} from 'react'
 
 import { api, ApiError, type AuthState, fmt, UNAUTHORIZED } from '../lib/api'
 import { Icon } from './Icon'
@@ -42,7 +51,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         void load()
     }, [load])
     useEffect(() => {
-        const signedOut = () => setAuth((a) => (a && a.mode === 'password' ? { ...a, authenticated: false, user: null, session: null } : a))
+        const signedOut = () =>
+            setAuth((a) => (a && a.mode === 'password' ? { ...a, authenticated: false, user: null, session: null } : a))
         window.addEventListener(UNAUTHORIZED, signedOut)
         return () => window.removeEventListener(UNAUTHORIZED, signedOut)
     }, [])
@@ -56,14 +66,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!auth) {
         return (
-            <div className="login">
+            <div className='login'>
                 {error && (
-                    <div className="login-card">
+                    <div className='login-card'>
                         <Brand />
-                        <div className="error" role="alert">
+                        <div
+                            className='error'
+                            role='alert'
+                        >
                             The API is unreachable: {error}
                         </div>
-                        <Button variant="primary" onClick={() => void load()}>
+                        <Button
+                            variant='primary'
+                            onClick={() => void load()}
+                        >
                             Try again
                         </Button>
                     </div>
@@ -71,14 +87,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             </div>
         )
     }
-    if (auth.mode === 'password' && !auth.authenticated) return <LoginPage policy={auth.policy} onSignedIn={load} />
+    if (auth.mode === 'password' && !auth.authenticated)
+        return (
+            <LoginPage
+                policy={auth.policy}
+                onSignedIn={load}
+            />
+        )
     return <AuthContext.Provider value={{ auth, signOut }}>{children}</AuthContext.Provider>
 }
 
 function Brand() {
     return (
-        <div className="login-brand">
-            <img src="/icon-192.png" alt="" width={56} height={56} />
+        <div className='login-brand'>
+            <img
+                src='/icon-192.png'
+                alt=''
+                width={56}
+                height={56}
+            />
             <h1>Pocket Factory</h1>
         </div>
     )
@@ -143,11 +170,18 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
             setPassword('')
             onSignedIn()
         } catch (err) {
-            const body = (err instanceof ApiError ? err.body : null) as { attempts_left?: number; locked_until?: string | null } | null
+            const body = (err instanceof ApiError ? err.body : null) as {
+                attempts_left?: number
+                locked_until?: string | null
+            } | null
             setPassword('')
             passwordRef.current?.focus()
             if (err instanceof ApiError && err.status === 429) {
-                setLockedUntil(body?.locked_until ? new Date(body.locked_until).getTime() : Date.now() + policy.lock_minutes * 60_000)
+                setLockedUntil(
+                    body?.locked_until
+                        ? new Date(body.locked_until).getTime()
+                        : Date.now() + policy.lock_minutes * 60_000
+                )
                 setNow(Date.now())
                 setError(null)
             } else if (err instanceof ApiError && err.status === 401) {
@@ -170,43 +204,105 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
     const countdown = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`
 
     return (
-        <div className="login">
-            <form className="login-card" onSubmit={(e) => void submit(e)} aria-busy={busy}>
+        <div className='login'>
+            <form
+                className='login-card'
+                onSubmit={(e) => void submit(e)}
+                aria-busy={busy}
+            >
                 <Brand />
-                <p className="login-sub">Sign in to your factory.</p>
-                <label className="field">
+                <p className='login-sub'>Sign in to your factory.</p>
+                <label className='field'>
                     <span>Username</span>
-                    <input ref={userRef} name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} disabled={busy || locked} required />
+                    <input
+                        ref={userRef}
+                        name='username'
+                        autoComplete='username'
+                        autoCapitalize='none'
+                        spellCheck={false}
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        disabled={busy || locked}
+                        required
+                    />
                 </label>
-                <label className="field">
+                <label className='field'>
                     <span>Password</span>
-                    <span className="input-with-action">
-                        <input ref={passwordRef} name="password" type={show ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy || locked} required aria-invalid={error ? true : undefined} />
-                        <Button variant="ghost" className="input-action" title={show ? 'Hide password' : 'Show password'} aria-label={show ? 'Hide password' : 'Show password'} aria-pressed={show} onClick={() => setShow((v) => !v)} tabIndex={-1}>
-                            <Icon name={show ? 'eyeOff' : 'eye'} size={15} />
+                    <span className='input-with-action'>
+                        <input
+                            ref={passwordRef}
+                            name='password'
+                            type={show ? 'text' : 'password'}
+                            autoComplete='current-password'
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            disabled={busy || locked}
+                            required
+                            aria-invalid={error ? true : undefined}
+                        />
+                        <Button
+                            variant='ghost'
+                            className='input-action'
+                            title={show ? 'Hide password' : 'Show password'}
+                            aria-label={show ? 'Hide password' : 'Show password'}
+                            aria-pressed={show}
+                            onClick={() => setShow((v) => !v)}
+                            tabIndex={-1}
+                        >
+                            <Icon
+                                name={show ? 'eyeOff' : 'eye'}
+                                size={15}
+                            />
                         </Button>
                     </span>
                 </label>
                 {locked ? (
-                    <div className="login-notice locked" role="alert" aria-live="polite">
-                        <Icon name="warning" size={14} />
+                    <div
+                        className='login-notice locked'
+                        role='alert'
+                        aria-live='polite'
+                    >
+                        <Icon
+                            name='warning'
+                            size={14}
+                        />
                         <span>
                             Too many wrong passwords. Try again in <strong>{countdown}</strong>.
                         </span>
                     </div>
                 ) : error ? (
-                    <div className="login-notice error" role="alert" aria-live="polite">
-                        <Icon name="warning" size={14} />
+                    <div
+                        className='login-notice error'
+                        role='alert'
+                        aria-live='polite'
+                    >
+                        <Icon
+                            name='warning'
+                            size={14}
+                        />
                         <span>
                             {error}
-                            {attemptsLeft !== null && attemptsLeft <= 2 && <> {attemptsLeft === 0 ? 'The next one locks sign-in' : `${attemptsLeft} more and sign-in is locked`} for {fmt.plural(policy.lock_minutes, 'minute')}.</>}
+                            {attemptsLeft !== null && attemptsLeft <= 2 && (
+                                <>
+                                    {' '}
+                                    {attemptsLeft === 0
+                                        ? 'The next one locks sign-in'
+                                        : `${attemptsLeft} more and sign-in is locked`}{' '}
+                                    for {fmt.plural(policy.lock_minutes, 'minute')}.
+                                </>
+                            )}
                         </span>
                     </div>
                 ) : null}
-                <Button type="submit" variant="primary" className="login-submit" disabled={busy || locked || !username || !password}>
+                <Button
+                    type='submit'
+                    variant='primary'
+                    className='login-submit'
+                    disabled={busy || locked || !username || !password}
+                >
                     {busy ? 'Signing in…' : locked ? `Locked · ${countdown}` : 'Sign in'}
                 </Button>
-                <p className="login-foot">Every sign-in is logged and reported.</p>
+                <p className='login-foot'>Every sign-in is logged and reported.</p>
             </form>
         </div>
     )

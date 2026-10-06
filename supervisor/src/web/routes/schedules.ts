@@ -23,7 +23,12 @@ export function scheduleRoutes(): Hono<Env> {
         if (!expr) return c.json({ ok: false, error: 'empty', tz }, 200)
         try {
             const cron = parseCron(expr)
-            return c.json({ ok: true, text: describeCron(cron), next: nextRun(cron, {}, tz)?.toISOString() ?? null, tz })
+            return c.json({
+                ok: true,
+                text: describeCron(cron),
+                next: nextRun(cron, {}, tz)?.toISOString() ?? null,
+                tz
+            })
         } catch (error) {
             return c.json({ ok: false, error: (error as Error).message, tz }, 200)
         }
@@ -69,8 +74,15 @@ export function scheduleRoutes(): Hono<Env> {
         if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled must be a boolean' }, 400)
         if (!catalog.exists('schedules', name)) return c.json({ error: 'schedule not found' }, 404)
         const entry = catalog.get('schedules', name)
-        if (entry.frontmatter_error) return c.json({ error: `the file has invalid YAML frontmatter (${entry.frontmatter_error}); fix it by hand first` }, 409)
-        catalog.save('schedules', name, { frontmatter: { ...entry.frontmatter, enabled: body.enabled }, body: entry.body })
+        if (entry.frontmatter_error)
+            return c.json(
+                { error: `the file has invalid YAML frontmatter (${entry.frontmatter_error}); fix it by hand first` },
+                409
+            )
+        catalog.save('schedules', name, {
+            frontmatter: { ...entry.frontmatter, enabled: body.enabled },
+            body: entry.body
+        })
         return c.json(schedules.get(name))
     })
 

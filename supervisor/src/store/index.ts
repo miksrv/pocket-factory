@@ -8,7 +8,8 @@ import type { TaskGit } from '../git/changes.js'
 export type Channel = 'telegram' | 'web'
 export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type TaskEventType = 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
+export type TaskEventType =
+    'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
 
 /** One question of an `AskUserQuestion` call, as the CLI sends it. */
 export interface AskQuestion {
@@ -322,7 +323,11 @@ const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply, $
 /** A schedule run with the status of the task it queued, if any. */
 const SCHEDULE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
 
-type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply' | 'active'> & { unread: number; needs_reply: number; active: number }
+type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply' | 'active'> & {
+    unread: number
+    needs_reply: number
+    active: number
+}
 const conversationOf = (row: ConversationRow): Conversation => ({
     ...row,
     unread: Boolean(row.unread),
@@ -331,7 +336,11 @@ const conversationOf = (row: ConversationRow): Conversation => ({
 })
 
 /** A `tasks` row as SQLite returns it: `ask` is JSON text. */
-type TaskRow = Omit<Task, 'ask' | 'attachments' | 'git'> & { ask: string | null; attachments: string | null; git: string | null }
+type TaskRow = Omit<Task, 'ask' | 'attachments' | 'git'> & {
+    ask: string | null
+    attachments: string | null
+    git: string | null
+}
 const taskOf = (row: TaskRow): Task => ({
     ...row,
     git: row.git ? (JSON.parse(row.git) as TaskGit) : null,
@@ -347,7 +356,9 @@ export class Store {
 
     findConversation(channel: Channel, externalId: string): Conversation | undefined {
         const row = this.db
-            .prepare(`SELECT ${CONVERSATION} WHERE c.channel = ? AND c.external_id = ? AND c.deleted_at IS NULL ORDER BY c.created_at DESC LIMIT 1`)
+            .prepare(
+                `SELECT ${CONVERSATION} WHERE c.channel = ? AND c.external_id = ? AND c.deleted_at IS NULL ORDER BY c.created_at DESC LIMIT 1`
+            )
             .get(channel, externalId) as ConversationRow | undefined
         return row && conversationOf(row)
     }
@@ -357,7 +368,12 @@ export class Store {
         return row && conversationOf(row)
     }
 
-    createConversation(channel: Channel, externalId: string | null, title: string | null = null, project: string | null = null): Conversation {
+    createConversation(
+        channel: Channel,
+        externalId: string | null,
+        title: string | null = null,
+        project: string | null = null
+    ): Conversation {
         const ts = now()
         const conversation: Conversation = {
             id: randomUUID(),
@@ -407,7 +423,9 @@ export class Store {
         const { sql, values } = keyset('updated_at', before)
         return (
             this.db
-                .prepare(`SELECT ${CONVERSATION} WHERE c.deleted_at IS NULL ${sql} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`)
+                .prepare(
+                    `SELECT ${CONVERSATION} WHERE c.deleted_at IS NULL ${sql} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`
+                )
                 .all(...(values as never[]), limit) as unknown as ConversationRow[]
         ).map(conversationOf)
     }
@@ -463,7 +481,17 @@ export class Store {
                 `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, attachments, created_at)
                  VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`
             )
-            .run(task.id, conversationId, source, prompt, project, schedule, model, task.attachments ? JSON.stringify(task.attachments) : null, task.created_at)
+            .run(
+                task.id,
+                conversationId,
+                source,
+                prompt,
+                project,
+                schedule,
+                model,
+                task.attachments ? JSON.stringify(task.attachments) : null,
+                task.created_at
+            )
         return task
     }
 
@@ -477,7 +505,11 @@ export class Store {
         const values: unknown[] = []
         for (const [key, value] of Object.entries(patch)) {
             sets.push(`${key} = ?`)
-            values.push((key === 'ask' || key === 'attachments' || key === 'git') && value !== null ? JSON.stringify(value) : value)
+            values.push(
+                (key === 'ask' || key === 'attachments' || key === 'git') && value !== null
+                    ? JSON.stringify(value)
+                    : value
+            )
         }
         if (sets.length > 0) {
             values.push(id)
@@ -487,7 +519,15 @@ export class Store {
     }
 
     /** Newest first; `before` is the last row already shown (`created_at` + id, keyset paging). */
-    listTasks(options: { status?: TaskStatus; conversationId?: string; project?: string; before?: Cursor; limit?: number } = {}): Task[] {
+    listTasks(
+        options: {
+            status?: TaskStatus
+            conversationId?: string
+            project?: string
+            before?: Cursor
+            limit?: number
+        } = {}
+    ): Task[] {
         const where: string[] = []
         const values: unknown[] = []
         if (options.status) {
@@ -520,7 +560,9 @@ export class Store {
 
     /** Distinct projects tasks have worked in, for filter menus. */
     taskProjects(): string[] {
-        const rows = this.db.prepare('SELECT DISTINCT project FROM tasks WHERE project IS NOT NULL ORDER BY project').all() as Array<{ project: string }>
+        const rows = this.db
+            .prepare('SELECT DISTINCT project FROM tasks WHERE project IS NOT NULL ORDER BY project')
+            .all() as Array<{ project: string }>
         return rows.map((row) => row.project)
     }
 
@@ -631,17 +673,23 @@ export class Store {
     /** The task of a schedule that is still queued or running, if any (one run at a time per schedule). */
     activeScheduleTask(schedule: string): Task | undefined {
         const row = this.db
-            .prepare(`SELECT * FROM tasks WHERE schedule = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`)
+            .prepare(
+                `SELECT * FROM tasks WHERE schedule = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`
+            )
             .get(schedule) as TaskRow | undefined
         return row && taskOf(row)
     }
 
     addScheduleRun(run: Omit<ScheduleRun, 'id' | 'task_status'>): ScheduleRun {
         const result = this.db
-            .prepare('INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .prepare(
+                'INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            )
             .run(run.schedule, run.fired_at, run.trigger, run.status, run.note, run.items, run.task_id, run.duration_ms)
         this.db
-            .prepare('DELETE FROM schedule_runs WHERE schedule = ? AND id NOT IN (SELECT id FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?)')
+            .prepare(
+                'DELETE FROM schedule_runs WHERE schedule = ? AND id NOT IN (SELECT id FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?)'
+            )
             .run(run.schedule, run.schedule, SCHEDULE_RUNS_KEPT)
 
         return { ...run, task_status: null, id: Number(result.lastInsertRowid) }
@@ -659,14 +707,20 @@ export class Store {
     lastScheduleRuns(withTask = false): Map<string, ScheduleRun> {
         const filter = withTask ? 'AND task_id IS NOT NULL' : ''
         const rows = this.db
-            .prepare(`SELECT ${SCHEDULE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`)
+            .prepare(
+                `SELECT ${SCHEDULE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`
+            )
             .all() as unknown as ScheduleRun[]
         return new Map(rows.map((r) => [r.schedule, r]))
     }
 
     /** Every schedule name the store remembers (runs or seen items), for cleaning up after a deleted file. */
     scheduleNames(): string[] {
-        return (this.db.prepare('SELECT schedule FROM schedule_runs UNION SELECT schedule FROM seen_items').all() as Array<{ schedule: string }>).map((r) => r.schedule)
+        return (
+            this.db.prepare('SELECT schedule FROM schedule_runs UNION SELECT schedule FROM seen_items').all() as Array<{
+                schedule: string
+            }>
+        ).map((r) => r.schedule)
     }
 
     /**
@@ -677,7 +731,9 @@ export class Store {
     seenVariants(schedule: string, base: string): Array<{ key: string; first_seen: string; task_id: string | null }> {
         const escaped = base.replace(/[\\%_]/g, (c) => `\\${c}`)
         return this.db
-            .prepare("SELECT key, first_seen, task_id FROM seen_items WHERE schedule = ? AND key LIKE ? ESCAPE '\\' ORDER BY first_seen DESC")
+            .prepare(
+                "SELECT key, first_seen, task_id FROM seen_items WHERE schedule = ? AND key LIKE ? ESCAPE '\\' ORDER BY first_seen DESC"
+            )
             .all(schedule, `${escaped}@%`) as Array<{ key: string; first_seen: string; task_id: string | null }>
     }
     /** Of the given keys, the ones the schedule already handed to a task (or seeded). */
@@ -689,12 +745,16 @@ export class Store {
     }
 
     seenCount(schedule: string): number {
-        const row = this.db.prepare('SELECT COUNT(*) AS n FROM seen_items WHERE schedule = ?').get(schedule) as { n: number }
+        const row = this.db.prepare('SELECT COUNT(*) AS n FROM seen_items WHERE schedule = ?').get(schedule) as {
+            n: number
+        }
         return row.n
     }
 
     markSeen(schedule: string, items: Array<{ key: string; title: string | null }>, taskId: string | null): void {
-        const stmt = this.db.prepare('INSERT OR IGNORE INTO seen_items (schedule, key, title, first_seen, task_id) VALUES (?, ?, ?, ?, ?)')
+        const stmt = this.db.prepare(
+            'INSERT OR IGNORE INTO seen_items (schedule, key, title, first_seen, task_id) VALUES (?, ?, ?, ?, ?)'
+        )
         const ts = now()
         for (const item of items) stmt.run(schedule, item.key, item.title, ts, taskId)
     }
@@ -716,14 +776,18 @@ export class Store {
     /** The conversation a Telegram chat talks to now, if the owner switched it (and it still exists). */
     telegramTopic(chatId: number): Conversation | undefined {
         const row = this.db
-            .prepare(`SELECT ${CONVERSATION} JOIN telegram_chats tc ON tc.conversation_id = c.id WHERE tc.chat_id = ? AND c.deleted_at IS NULL`)
+            .prepare(
+                `SELECT ${CONVERSATION} JOIN telegram_chats tc ON tc.conversation_id = c.id WHERE tc.chat_id = ? AND c.deleted_at IS NULL`
+            )
             .get(chatId) as ConversationRow | undefined
         return row && conversationOf(row)
     }
 
     setTelegramTopic(chatId: number, conversationId: string): void {
         this.db
-            .prepare('INSERT INTO telegram_chats (chat_id, conversation_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET conversation_id = excluded.conversation_id, updated_at = excluded.updated_at')
+            .prepare(
+                'INSERT INTO telegram_chats (chat_id, conversation_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET conversation_id = excluded.conversation_id, updated_at = excluded.updated_at'
+            )
             .run(chatId, conversationId, now())
     }
 
@@ -733,21 +797,32 @@ export class Store {
 
     /** The chats whose topic is this conversation: where a reply of its tasks goes. */
     telegramChatsFor(conversationId: string): number[] {
-        return (this.db.prepare('SELECT chat_id FROM telegram_chats WHERE conversation_id = ?').all(conversationId) as Array<{ chat_id: number }>).map((r) => r.chat_id)
+        return (
+            this.db
+                .prepare('SELECT chat_id FROM telegram_chats WHERE conversation_id = ?')
+                .all(conversationId) as Array<{ chat_id: number }>
+        ).map((r) => r.chat_id)
     }
 
     /** The bot sent a message about a conversation (a reply, a question, an ack): a reply to it later names that conversation. */
     rememberTelegramMessage(chatId: number, messageId: number, conversationId: string, taskId: string | null): void {
         this.db
-            .prepare('INSERT OR REPLACE INTO telegram_messages (chat_id, message_id, conversation_id, task_id, sent_at) VALUES (?, ?, ?, ?, ?)')
+            .prepare(
+                'INSERT OR REPLACE INTO telegram_messages (chat_id, message_id, conversation_id, task_id, sent_at) VALUES (?, ?, ?, ?, ?)'
+            )
             .run(chatId, messageId, conversationId, taskId, now())
-        this.db.prepare('DELETE FROM telegram_messages WHERE sent_at < ?').run(new Date(Date.now() - 180 * 86_400_000).toISOString())
+        this.db
+            .prepare('DELETE FROM telegram_messages WHERE sent_at < ?')
+            .run(new Date(Date.now() - 180 * 86_400_000).toISOString())
     }
 
-    telegramMessage(chatId: number, messageId: number): { conversation_id: string; task_id: string | null } | undefined {
-        return this.db.prepare('SELECT conversation_id, task_id FROM telegram_messages WHERE chat_id = ? AND message_id = ?').get(chatId, messageId) as
-            | { conversation_id: string; task_id: string | null }
-            | undefined
+    telegramMessage(
+        chatId: number,
+        messageId: number
+    ): { conversation_id: string; task_id: string | null } | undefined {
+        return this.db
+            .prepare('SELECT conversation_id, task_id FROM telegram_messages WHERE chat_id = ? AND message_id = ?')
+            .get(chatId, messageId) as { conversation_id: string; task_id: string | null } | undefined
     }
 
     // ---- meta -------------------------------------------------------------
@@ -759,19 +834,24 @@ export class Store {
 
     setMeta(key: string, value: unknown): void {
         this.db
-            .prepare('INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at')
+            .prepare(
+                'INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+            )
             .run(key, JSON.stringify(value), now())
     }
 
     // ---- rate limits ------------------------------------------------------
 
     latestRateLimits(): RateLimitSnapshot | undefined {
-        const row = this.db.prepare('SELECT * FROM rate_limits ORDER BY id DESC LIMIT 1').get() as RateLimitRow | undefined
+        const row = this.db.prepare('SELECT * FROM rate_limits ORDER BY id DESC LIMIT 1').get() as
+            RateLimitRow | undefined
         return row ? snapshotFromRow(row) : undefined
     }
 
     listRateLimits(limit = 100): RateLimitSnapshot[] {
-        const rows = this.db.prepare('SELECT * FROM rate_limits ORDER BY id DESC LIMIT ?').all(limit) as unknown as RateLimitRow[]
+        const rows = this.db
+            .prepare('SELECT * FROM rate_limits ORDER BY id DESC LIMIT ?')
+            .all(limit) as unknown as RateLimitRow[]
         return rows.map(snapshotFromRow).reverse()
     }
 
@@ -810,10 +890,17 @@ export class Store {
 
     // ---- task events ------------------------------------------------------
 
-    addEvent(taskId: string, type: TaskEventType, payload: unknown, origin: EventOrigin = { agent: null, parent_tool_use_id: null }): TaskEvent {
+    addEvent(
+        taskId: string,
+        type: TaskEventType,
+        payload: unknown,
+        origin: EventOrigin = { agent: null, parent_tool_use_id: null }
+    ): TaskEvent {
         const ts = now()
         const result = this.db
-            .prepare('INSERT INTO task_events (task_id, ts, type, payload, agent, parent_tool_use_id) VALUES (?, ?, ?, ?, ?, ?)')
+            .prepare(
+                'INSERT INTO task_events (task_id, ts, type, payload, agent, parent_tool_use_id) VALUES (?, ?, ?, ?, ?, ?)'
+            )
             .run(taskId, ts, type, JSON.stringify(payload), origin.agent, origin.parent_tool_use_id)
         return { id: Number(result.lastInsertRowid), task_id: taskId, ts, type, payload, ...origin }
     }
@@ -864,8 +951,10 @@ export class Store {
                  FROM task_events e JOIN tasks t ON t.id = e.task_id
                  ${sql} ORDER BY e.id DESC LIMIT ?`
             )
-            .all(...(values as never[]), query.limit ?? 200) as unknown as Array<Omit<AuditEvent, 'payload'> & { payload: string }>
-        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+            .all(...(values as never[]), query.limit ?? 200) as unknown as Array<
+            Omit<AuditEvent, 'payload'> & { payload: string }
+        >
+        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) as Record<string, unknown> }))
     }
 
     /** Totals for the same filter as the list (kind included), so "N of total" and paging agree. */
@@ -930,11 +1019,14 @@ export class Store {
         // The orchestrator: tasks are its runs.
         const orchestrator = row(null)
         const tasks = this.db
-            .prepare(`SELECT COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks WHERE started_at IS NOT NULL ${since ? 'AND started_at >= ?' : ''}`)
+            .prepare(
+                `SELECT COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks WHERE started_at IS NOT NULL ${since ? 'AND started_at >= ?' : ''}`
+            )
             .get(...(args as never[])) as { runs: number; last: string | null; running: number | null }
         orchestrator.runs = tasks.runs
         orchestrator.running = tasks.running ?? 0
-        if (tasks.last && (!orchestrator.last_active || tasks.last > orchestrator.last_active)) orchestrator.last_active = tasks.last
+        if (tasks.last && (!orchestrator.last_active || tasks.last > orchestrator.last_active))
+            orchestrator.last_active = tasks.last
         return [...rows.values()].sort((a, b) => (a.agent === null ? -1 : b.agent === null ? 1 : b.runs - a.runs))
     }
 
@@ -943,10 +1035,14 @@ export class Store {
         const cond = since ? 'WHERE e.ts >= ?' : ''
         const args = since ? [since] : []
         const agents = this.db
-            .prepare(`SELECT DISTINCT e.agent FROM task_events e ${cond} ${cond ? 'AND' : 'WHERE'} e.agent IS NOT NULL ORDER BY e.agent`)
+            .prepare(
+                `SELECT DISTINCT e.agent FROM task_events e ${cond} ${cond ? 'AND' : 'WHERE'} e.agent IS NOT NULL ORDER BY e.agent`
+            )
             .all(...(args as never[])) as Array<{ agent: string }>
         const projects = this.db
-            .prepare(`SELECT DISTINCT t.project FROM task_events e JOIN tasks t ON t.id = e.task_id ${cond} ${cond ? 'AND' : 'WHERE'} t.project IS NOT NULL ORDER BY t.project`)
+            .prepare(
+                `SELECT DISTINCT t.project FROM task_events e JOIN tasks t ON t.id = e.task_id ${cond} ${cond ? 'AND' : 'WHERE'} t.project IS NOT NULL ORDER BY t.project`
+            )
             .all(...(args as never[])) as Array<{ project: string }>
         return { agents: agents.map((r) => r.agent), projects: projects.map((r) => r.project) }
     }
@@ -955,23 +1051,27 @@ export class Store {
         const rows = this.db
             .prepare('SELECT * FROM task_events WHERE task_id = ? AND id > ? ORDER BY id ASC')
             .all(taskId, afterId) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
-        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) as Record<string, unknown> }))
     }
 
     /** All events of the given tasks, oldest first. */
     listEventsOfTasks(taskIds: string[]): TaskEvent[] {
         if (taskIds.length === 0) return []
         const rows = this.db
-            .prepare(`SELECT * FROM task_events WHERE task_id IN (${taskIds.map(() => '?').join(', ')}) ORDER BY id ASC`)
+            .prepare(
+                `SELECT * FROM task_events WHERE task_id IN (${taskIds.map(() => '?').join(', ')}) ORDER BY id ASC`
+            )
             .all(...(taskIds as never[])) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
-        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) as Record<string, unknown> }))
     }
 
     /** Tasks of a conversation that are not finished, for a client that (re)connects to the live feed. */
     openTasks(conversationId: string): Task[] {
         return tasksOf(
             this.db
-                .prepare(`SELECT * FROM tasks WHERE conversation_id = ? AND status IN ('queued', 'running') ORDER BY created_at ASC`)
+                .prepare(
+                    `SELECT * FROM tasks WHERE conversation_id = ? AND status IN ('queued', 'running') ORDER BY created_at ASC`
+                )
                 .all(conversationId) as unknown as TaskRow[]
         )
     }
@@ -983,7 +1083,7 @@ export class Store {
                  WHERE t.conversation_id = ? AND e.id > ? ORDER BY e.id ASC`
             )
             .all(conversationId, afterId) as unknown as Array<Omit<TaskEvent, 'payload'> & { payload: string }>
-        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))
+        return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) as Record<string, unknown> }))
     }
 
     // ---- web sign-in -------------------------------------------------------
@@ -991,19 +1091,24 @@ export class Store {
     createWebSession(id: string, expiresAt: string, ip: string | null, userAgent: string | null): WebSession {
         const ts = now()
         this.db
-            .prepare('INSERT INTO web_sessions (id, created_at, last_seen_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)')
+            .prepare(
+                'INSERT INTO web_sessions (id, created_at, last_seen_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)'
+            )
             .run(id, ts, ts, expiresAt, ip, userAgent)
         return { id, created_at: ts, last_seen_at: ts, expires_at: expiresAt, ip, user_agent: userAgent }
     }
 
     /** A live session by its id (hash); an expired one counts as gone. */
     getWebSession(id: string): WebSession | undefined {
-        return this.db.prepare('SELECT * FROM web_sessions WHERE id = ? AND expires_at > ?').get(id, now()) as WebSession | undefined
+        return this.db.prepare('SELECT * FROM web_sessions WHERE id = ? AND expires_at > ?').get(id, now()) as
+            WebSession | undefined
     }
 
     /** The session was used: slide its expiry and remember when and from where. */
     touchWebSession(id: string, expiresAt: string, ip: string | null): void {
-        this.db.prepare('UPDATE web_sessions SET last_seen_at = ?, expires_at = ?, ip = COALESCE(?, ip) WHERE id = ?').run(now(), expiresAt, ip, id)
+        this.db
+            .prepare('UPDATE web_sessions SET last_seen_at = ?, expires_at = ?, ip = COALESCE(?, ip) WHERE id = ?')
+            .run(now(), expiresAt, ip, id)
     }
 
     deleteWebSession(id: string): boolean {
@@ -1018,7 +1123,9 @@ export class Store {
     }
 
     listWebSessions(): WebSession[] {
-        return this.db.prepare('SELECT * FROM web_sessions WHERE expires_at > ? ORDER BY last_seen_at DESC').all(now()) as unknown as WebSession[]
+        return this.db
+            .prepare('SELECT * FROM web_sessions WHERE expires_at > ? ORDER BY last_seen_at DESC')
+            .all(now()) as unknown as WebSession[]
     }
 
     purgeWebSessions(): number {
@@ -1027,7 +1134,9 @@ export class Store {
 
     addLoginAttempt(ip: string, username: string | null, result: LoginResult, userAgent: string | null): LoginAttempt {
         const ts = now()
-        const info = this.db.prepare('INSERT INTO login_attempts (ts, ip, username, result, user_agent) VALUES (?, ?, ?, ?, ?)').run(ts, ip, username, result, userAgent)
+        const info = this.db
+            .prepare('INSERT INTO login_attempts (ts, ip, username, result, user_agent) VALUES (?, ?, ?, ?, ?)')
+            .run(ts, ip, username, result, userAgent)
         return { id: Number(info.lastInsertRowid), ts, ip, username, result, user_agent: userAgent }
     }
 
@@ -1035,14 +1144,24 @@ export class Store {
     loginFailures(ip: string | null, since: string): { count: number; last: string | null } {
         const row = (
             ip === null
-                ? this.db.prepare(`SELECT COUNT(*) AS count, MAX(ts) AS last FROM login_attempts WHERE result = 'failed' AND ts > ?`).get(since)
-                : this.db.prepare(`SELECT COUNT(*) AS count, MAX(ts) AS last FROM login_attempts WHERE result = 'failed' AND ip = ? AND ts > ?`).get(ip, since)
+                ? this.db
+                      .prepare(
+                          `SELECT COUNT(*) AS count, MAX(ts) AS last FROM login_attempts WHERE result = 'failed' AND ts > ?`
+                      )
+                      .get(since)
+                : this.db
+                      .prepare(
+                          `SELECT COUNT(*) AS count, MAX(ts) AS last FROM login_attempts WHERE result = 'failed' AND ip = ? AND ts > ?`
+                      )
+                      .get(ip, since)
         ) as { count: number; last: string | null }
         return { count: Number(row.count), last: row.last }
     }
 
     listLoginAttempts(limit = 50): LoginAttempt[] {
-        return this.db.prepare('SELECT * FROM login_attempts ORDER BY id DESC LIMIT ?').all(limit) as unknown as LoginAttempt[]
+        return this.db
+            .prepare('SELECT * FROM login_attempts ORDER BY id DESC LIMIT ?')
+            .all(limit) as unknown as LoginAttempt[]
     }
 
     purgeLoginAttempts(before: string): number {

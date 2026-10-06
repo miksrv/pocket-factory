@@ -50,13 +50,23 @@ const TYPES: Record<string, string> = {
 export const isPreviewable = (type: string) => /^image\/(png|jpeg|gif|webp)$/.test(type)
 
 /** A guess at a file's type from its name, for channels that send none. */
-export const typeOf = (name: string, given?: string | null): string => (given && given !== 'application/octet-stream' ? given : (TYPES[path.extname(name).toLowerCase()] ?? given ?? 'application/octet-stream'))
+export const typeOf = (name: string, given?: string | null): string =>
+    given && given !== 'application/octet-stream'
+        ? given
+        : (TYPES[path.extname(name).toLowerCase()] ?? given ?? 'application/octet-stream')
 
 /** "Screen Shot 2026-10-06 at 9.41.png" → "Screen_Shot_2026-10-06_at_9.41.png", short enough for a path. */
 function safeName(original: string): string {
     const base = path.basename(original || 'file').normalize('NFKD')
-    const ext = path.extname(base).replace(/[^A-Za-z0-9.]/g, '').slice(0, 10)
-    const stem = base.slice(0, base.length - path.extname(base).length).replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+|_+$/g, '').slice(0, 60)
+    const ext = path
+        .extname(base)
+        .replace(/[^A-Za-z0-9.]/g, '')
+        .slice(0, 10)
+    const stem = base
+        .slice(0, base.length - path.extname(base).length)
+        .replace(/[^A-Za-z0-9._-]+/g, '_')
+        .replace(/^[._]+|_+$/g, '')
+        .slice(0, 60)
     return `${stem || 'file'}${ext}`
 }
 
@@ -78,7 +88,8 @@ export class Inbox {
 
     save(conversationId: string, originalName: string, data: Buffer, type?: string | null): Attachment {
         if (data.length === 0) throw new Error('the file is empty')
-        if (data.length > MAX_ATTACHMENT_BYTES) throw new Error(`the file is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB`)
+        if (data.length > MAX_ATTACHMENT_BYTES)
+            throw new Error(`the file is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB`)
         const dir = this.dir(conversationId)
         fs.mkdirSync(dir, { recursive: true })
         const name = `${stamp()}-${randomBytes(3).toString('hex')}-${safeName(originalName)}`
@@ -95,7 +106,12 @@ export class Inbox {
      */
     adopt(conversationId: string, attachment: Attachment): Attachment {
         const dir = this.dir(conversationId)
-        if (path.dirname(attachment.path) === dir || !attachment.path.startsWith(this.root + path.sep) || !fs.existsSync(attachment.path)) return attachment
+        if (
+            path.dirname(attachment.path) === dir ||
+            !attachment.path.startsWith(this.root + path.sep) ||
+            !fs.existsSync(attachment.path)
+        )
+            return attachment
         fs.mkdirSync(dir, { recursive: true })
         const target = path.join(dir, attachment.name)
         fs.renameSync(attachment.path, target)
@@ -158,7 +174,8 @@ export class Inbox {
     }
 }
 
-const size = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`)
+const size = (bytes: number) =>
+    bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
 
 /**
  * What the agent reads after the owner's text: one line per file with its

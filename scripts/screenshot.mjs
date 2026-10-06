@@ -6,13 +6,28 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 const [url, out, width = '1280', height = '760', js] = process.argv.slice(2)
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--window-size=${width},${height}`, '--remote-debugging-port=9333', `--user-data-dir=${process.env.TMPDIR ?? '/tmp'}/pf-screenshot-profile`, 'about:blank'], { stdio: 'ignore' })
+const chrome = spawn(
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    [
+        '--headless=new',
+        '--disable-gpu',
+        '--hide-scrollbars',
+        `--window-size=${width},${height}`,
+        '--remote-debugging-port=9333',
+        `--user-data-dir=${process.env.TMPDIR ?? '/tmp'}/pf-screenshot-profile`,
+        'about:blank'
+    ],
+    { stdio: 'ignore' }
+)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 try {
     let target
     for (let i = 0; i < 30 && !target; i++) {
         await sleep(300)
-        target = await fetch('http://127.0.0.1:9333/json/list').then((r) => r.json()).then((l) => l.find((t) => t.type === 'page')).catch(() => undefined)
+        target = await fetch('http://127.0.0.1:9333/json/list')
+            .then((r) => r.json())
+            .then((l) => l.find((t) => t.type === 'page'))
+            .catch(() => undefined)
     }
     const ws = new WebSocket(target.webSocketDebuggerUrl)
     await new Promise((r) => (ws.onopen = r))
@@ -20,7 +35,13 @@ try {
     const call = (method, params = {}) =>
         new Promise((resolve) => {
             const me = ++id
-            const on = (e) => { const m = JSON.parse(e.data); if (m.id === me) { ws.removeEventListener('message', on); resolve(m.result) } }
+            const on = (e) => {
+                const m = JSON.parse(e.data)
+                if (m.id === me) {
+                    ws.removeEventListener('message', on)
+                    resolve(m.result)
+                }
+            }
             ws.addEventListener('message', on)
             ws.send(JSON.stringify({ id: me, method, params }))
         })
@@ -28,7 +49,11 @@ try {
     const page = new URL(url)
     if (page.username) {
         await call('Network.enable')
-        await call('Network.setExtraHTTPHeaders', { headers: { Authorization: `Basic ${Buffer.from(`${decodeURIComponent(page.username)}:${decodeURIComponent(page.password)}`).toString('base64')}` } })
+        await call('Network.setExtraHTTPHeaders', {
+            headers: {
+                Authorization: `Basic ${Buffer.from(`${decodeURIComponent(page.username)}:${decodeURIComponent(page.password)}`).toString('base64')}`
+            }
+        })
         page.username = ''
         page.password = ''
     }

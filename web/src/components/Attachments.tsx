@@ -1,5 +1,5 @@
-import { FileText } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { FileText } from 'lucide-react'
 
 import { api, type Attachment, attachmentUrl, fmt, isImage } from '../lib/api'
 import { CloseButton } from './ui'
@@ -9,29 +9,59 @@ export const displayName = (a: Attachment) => a.name.replace(/^\d{8}-\d{6}-[0-9a
 
 /** Files sent with a message, under its bubble: images as thumbnails that open full size, other files as chips. */
 /** `removed`: the conversation was deleted, and its files with it (the task page still lists them). */
-export function SentAttachments({ conversationId, attachments, removed }: { conversationId: string; attachments: Attachment[] | null; removed?: boolean }) {
+export function SentAttachments({
+    conversationId,
+    attachments,
+    removed
+}: {
+    conversationId: string
+    attachments: Attachment[] | null
+    removed?: boolean
+}) {
     // An image that no longer loads is treated the same way.
     const [failed, setMissing] = useState<Set<string>>(() => new Set())
     const missing = removed ? new Set((attachments ?? []).map((a) => a.name)) : failed
     if (!attachments?.length) return null
     return (
-        <div className="attachments">
+        <div className='attachments'>
             {attachments.map((a) =>
                 missing.has(a.name) ? (
-                    <span key={a.name} className="attachment-chip gone" title="Removed from the disk together with its conversation">
+                    <span
+                        key={a.name}
+                        className='attachment-chip gone'
+                        title='Removed from the disk together with its conversation'
+                    >
                         <FileText size={13} />
-                        <span className="name">{displayName(a)}</span>
-                        <span className="dim">removed</span>
+                        <span className='name'>{displayName(a)}</span>
+                        <span className='dim'>removed</span>
                     </span>
                 ) : isImage(a) ? (
-                    <a key={a.name} href={attachmentUrl(conversationId, a)} target="_blank" rel="noopener noreferrer" className="attachment-thumb" title={displayName(a)}>
-                        <img src={attachmentUrl(conversationId, a)} alt={displayName(a)} loading="lazy" onError={() => setMissing((m) => new Set(m).add(a.name))} />
+                    <a
+                        key={a.name}
+                        href={attachmentUrl(conversationId, a)}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        className='attachment-thumb'
+                        title={displayName(a)}
+                    >
+                        <img
+                            src={attachmentUrl(conversationId, a)}
+                            alt={displayName(a)}
+                            loading='lazy'
+                            onError={() => setMissing((m) => new Set(m).add(a.name))}
+                        />
                     </a>
                 ) : (
-                    <a key={a.name} href={attachmentUrl(conversationId, a)} className="attachment-chip" title={a.path} download={displayName(a)}>
+                    <a
+                        key={a.name}
+                        href={attachmentUrl(conversationId, a)}
+                        className='attachment-chip'
+                        title={a.path}
+                        download={displayName(a)}
+                    >
                         <FileText size={13} />
-                        <span className="name">{displayName(a)}</span>
-                        <span className="dim">{fmt.bytes(a.size)}</span>
+                        <span className='name'>{displayName(a)}</span>
+                        <span className='dim'>{fmt.bytes(a.size)}</span>
                     </a>
                 )
             )}
@@ -70,17 +100,29 @@ export function useUploads(conversationId: string) {
         []
     )
 
-    const patch = (key: string, change: Partial<Upload>) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, ...change } : u)))
+    const patch = (key: string, change: Partial<Upload>) =>
+        setUploads((list) => list.map((u) => (u.key === key ? { ...u, ...change } : u)))
 
     const add = (files: File[]) => {
         const room = Math.max(0, MAX_FILES - count.current)
         count.current += Math.min(room, files.length)
         for (const file of files.slice(0, room)) {
             const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-            const preview = isImage({ name: file.name, path: '', type: file.type, size: file.size }) ? URL.createObjectURL(file) : null
+            const preview = isImage({ name: file.name, path: '', type: file.type, size: file.size })
+                ? URL.createObjectURL(file)
+                : null
             if (preview) urls.current.add(preview)
             const tooBig = file.size > MAX_BYTES
-            setUploads((list) => [...list, { key, file, preview, status: tooBig ? 'error' : 'uploading', error: tooBig ? 'larger than 20 MB' : undefined }])
+            setUploads((list) => [
+                ...list,
+                {
+                    key,
+                    file,
+                    preview,
+                    status: tooBig ? 'error' : 'uploading',
+                    error: tooBig ? 'larger than 20 MB' : undefined
+                }
+            ])
             if (tooBig) continue
             api.uploadAttachment(conversationId, file)
                 .then((attachment) => patch(key, { status: 'done', attachment }))
@@ -118,13 +160,34 @@ export function useUploads(conversationId: string) {
 export function PendingUploads({ uploads, onRemove }: { uploads: Upload[]; onRemove: (key: string) => void }) {
     if (!uploads.length) return null
     return (
-        <div className="composer-files">
+        <div className='composer-files'>
             {uploads.map((u) => (
-                <div key={u.key} className={`attachment-chip ${u.status}`} title={u.error ?? u.file.name}>
-                    {u.preview ? <img src={u.preview} alt="" /> : <FileText size={13} />}
-                    <span className="name">{u.file.name || 'pasted image'}</span>
-                    <span className="dim">{u.status === 'uploading' ? 'uploading…' : u.status === 'error' ? u.error : fmt.bytes(u.file.size)}</span>
-                    <CloseButton className="remove" label={`Remove ${u.file.name || 'the pasted image'}`} onClick={() => onRemove(u.key)} />
+                <div
+                    key={u.key}
+                    className={`attachment-chip ${u.status}`}
+                    title={u.error ?? u.file.name}
+                >
+                    {u.preview ? (
+                        <img
+                            src={u.preview}
+                            alt=''
+                        />
+                    ) : (
+                        <FileText size={13} />
+                    )}
+                    <span className='name'>{u.file.name || 'pasted image'}</span>
+                    <span className='dim'>
+                        {u.status === 'uploading'
+                            ? 'uploading…'
+                            : u.status === 'error'
+                              ? u.error
+                              : fmt.bytes(u.file.size)}
+                    </span>
+                    <CloseButton
+                        className='remove'
+                        label={`Remove ${u.file.name || 'the pasted image'}`}
+                        onClick={() => onRemove(u.key)}
+                    />
                 </div>
             ))}
         </div>

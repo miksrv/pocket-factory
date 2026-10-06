@@ -1,0 +1,135 @@
+#!/usr/bin/env node
+// A stand-in for the Claude Code CLI in end-to-end tests: speaks the same
+// stream-json protocol as `claude -p --input-format stream-json` (see
+// supervisor/src/claude/runner.ts) without a model or a subscription.
+//
+//   any prompt            → "Echo: <prompt>"
+//   a prompt with "ask"   → an AskUserQuestion control request first, then "You chose: <answer>"
+//   a prompt with "fail"  → an error result
+import { randomUUID } from 'node:crypto'
+import readline from 'node:readline'
+
+const args = process.argv.slice(2)
+const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
+
+if (args.includes('--version')) {
+    console.log('2.1.283 (Claude Code)')
+    process.exit(0)
+}
+if (args[0] === 'mcp' && args[1] === 'list') {
+    console.log('No MCP servers configured. Use `claude mcp add` to add a server.')
+    process.exit(0)
+}
+if (!args.includes('-p')) {
+    console.error(`fake claude: unsupported arguments ${args.join(' ')}`)
+    process.exit(2)
+}
+
+const resume = args.indexOf('--resume')
+const sessionId = resume >= 0 ? args[resume + 1] : randomUUID()
+const model = 'claude-sonnet-5-5'
+const ASK_ID = 'ask-1'
+let prompt = null
+
+const assistant = (text) =>
+    out({
+        type: 'assistant',
+        session_id: sessionId,
+        parent_tool_use_id: null,
+        message: {
+            id: `msg_${randomUUID()}`,
+            model,
+            role: 'assistant',
+            content: [{ type: 'text', text }],
+            usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+        }
+    })
+
+const finish = (text, isError = false) => {
+    const now = Math.floor(Date.now() / 1000)
+    out({
+        type: 'rate_limit_event',
+        rate_limit_info: {
+            status: 'allowed',
+            unifiedWindows: {
+                five_hour: { utilization: 0.12, resetsAt: now + 3 * 3600 },
+                seven_day: { utilization: 0.34, resetsAt: now + 4 * 86400 }
+            }
+        }
+    })
+    out({
+        type: 'result',
+        subtype: isError ? 'error_during_execution' : 'success',
+        is_error: isError,
+        result: text,
+        session_id: sessionId,
+        num_turns: 1,
+        duration_ms: 42,
+        total_cost_usd: 0,
+        usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+    })
+}
+
+const rl = readline.createInterface({ input: process.stdin })
+rl.on('line', (line) => {
+    if (!line.trim()) return
+    const message = JSON.parse(line)
+    if (message.type === 'control_request' && message.request?.subtype === 'initialize') {
+        out({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: message.request_id, response: {} }
+        })
+        return
+    }
+    if (message.type === 'user' && prompt === null) {
+        const content = message.message?.content
+        prompt = Array.isArray(content) ? content.map((part) => part.text ?? '').join('') : String(content ?? '')
+        out({
+            type: 'system',
+            subtype: 'init',
+            session_id: sessionId,
+            model,
+            tools: ['Read', 'Edit', 'Bash', 'AskUserQuestion'],
+            mcp_servers: []
+        })
+        if (/\bfail\b/i.test(prompt)) {
+            finish('Something went wrong on purpose.', true)
+        } else if (/\bask\b/i.test(prompt)) {
+            out({
+                type: 'control_request',
+                request_id: ASK_ID,
+                request: {
+                    subtype: 'can_use_tool',
+                    tool_name: 'AskUserQuestion',
+                    tool_use_id: 'toolu_ask',
+                    input: {
+                        questions: [
+                            {
+                                question: 'Which colour?',
+                                header: 'Colour',
+                                multiSelect: false,
+                                options: [
+                                    { label: 'Red', description: 'Warm' },
+                                    { label: 'Blue', description: 'Cool' }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            })
+        } else {
+            const reply = `Echo: ${prompt.split('\n')[0]}`
+            assistant(reply)
+            finish(reply)
+        }
+        return
+    }
+    if (message.type === 'control_response' && message.response?.request_id === ASK_ID) {
+        const answers = message.response.response?.updatedInput?.answers ?? {}
+        const reply = `You chose: ${Object.values(answers).join(', ') || 'nothing'}`
+        assistant(reply)
+        finish(reply)
+    }
+})
+// The host closes stdin after the result; the CLI exits then.
+rl.on('close', () => process.exit(0))

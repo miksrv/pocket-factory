@@ -1,6 +1,14 @@
-import { ArrowDown, Paperclip, SendHorizontal } from 'lucide-react'
-import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+    type ClipboardEvent,
+    type DragEvent,
+    type FormEvent,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState
+} from 'react'
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { ArrowDown, Paperclip, SendHorizontal } from 'lucide-react'
 
 import { AssistantTurn } from '../components/AssistantTurn'
 import { MAX_FILES, PendingUploads, SentAttachments, useUploads } from '../components/Attachments'
@@ -9,7 +17,15 @@ import { STATUS_CHANGED } from '../components/Layout'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
 import { useConfirm } from '../components/Modal'
 import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
-import { api, type CatalogEntry, type Conversation, fmt, streamConversation, type Task, type TaskEvent } from '../lib/api'
+import {
+    api,
+    type CatalogEntry,
+    type Conversation,
+    fmt,
+    streamConversation,
+    type Task,
+    type TaskEvent
+} from '../lib/api'
 import { readDraft, writeDraft } from '../lib/drafts'
 import { useAsync } from '../lib/useAsync'
 import { usePaged } from '../lib/usePaged'
@@ -36,7 +52,7 @@ export function ChatPage() {
         try {
             const conversation = await api.createConversation(undefined, slug)
             conversations.reload()
-            navigate(`/chat/${conversation.id}`, { replace: id === 'new' })
+            void navigate(`/chat/${conversation.id}`, { replace: id === 'new' })
         } catch (e) {
             setError((e as Error).message)
         }
@@ -59,36 +75,80 @@ export function ChatPage() {
 
     return (
         <div className={`chat${id && !creating ? ' has-thread' : ''}`}>
-            <div className="side">
-                <div className="card-head">
+            <div className='side'>
+                <div className='card-head'>
                     <span>Conversations</span>
-                    <Button variant="primary" size="sm" onClick={() => startNew(null)}>
+                    <Button
+                        variant='primary'
+                        size='sm'
+                        onClick={() => startNew(null)}
+                    >
                         New
                     </Button>
                 </div>
-                <div className="list">
-                    {(error || conversations.error) && <div className="error small" style={{ padding: '8px 14px' }}>{error ?? conversations.error}</div>}
+                <div className='list'>
+                    {(error || conversations.error) && (
+                        <div
+                            className='error small'
+                            style={{ padding: '8px 14px' }}
+                        >
+                            {error ?? conversations.error}
+                        </div>
+                    )}
                     {conversations.items.map((c) => (
-                        <NavLink key={c.id} to={`/chat/${c.id}`} className={({ isActive }) => `${isActive ? 'active' : ''}${c.active ? ' running' : ''}${c.unread ? ' unread' : ''}${c.needs_reply ? ' needs-reply' : ''}`}>
-                            <div className="grow">
-                                <div className="title" title={c.title ?? undefined}>{c.title ?? 'Untitled'}</div>
-                                <div className="desc">
-                                    <Channel channel={c.channel} schedule={Boolean(c.external_id?.startsWith('schedule:'))} />
+                        <NavLink
+                            key={c.id}
+                            to={`/chat/${c.id}`}
+                            className={({ isActive }) =>
+                                `${isActive ? 'active' : ''}${c.active ? ' running' : ''}${c.unread ? ' unread' : ''}${c.needs_reply ? ' needs-reply' : ''}`
+                            }
+                        >
+                            <div className='grow'>
+                                <div
+                                    className='title'
+                                    title={c.title ?? undefined}
+                                >
+                                    {c.title ?? 'Untitled'}
+                                </div>
+                                <div className='desc'>
+                                    <Channel
+                                        channel={c.channel}
+                                        schedule={Boolean(c.external_id?.startsWith('schedule:'))}
+                                    />
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
                                 </div>
                             </div>
                             {c.needs_reply && (
-                                <span className="mark ask" title="Waiting for your answer">
+                                <span
+                                    className='mark ask'
+                                    title='Waiting for your answer'
+                                >
                                     ?
                                 </span>
                             )}
-                            {c.unread && <span className="dot unread" title="New reply" />}
-                            {c.active && !c.needs_reply && !c.unread && <span className="dot running" title="A task is running" />}
+                            {c.unread && (
+                                <span
+                                    className='dot unread'
+                                    title='New reply'
+                                />
+                            )}
+                            {c.active && !c.needs_reply && !c.unread && (
+                                <span
+                                    className='dot running'
+                                    title='A task is running'
+                                />
+                            )}
                         </NavLink>
                     ))}
                     {conversations.items.length === 0 && !conversations.loading && <Empty>No conversations yet.</Empty>}
                     {(conversations.hasMore || conversations.items.length > PAGE) && (
-                        <LoadMore hasMore={conversations.hasMore} loading={conversations.loading} onMore={conversations.loadMore} shown={conversations.items.length} noun="conversations" />
+                        <LoadMore
+                            hasMore={conversations.hasMore}
+                            loading={conversations.loading}
+                            onMore={conversations.loadMore}
+                            shown={conversations.items.length}
+                            noun='conversations'
+                        />
                     )}
                 </div>
             </div>
@@ -100,22 +160,26 @@ export function ChatPage() {
                     onRead={conversations.refresh}
                     onDeleted={() => {
                         conversations.reload()
-                        navigate('/chat')
+                        void navigate('/chat')
                     }}
                     projects={projects.data ?? []}
                 />
             ) : (
-                <div className="thread">
+                <div className='thread'>
                     {creating ? (
                         <Empty>Starting a conversation…</Empty>
                     ) : (
                         <Intro
-                            text="Talk to Claude Code exactly as from Telegram — same rules, same projects, same session continuity."
-                            action="Start a conversation"
+                            text='Talk to Claude Code exactly as from Telegram — same rules, same projects, same session continuity.'
+                            action='Start a conversation'
                             onAction={() => startNew()}
                             note="Bound to a project, the conversation runs from its checkout: the repository's MCP servers, agents and rules apply."
                         >
-                            <ProjectSelect value={project} onChange={setProject} projects={projects.data ?? []} />
+                            <ProjectSelect
+                                value={project}
+                                onChange={setProject}
+                                projects={projects.data ?? []}
+                            />
                         </Intro>
                     )}
                 </div>
@@ -131,14 +195,46 @@ const NEAR_BOTTOM = 80
  * task goes back from running to queued only to wait for a window reset or
  * after a restart; those bump `limit_waits` / `restarts`, which count first.
  */
-const rank = (task: Task) => (task.limit_waits + task.restarts) * 3 + (task.status === 'queued' ? 0 : task.status === 'running' ? 1 : 2)
+const rank = (task: Task) =>
+    (task.limit_waits + task.restarts) * 3 + (task.status === 'queued' ? 0 : task.status === 'running' ? 1 : 2)
 
 /** "workspaces root" or one of the project files. */
-function ProjectSelect({ value, onChange, projects, disabled }: { value: string; onChange: (slug: string) => void; projects: CatalogEntry[]; disabled?: boolean }) {
-    return <FilterSelect label="Project" all="no project (workspaces root)" value={value} onChange={onChange} options={projects.map((p) => p.name)} disabled={disabled} />
+function ProjectSelect({
+    value,
+    onChange,
+    projects,
+    disabled
+}: {
+    value: string
+    onChange: (slug: string) => void
+    projects: CatalogEntry[]
+    disabled?: boolean
+}) {
+    return (
+        <FilterSelect
+            label='Project'
+            all='no project (workspaces root)'
+            value={value}
+            onChange={onChange}
+            options={projects.map((p) => p.name)}
+            disabled={disabled}
+        />
+    )
 }
 
-function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSent: () => void; onRead: () => void; onDeleted: () => void; projects: CatalogEntry[] }) {
+function Thread({
+    id,
+    onSent,
+    onRead,
+    onDeleted,
+    projects
+}: {
+    id: string
+    onSent: () => void
+    onRead: () => void
+    onDeleted: () => void
+    projects: CatalogEntry[]
+}) {
     const [conversation, setConversation] = useState<Conversation | null>(null)
     const [tasks, setTasks] = useState<Map<string, Task>>(new Map())
     const [events, setEvents] = useState<TaskEvent[]>([])
@@ -225,7 +321,8 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                         if (event.type === 'status' || event.type === 'error') void refresh(event.task_id)
                     },
                     onReconnect: () => {
-                        for (const task of tasksRef.current.values()) if (task.status === 'running' || task.status === 'queued') void refresh(task.id)
+                        for (const task of tasksRef.current.values())
+                            if (task.status === 'running' || task.status === 'queued') void refresh(task.id)
                     }
                 })
             })
@@ -234,7 +331,6 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
             cancelled = true
             stop()
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id])
 
     const scrollToBottom = () => {
@@ -366,53 +462,117 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
         else byTask.set(event.task_id, [event])
     }
     return (
-        <div className="thread">
-            <div className="thread-head">
-                <div className="row">
-                    <Button to="/chat" className="mobile-only" aria-label="All conversations">
+        <div className='thread'>
+            <div className='thread-head'>
+                <div className='row'>
+                    <Button
+                        to='/chat'
+                        className='mobile-only'
+                        aria-label='All conversations'
+                    >
                         ‹
                     </Button>
                     <div>
-                        <strong title={conversation?.title ?? undefined}>{conversation ? (conversation.title ?? 'New conversation') : '…'}</strong>
-                        <div className="dim small row" style={{ gap: 6 }}>
-                            {conversation && <Channel channel={conversation.channel} schedule={Boolean(conversation.external_id?.startsWith('schedule:'))} />}
+                        <strong title={conversation?.title ?? undefined}>
+                            {conversation ? (conversation.title ?? 'New conversation') : '…'}
+                        </strong>
+                        <div
+                            className='dim small row'
+                            style={{ gap: 6 }}
+                        >
+                            {conversation && (
+                                <Channel
+                                    channel={conversation.channel}
+                                    schedule={Boolean(conversation.external_id?.startsWith('schedule:'))}
+                                />
+                            )}
                             <span>·</span>
-                            <ProjectSelect value={conversation?.project ?? ''} onChange={rebind} projects={projects} disabled={!conversation || active} />
-                            <span>· session {conversation?.session_id ? <Link to={`/sessions/${conversation.session_id}`}>{conversation.session_id.slice(0, 8)}</Link> : 'none yet'}</span>
+                            <ProjectSelect
+                                value={conversation?.project ?? ''}
+                                onChange={rebind}
+                                projects={projects}
+                                disabled={!conversation || active}
+                            />
+                            <span>
+                                · session{' '}
+                                {conversation?.session_id ? (
+                                    <Link to={`/sessions/${conversation.session_id}`}>
+                                        {conversation.session_id.slice(0, 8)}
+                                    </Link>
+                                ) : (
+                                    'none yet'
+                                )}
+                            </span>
                         </div>
                     </div>
                 </div>
-                <div className="row">
+                <div className='row'>
                     {running ? (
-                        <StopButton taskId={running.id} size="sm" />
+                        <StopButton
+                            taskId={running.id}
+                            size='sm'
+                        />
                     ) : (
-                        <Button size="sm" onClick={remove} title="Remove from the list; tasks and audit events stay">
+                        <Button
+                            size='sm'
+                            onClick={remove}
+                            title='Remove from the list; tasks and audit events stay'
+                        >
                             Delete
                         </Button>
                     )}
                 </div>
             </div>
-            <div className="messages-wrap">
-                <div className="messages" ref={messages} onScroll={onScroll}>
-                    {hasEarlier && <LoadEarlier loading={loadingEarlier} onMore={loadEarlier} label="Load earlier messages" />}
-                    {ordered.length === 0 && conversation && <Empty>Nothing here yet. Describe the first task below.</Empty>}
+            <div className='messages-wrap'>
+                <div
+                    className='messages'
+                    ref={messages}
+                    onScroll={onScroll}
+                >
+                    {hasEarlier && (
+                        <LoadEarlier
+                            loading={loadingEarlier}
+                            onMore={loadEarlier}
+                            label='Load earlier messages'
+                        />
+                    )}
+                    {ordered.length === 0 && conversation && (
+                        <Empty>Nothing here yet. Describe the first task below.</Empty>
+                    )}
                     {ordered.map((task) => (
-                        <div key={task.id} className="exchange">
-                            <div className="msg user">
-                                <div className="bubble">{task.prompt}</div>
-                                <SentAttachments conversationId={id} attachments={task.attachments} />
-                                <div className="meta" title={fmt.when(task.created_at)}>
+                        <div
+                            key={task.id}
+                            className='exchange'
+                        >
+                            <div className='msg user'>
+                                <div className='bubble'>{task.prompt}</div>
+                                <SentAttachments
+                                    conversationId={id}
+                                    attachments={task.attachments}
+                                />
+                                <div
+                                    className='meta'
+                                    title={fmt.when(task.created_at)}
+                                >
                                     {task.source !== conversation?.channel ? `${task.source} · ` : ''}
                                     {fmt.ago(task.created_at)}
                                 </div>
                             </div>
-                            <AssistantTurn task={task} events={byTask.get(task.id) ?? []} onTask={mergeTask} />
+                            <AssistantTurn
+                                task={task}
+                                events={byTask.get(task.id) ?? []}
+                                onTask={mergeTask}
+                            />
                         </div>
                     ))}
-                    {error && <div className="tool error">{error}</div>}
+                    {error && <div className='tool error'>{error}</div>}
                 </div>
                 {unseen && (
-                    <Button variant="primary" className="jump" onClick={scrollToBottom}>
+                    <Button
+                        variant='primary'
+                        className='jump'
+                        onClick={scrollToBottom}
+                    >
                         <ArrowDown size={14} /> New messages
                     </Button>
                 )}
@@ -435,10 +595,13 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     files.add([...e.dataTransfer.files])
                 }}
             >
-                <PendingUploads uploads={files.uploads} onRemove={files.remove} />
+                <PendingUploads
+                    uploads={files.uploads}
+                    onRemove={files.remove}
+                />
                 <input
                     ref={picker}
-                    type="file"
+                    type='file'
                     multiple
                     hidden
                     onChange={(e) => {
@@ -447,12 +610,12 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     }}
                 />
                 <Button
-                    className="attach"
-                    variant="ghost"
+                    className='attach'
+                    variant='ghost'
                     onClick={() => picker.current?.click()}
                     disabled={files.uploads.length >= MAX_FILES}
-                    title="Attach photos or files (or paste / drop them here)"
-                    aria-label="Attach files"
+                    title='Attach photos or files (or paste / drop them here)'
+                    aria-label='Attach files'
                 >
                     <Paperclip size={16} />
                 </Button>
@@ -466,7 +629,13 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     }}
                     ref={composer}
                     value={prompt}
-                    placeholder={answering ? 'Type your answer to the question above…' : active ? 'Queued after the running task…' : 'Describe the task…'}
+                    placeholder={
+                        answering
+                            ? 'Type your answer to the question above…'
+                            : active
+                              ? 'Queued after the running task…'
+                              : 'Describe the task…'
+                    }
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -478,17 +647,22 @@ function Thread({ id, onSent, onRead, onDeleted, projects }: { id: string; onSen
                     autoFocus
                 />
                 <Button
-                    variant="primary"
-                    className="send"
-                    type="submit"
+                    variant='primary'
+                    className='send'
+                    type='submit'
                     disabled={(!prompt.trim() && !files.names.length) || sending || files.busy}
                     title={files.busy ? 'Waiting for the upload…' : 'Send (Enter)'}
-                    aria-label="Send"
+                    aria-label='Send'
                 >
                     <SendHorizontal size={16} />
                 </Button>
-                <div className="composer-hint dim">
-                    Enter to send · Shift+Enter for a new line · paste or drop files{answering ? ' · the agent is waiting: your message is the answer' : active ? ' · a task is running, yours will queue' : ''}
+                <div className='composer-hint dim'>
+                    Enter to send · Shift+Enter for a new line · paste or drop files
+                    {answering
+                        ? ' · the agent is waiting: your message is the answer'
+                        : active
+                          ? ' · a task is running, yours will queue'
+                          : ''}
                 </div>
             </form>
         </div>

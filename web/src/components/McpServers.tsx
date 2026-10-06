@@ -27,7 +27,8 @@ interface Draft {
 
 const KEPT = '<kept>'
 const isRef = (v: string) => /\$\{[A-Z_][A-Z0-9_]*(?::-[^}]*)?\}/.test(v)
-const pairs = (record?: Record<string, string>): Pair[] => Object.entries(record ?? {}).map(([k, v]) => ({ k, v, kept: v === KEPT }))
+const pairs = (record?: Record<string, string>): Pair[] =>
+    Object.entries(record ?? {}).map(([k, v]) => ({ k, v, kept: v === KEPT }))
 const record = (list: Pair[]): Record<string, string> | undefined => {
     const entries = list.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v] as const)
     return entries.length ? Object.fromEntries(entries) : undefined
@@ -43,17 +44,29 @@ const toDraft = (name: string, c: McpServerConfig): Draft => ({
 })
 const fromDraft = (d: Draft): McpServerConfig =>
     d.type === 'stdio'
-        ? { type: 'stdio', command: d.command, args: d.args.trim() ? d.args.trim().split(/\s+/) : undefined, env: record(d.env) }
+        ? {
+              type: 'stdio',
+              command: d.command,
+              args: d.args.trim() ? d.args.trim().split(/\s+/) : undefined,
+              env: record(d.env)
+          }
         : { type: d.type, url: d.url, headers: record(d.headers), env: record(d.env) }
-const draftsOf = (config: Record<string, McpServerConfig>): Draft[] => Object.entries(config).map(([name, c]) => toDraft(name, c))
-const configOf = (drafts: Draft[]): Record<string, McpServerConfig> => Object.fromEntries(drafts.map((d) => [d.name.trim(), fromDraft(d)]))
+const draftsOf = (config: Record<string, McpServerConfig>): Draft[] =>
+    Object.entries(config).map(([name, c]) => toDraft(name, c))
+const configOf = (drafts: Draft[]): Record<string, McpServerConfig> =>
+    Object.fromEntries(drafts.map((d) => [d.name.trim(), fromDraft(d)]))
 const stamp = (config: Record<string, McpServerConfig>) => JSON.stringify(config)
 
 /** The `mcpServers` object of a pasted JSON, or the object itself when it has no wrapper. */
 function parseServers(text: string): Record<string, McpServerConfig> {
-    const parsed = JSON.parse(text) as { mcpServers?: Record<string, McpServerConfig> } | Record<string, McpServerConfig>
+    const parsed = JSON.parse(text) as
+        { mcpServers?: Record<string, McpServerConfig> } | Record<string, McpServerConfig>
     if (!parsed || typeof parsed !== 'object') throw new Error('expected an object')
-    return ('mcpServers' in parsed && parsed.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : parsed) as Record<string, McpServerConfig>
+    return (
+        'mcpServers' in parsed && parsed.mcpServers && typeof parsed.mcpServers === 'object'
+            ? parsed.mcpServers
+            : parsed
+    ) as Record<string, McpServerConfig>
 }
 
 export function McpServersField({
@@ -94,7 +107,8 @@ export function McpServersField({
         onChange(config)
     }
     const update = (i: number, patch: Partial<Draft>) => emit(drafts.map((d, j) => (j === i ? { ...d, ...patch } : d)))
-    const add = () => emit([...drafts, { name: '', type: 'http', url: '', command: '', args: '', headers: [], env: [] }])
+    const add = () =>
+        emit([...drafts, { name: '', type: 'http', url: '', command: '', args: '', headers: [], env: [] }])
     const remove = (i: number) => emit(drafts.filter((_, j) => j !== i))
 
     const toggleJson = () => {
@@ -120,69 +134,151 @@ export function McpServersField({
     }
 
     return (
-        <div className="stack">
-            <div className="row wrap">
-                <Button size="sm" onClick={toggleJson} disabled={json !== null && Boolean(jsonError)}>
+        <div className='stack'>
+            <div className='row wrap'>
+                <Button
+                    size='sm'
+                    onClick={toggleJson}
+                    disabled={json !== null && Boolean(jsonError)}
+                >
                     {json === null ? 'Edit as JSON' : 'Back to the form'}
                 </Button>
-                <Button size="sm" onClick={add} disabled={json !== null}>
+                <Button
+                    size='sm'
+                    onClick={add}
+                    disabled={json !== null}
+                >
                     Add server
                 </Button>
             </div>
             {json !== null ? (
                 <>
-                    <textarea className="mono" value={json} onChange={(e) => editJson(e.target.value)} rows={12} spellCheck={false} />
-                    {jsonError && <div className="error small">JSON: {jsonError}</div>}
+                    <textarea
+                        className='mono'
+                        value={json}
+                        onChange={(e) => editJson(e.target.value)}
+                        rows={12}
+                        spellCheck={false}
+                    />
+                    {jsonError && <div className='error small'>JSON: {jsonError}</div>}
                 </>
             ) : drafts.length === 0 ? (
-                <div className="dim small">{empty}</div>
+                <div className='dim small'>{empty}</div>
             ) : (
-                drafts.map((d, i) => <McpCard key={i} draft={d} status={status?.find((s) => s.name === d.name)} expandsVars={expandsVars} onChange={(patch) => update(i, patch)} onRemove={() => remove(i)} />)
+                drafts.map((d, i) => (
+                    <McpCard
+                        key={i}
+                        draft={d}
+                        status={status?.find((s) => s.name === d.name)}
+                        expandsVars={expandsVars}
+                        onChange={(patch) => update(i, patch)}
+                        onRemove={() => remove(i)}
+                    />
+                ))
             )}
         </div>
     )
 }
 
-function McpCard({ draft, status, expandsVars, onChange, onRemove }: { draft: Draft; status: McpStatus | undefined; expandsVars: boolean; onChange: (patch: Partial<Draft>) => void; onRemove: () => void }) {
-    const envHint = expandsVars ? 'API_KEY = ${MY_API_KEY}' : 'paths and flags only — no ${VAR} here; the server inherits .env'
-    const tone = (s: string) => (s === 'connected' ? 'done' : s === 'needs-auth' ? 'queued' : s === 'failed' ? 'failed' : 'cancelled')
+function McpCard({
+    draft,
+    status,
+    expandsVars,
+    onChange,
+    onRemove
+}: {
+    draft: Draft
+    status: McpStatus | undefined
+    expandsVars: boolean
+    onChange: (patch: Partial<Draft>) => void
+    onRemove: () => void
+}) {
+    const envHint = expandsVars
+        ? 'API_KEY = ${MY_API_KEY}'
+        : 'paths and flags only — no ${VAR} here; the server inherits .env'
+    const tone = (s: string) =>
+        s === 'connected' ? 'done' : s === 'needs-auth' ? 'queued' : s === 'failed' ? 'failed' : 'cancelled'
     return (
-        <div className="host-card">
-            <label className="field">
+        <div className='host-card'>
+            <label className='field'>
                 <span>Name</span>
-                <input className="mono" placeholder="trac" value={draft.name} onChange={(e) => onChange({ name: e.target.value })} />
+                <input
+                    className='mono'
+                    placeholder='trac'
+                    value={draft.name}
+                    onChange={(e) => onChange({ name: e.target.value })}
+                />
             </label>
-            <label className="field">
+            <label className='field'>
                 <span>Type</span>
-                <select value={draft.type} onChange={(e) => onChange({ type: e.target.value as Draft['type'] })}>
-                    <option value="http">http (remote)</option>
-                    <option value="sse">sse (remote, legacy)</option>
-                    <option value="stdio">stdio (a command in the container)</option>
+                <select
+                    value={draft.type}
+                    onChange={(e) => onChange({ type: e.target.value as Draft['type'] })}
+                >
+                    <option value='http'>http (remote)</option>
+                    <option value='sse'>sse (remote, legacy)</option>
+                    <option value='stdio'>stdio (a command in the container)</option>
                 </select>
             </label>
             {draft.type === 'stdio' ? (
                 <>
-                    <label className="field">
+                    <label className='field'>
                         <span>Command</span>
-                        <input className="mono" placeholder="npx" value={draft.command} onChange={(e) => onChange({ command: e.target.value })} />
+                        <input
+                            className='mono'
+                            placeholder='npx'
+                            value={draft.command}
+                            onChange={(e) => onChange({ command: e.target.value })}
+                        />
                     </label>
-                    <label className="field">
+                    <label className='field'>
                         <span>Arguments</span>
-                        <input className="mono" placeholder="-y @example/mcp-server" value={draft.args} onChange={(e) => onChange({ args: e.target.value })} />
+                        <input
+                            className='mono'
+                            placeholder='-y @example/mcp-server'
+                            value={draft.args}
+                            onChange={(e) => onChange({ args: e.target.value })}
+                        />
                     </label>
                 </>
             ) : (
-                <label className="field" style={{ gridColumn: 'span 2' }}>
+                <label
+                    className='field'
+                    style={{ gridColumn: 'span 2' }}
+                >
                     <span>URL</span>
-                    <input className="mono" placeholder="https://mcp.example.com/mcp" value={draft.url} onChange={(e) => onChange({ url: e.target.value })} />
+                    <input
+                        className='mono'
+                        placeholder='https://mcp.example.com/mcp'
+                        value={draft.url}
+                        onChange={(e) => onChange({ url: e.target.value })}
+                    />
                 </label>
             )}
-            {draft.type !== 'stdio' && <PairsField label="Headers" hint={expandsVars ? 'Authorization: Bearer ${MY_TOKEN}' : 'no ${VAR} here'} flagLiterals={expandsVars} list={draft.headers} onChange={(headers) => onChange({ headers })} />}
-            <PairsField label="Environment" hint={envHint} flagLiterals={expandsVars} list={draft.env} onChange={(env) => onChange({ env })} />
-            <div className="host-foot wide">
+            {draft.type !== 'stdio' && (
+                <PairsField
+                    label='Headers'
+                    hint={expandsVars ? 'Authorization: Bearer ${MY_TOKEN}' : 'no ${VAR} here'}
+                    flagLiterals={expandsVars}
+                    list={draft.headers}
+                    onChange={(headers) => onChange({ headers })}
+                />
+            )}
+            <PairsField
+                label='Environment'
+                hint={envHint}
+                flagLiterals={expandsVars}
+                list={draft.env}
+                onChange={(env) => onChange({ env })}
+            />
+            <div className='host-foot wide'>
                 {status && <span className={`badge ${tone(status.status)}`}>{status.status} in the last session</span>}
-                <span className="grow" />
-                <Button size="sm" variant="danger" onClick={onRemove}>
+                <span className='grow' />
+                <Button
+                    size='sm'
+                    variant='danger'
+                    onClick={onRemove}
+                >
                     Remove
                 </Button>
             </div>
@@ -191,25 +287,67 @@ function McpCard({ draft, status, expandsVars, onChange, onRemove }: { draft: Dr
 }
 
 /** Key / value rows for headers or env; a literal value that is not a `${VAR}` reference is flagged, a withheld one shows as kept. */
-function PairsField({ label, hint, flagLiterals, list, onChange }: { label: string; hint: string; flagLiterals: boolean; list: Pair[]; onChange: (list: Pair[]) => void }) {
+function PairsField({
+    label,
+    hint,
+    flagLiterals,
+    list,
+    onChange
+}: {
+    label: string
+    hint: string
+    flagLiterals: boolean
+    list: Pair[]
+    onChange: (list: Pair[]) => void
+}) {
     const set = (i: number, patch: Partial<Pair>) => onChange(list.map((p, j) => (j === i ? { ...p, ...patch } : p)))
     return (
-        <div className="field wide">
+        <div className='field wide'>
             <span>
-                {label} <span className="dim">· {hint}</span>
+                {label} <span className='dim'>· {hint}</span>
             </span>
-            <div className="pairs">
-            {list.map((p, i) => (
-                <div key={i} className="row">
-                    <input className="mono" style={{ flex: 1 }} placeholder="name" value={p.k} onChange={(e) => set(i, { k: e.target.value })} />
-                    <input className="mono" style={{ flex: 2 }} placeholder="${VAR}" value={p.v === KEPT ? '' : p.v} onChange={(e) => set(i, { v: e.target.value || (p.kept ? KEPT : '') })} />
-                    {p.v === KEPT ? <span className="badge plain">stored value kept</span> : flagLiterals && p.v && !isRef(p.v) ? <span className="badge plain amber" title="A literal value is written to the file in clear; put it in .env and reference it as ${VAR}.">literal</span> : null}
-                    <CloseButton label="Remove row" onClick={() => onChange(list.filter((_, j) => j !== i))} />
-                </div>
-            ))}
+            <div className='pairs'>
+                {list.map((p, i) => (
+                    <div
+                        key={i}
+                        className='row'
+                    >
+                        <input
+                            className='mono'
+                            style={{ flex: 1 }}
+                            placeholder='name'
+                            value={p.k}
+                            onChange={(e) => set(i, { k: e.target.value })}
+                        />
+                        <input
+                            className='mono'
+                            style={{ flex: 2 }}
+                            placeholder='${VAR}'
+                            value={p.v === KEPT ? '' : p.v}
+                            onChange={(e) => set(i, { v: e.target.value || (p.kept ? KEPT : '') })}
+                        />
+                        {p.v === KEPT ? (
+                            <span className='badge plain'>stored value kept</span>
+                        ) : flagLiterals && p.v && !isRef(p.v) ? (
+                            <span
+                                className='badge plain amber'
+                                title='A literal value is written to the file in clear; put it in .env and reference it as ${VAR}.'
+                            >
+                                literal
+                            </span>
+                        ) : null}
+                        <CloseButton
+                            label='Remove row'
+                            onClick={() => onChange(list.filter((_, j) => j !== i))}
+                        />
+                    </div>
+                ))}
             </div>
             <div>
-                <Button size="sm" onClick={() => onChange([...list, { k: '', v: '' }])}>
+                <Button
+                    size='sm'
+                    onClick={() => onChange([...list, { k: '', v: '' }])}
+                >
                     Add {label.toLowerCase() === 'headers' ? 'header' : 'variable'}
                 </Button>
             </div>

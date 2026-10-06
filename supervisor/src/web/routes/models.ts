@@ -15,7 +15,20 @@ import type { Env } from '../context.js'
  * the same thing: it names harness internals (Monitor, CronCreate, …) and
  * leaves out tools it loads lazily (Grep, Glob), so these stay first.
  */
-const COMMON_TOOLS = ['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Agent', 'TodoWrite']
+const COMMON_TOOLS = [
+    'Read',
+    'Edit',
+    'Write',
+    'MultiEdit',
+    'NotebookEdit',
+    'Bash',
+    'Grep',
+    'Glob',
+    'WebFetch',
+    'WebSearch',
+    'Agent',
+    'TodoWrite'
+]
 
 /**
  * Tool names an agent file may list in `tools:`: the common ones, everything else the CLI
@@ -34,7 +47,11 @@ export function toolRoutes(): Hono<Env> {
             // Connected servers first: those are the ones a role can pick tools from.
             mcp: tasks
                 .mcpRegistry()
-                .sort((a, b) => Number(b.status === 'connected') - Number(a.status === 'connected') || a.label.localeCompare(b.label))
+                .sort(
+                    (a, b) =>
+                        Number(b.status === 'connected') - Number(a.status === 'connected') ||
+                        a.label.localeCompare(b.label)
+                )
                 .map(({ key, label, source, status, tools }) => ({ server: key, label, source, status, tools })),
             source: reported.length ? 'cli' : 'default'
         })

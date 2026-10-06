@@ -26,19 +26,28 @@ export function LoadMore({
     useEffect(() => {
         const el = ref.current
         if (!el || !hasMore || loading) return
-        const observer = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && onMore(), { rootMargin: '200px' })
+        const observer = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && onMore(), {
+            rootMargin: '200px'
+        })
         observer.observe(el)
         return () => observer.disconnect()
     }, [hasMore, loading, onMore])
 
     return (
-        <div ref={ref} className="card-foot load-more">
+        <div
+            ref={ref}
+            className='card-foot load-more'
+        >
             <span>
                 {shown} {noun} shown{total !== undefined && total > shown ? ` of ${total.toLocaleString()}` : ''}
                 {!hasMore && shown > 0 && total === undefined ? ' · that is all' : ''}
             </span>
             {hasMore && (
-                <Button size="sm" onClick={onMore} disabled={loading}>
+                <Button
+                    size='sm'
+                    onClick={onMore}
+                    disabled={loading}
+                >
                     {loading ? 'Loading…' : 'Load more'}
                 </Button>
             )}
@@ -47,10 +56,22 @@ export function LoadMore({
 }
 
 /** Start-of-list button for views that grow upwards (chat threads, transcripts). */
-export function LoadEarlier({ loading, onMore, label = 'Load earlier' }: { loading: boolean; onMore: () => void; label?: string }) {
+export function LoadEarlier({
+    loading,
+    onMore,
+    label = 'Load earlier'
+}: {
+    loading: boolean
+    onMore: () => void
+    label?: string
+}) {
     return (
-        <div className="load-earlier">
-            <Button size="sm" onClick={onMore} disabled={loading}>
+        <div className='load-earlier'>
+            <Button
+                size='sm'
+                onClick={onMore}
+                disabled={loading}
+            >
                 {loading ? 'Loading…' : label}
             </Button>
         </div>

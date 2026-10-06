@@ -26,7 +26,8 @@ export function sessionRoutes(): Hono<Env> {
                 // The project the task detected, else the cwd relative to the
                 // workspaces root ('.' is the root itself; tasks start there).
                 const relative = head.cwd ? path.relative(root, head.cwd) : null
-                const fromCwd = relative === null ? null : relative === '' ? '.' : relative.startsWith('..') ? head.cwd : relative
+                const fromCwd =
+                    relative === null ? null : relative === '' ? '.' : relative.startsWith('..') ? head.cwd : relative
                 return {
                     ...entry,
                     ...head,
