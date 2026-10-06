@@ -90,7 +90,6 @@ export interface RunOptions {
     resumeSessionId?: string
     model?: string
     maxTurns: number
-    maxBudgetUsd: number
     permissionMode: string
     /** The CLI's whole environment; defaults to the supervisor's own. */
     env?: NodeJS.ProcessEnv
@@ -120,6 +119,8 @@ export interface RunResult {
     cacheCreationTokens: number
     /** Last rate-limit status seen during the run, if the CLI reported one. */
     rateLimits: RateLimits | null
+    /** Sub-agents still running when the `result` arrived: their work after that point reached nobody. */
+    openAgentsAtResult: number
 }
 
 /** A running `claude -p` process that can be cancelled. */
@@ -262,9 +263,7 @@ export function runClaude(options: RunOptions): RunHandle {
         '--permission-mode',
         options.permissionMode,
         '--max-turns',
-        String(options.maxTurns),
-        '--max-budget-usd',
-        String(options.maxBudgetUsd)
+        String(options.maxTurns)
     ]
     if (options.model) args.push('--model', options.model)
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
@@ -367,6 +366,9 @@ export function runClaude(options: RunOptions): RunHandle {
         // Sub-agents by the Agent tool call that spawned them, so that events
         // the CLI does not label itself (task_notification) still get an agent.
         const agentsByToolUse = new Map<string, string>()
+        /** Started and not yet reported sub-agents; counted the moment the result arrives, not at exit. */
+        const openAgents = new Set<string>()
+        let openAgentsAtResult = 0
         const seenMessages = new Set<string>()
         const stderr: string[] = []
 
@@ -423,6 +425,7 @@ export function runClaude(options: RunOptions): RunHandle {
             }
             if (event.type === 'system' && event.subtype === 'task_started' && event.tool_use_id && event.subagent_type) {
                 agentsByToolUse.set(event.tool_use_id, event.subagent_type)
+                openAgents.add(event.tool_use_id)
                 emit({
                     type: 'agent',
                     phase: 'started',
@@ -436,6 +439,7 @@ export function runClaude(options: RunOptions): RunHandle {
             if (event.type === 'system' && event.subtype === 'task_notification' && event.tool_use_id) {
                 const agent = agentsByToolUse.get(event.tool_use_id)
                 if (!agent) return
+                openAgents.delete(event.tool_use_id)
                 const usage = (event as { usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number } }).usage
                 emit({
                     type: 'agent',
@@ -452,6 +456,7 @@ export function runClaude(options: RunOptions): RunHandle {
             }
             if (event.type === 'result') {
                 finalEvent = event
+                openAgentsAtResult = openAgents.size
                 closeStdin() // one prompt per run: the CLI exits once stdin ends
                 return
             }
@@ -559,7 +564,8 @@ export function runClaude(options: RunOptions): RunHandle {
                 outputTokens: finalEvent.usage?.output_tokens ?? 0,
                 cacheReadTokens: finalEvent.usage?.cache_read_input_tokens ?? 0,
                 cacheCreationTokens: finalEvent.usage?.cache_creation_input_tokens ?? 0,
-                rateLimits
+                rateLimits,
+                openAgentsAtResult
             })
         })
     })

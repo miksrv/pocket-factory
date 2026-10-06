@@ -93,7 +93,6 @@ export function statusRoutes(): Hono<Env> {
                 model: tasks.model(),
                 permission_mode: config.claude.permissionMode,
                 max_turns: config.claude.maxTurns,
-                max_budget_usd: config.claude.maxBudgetUsd,
                 config_dir: config.claude.configDir,
                 logged_in: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) || loginOf(config.claude.configDir) !== 'none',
                 // `claude.ai`: a full login in the container (connectors available); `token`: CLAUDE_CODE_OAUTH_TOKEN (model calls only).

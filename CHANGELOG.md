@@ -9,6 +9,43 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.0.1] - 2026-10-05
+
+Fixes from the owner's first day of real use from Telegram.
+
+### Changed
+
+- **One project command in Telegram.** `/project <name>` is gone; `/new [project]` is the only
+  way to start a session, with or without a project. The two did the same thing (both restarted
+  the session) and were confused with each other; `/status` still names the current project.
+- **The footer under every Telegram reply** names the project the agent worked in instead of
+  `N turns · tokens · +x% of 5h · Ns`, and the windows line carries this task's share of the
+  5-hour window: `— project: geometki` / `— windows: 5h 27% · week 50% · this task +4%`. Turns,
+  tokens and duration stay on the task page.
+- **`/status` is shorter.** Session id and the workspaces path are gone; the running task is shown
+  by its first line and how long it has run (or that it is queued, or waits for an answer); the
+  conversation line appears only when the chat was switched to another thread by a reply.
+- **No dollar budget.** `CLAUDE_MAX_BUDGET_USD` and `--max-budget-usd` are removed: the CLI told
+  the model its remaining dollars and the agent cut work short "because $0.30 were left", which
+  means nothing on a subscription. The dispatcher rules say the 5-hour and weekly windows are the
+  only limit and never to ration work by money. Settings → Claude Code shows turns only.
+
+### Fixed
+
+- **A bound conversation no longer switches projects by itself.** Any tool call that mentioned
+  another checkout (a `git status` across the fence, a path in a command) re-bound the thread to
+  that project, dropped its session and the next reply was about the other repository. A task of
+  a bound conversation now carries that project from creation; detection from tool inputs runs
+  only for a project-less task and binds only a project-less conversation. The project is read
+  again when the task starts (the binding may have changed in the web while it queued), and a
+  bound conversation whose checkout or project file is gone fails the task with a message instead
+  of running from the workspaces root under the project's name.
+- **A reply that cut off a sub-agent says so.** In `claude -p` the orchestrator's final answer
+  ends the process, and a sub-agent still working dies with it, so "I will run the review when it
+  finishes" never happens. The result now ends with a warning naming how many sub-agents were cut
+  off (counted when the result arrives, shown in Telegram and in the web thread), and the
+  dispatcher rules tell the agent there is no "later": wait for the report, then reply.
+
 ## [1.0.0] - 2026-10-05
 
 The first numbered version: the factory as it runs on the owner's own server after a week of

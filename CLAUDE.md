@@ -116,8 +116,8 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`
     (sub-agent started / completed, from the CLI's `task_started` / `task_notification` system
-    events) and `limits` events besides text / tool calls. Project per task is detected from
-    workspace names in tool-call inputs
+    events) and `limits` events besides text / tool calls. A task's project is its conversation's
+    at run time; a project-less task gets it detected from workspace names in tool-call inputs
   - `web/` Hono server: sign-in (`web/auth.ts`, below), `/api/*` routes, serves `web/dist`
 - `web/src/` — Vite + React SPA, no UI framework, one `styles.css`; `lib/api.ts` typed client,
   `components/Editor.tsx` shared list+form for agents/skills/projects/schedules (an `aside`
@@ -248,6 +248,8 @@ after the PR is merged**: on `main`, `git pull`, `node scripts/release.mjs tag` 
 tree, a branch other than main, a main out of sync with origin, an existing tag or an empty
 section) creates the annotated tag `vX.Y.Z`, pushes it and publishes the GitHub release with the
 section as notes. Never tag a branch; never tag before the merge.
+**One bump per PR** (owner's rule, 2026-10-05): once a branch carries the version bump, later commits on
+it (review fixes, more changes) only extend that CHANGELOG section, never bump again.
 
 ## Decisions already made (don't re-open)
 
@@ -264,10 +266,13 @@ section as notes. Never tag a branch; never tag before the merge.
   the URL + code flow works in 2.1.283.)
 - Agent works inside the owner's real checkouts on a branch (no worktrees, no re-cloning). A
   conversation bound to a project (`conversations.project`, set via the Chat selector, Telegram
-  `/new <p>` / `/project <p>`, or detected from the first task) spawns `claude -p` with
+  `/new <p>`, or detected from the first task; `/project <p>` was dropped 2026-10-05 as a confusing
+  twin of `/new <p>`) spawns `claude -p` with
   cwd = the project's checkout, so the repository's `.mcp.json`, `.claude/agents`, `.claude/skills`
   and `CLAUDE.md` load on top of `data/claude`; a project-less conversation runs from the
-  workspaces root. A session cannot follow a cwd change: `TaskService` compares the transcript's
+  workspaces root. A task of a bound conversation carries that project from creation; detection
+  from tool inputs runs only for a project-less task and binds only a project-less conversation
+  (2026-10-05: a bound thread used to follow any mention of another checkout and lose its session). A session cannot follow a cwd change: `TaskService` compares the transcript's
   directory slug with the cwd and starts a fresh session when they differ.
 - MCP in three layers: the repository's `.mcp.json` (loaded from the cwd; in `-p` mode project
   servers load without approval, and a project file's `mcp:` list turns the others off via
@@ -377,7 +382,11 @@ section as notes. Never tag a branch; never tag before the merge.
   the CLI's `rate_limit_event` (stream-json, `unifiedWindows`). `/api/oauth/usage` needs the
   `user:profile` scope that a setup-token lacks, so there is no polling — readings come with every
   task, plus an explicit probe (one Haiku turn: Overview → Refresh, Telegram `/usage refresh`).
-  `cost_usd` stays in the DB for the record; `CLAUDE_MAX_BUDGET_USD` stays as a safety stop.
+  `cost_usd` stays in the DB for the record. `CLAUDE_MAX_BUDGET_USD` / `--max-budget-usd` are gone
+  (2026-10-05): the CLI told the model its remaining dollars and the agent cut a review short
+  "because $0.30 were left"; the dispatcher rules now say there is no money budget, the windows
+  are the limit. The Telegram footer names the task's project and the windows with the task's
+  share, not turns / tokens / seconds (those stay on the task page).
 - Unknown `/commands` never reach the agent; replies are converted to Telegram HTML with plain-text
   fallback.
 - Single language: TypeScript for supervisor, API and UI. No Python service (asked and answered:
@@ -481,7 +490,7 @@ the history up to the evening of 2026-09-28). Since then (all committed by 2026-
 - Projects: form reworked (no branch prefix, workflow select, collapsed tracker, host cards with
   key selection and "Test connection"); `TenantManagement` onboarded from Telegram.
 - Conversations bound to a project run from its checkout (repository `.mcp.json`, `.claude/agents`,
-  skills and `CLAUDE.md` apply); `/new <p>`, `/project <p>`, Chat selector; MCP in three layers with
+  skills and `CLAUDE.md` apply); `/new <p>`, Chat selector; MCP in three layers with
   Settings → MCP editor for `data/config/mcp.json`; project `mcp:` allowlist; `Explore` on haiku,
   `maxTurns` / `effort` on agents.
 - Markdown prose in agents / skills is unwrapped (`scripts/reflow-md.mjs`); previews render files

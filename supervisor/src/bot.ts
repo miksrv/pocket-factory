@@ -5,7 +5,7 @@ import { createLogger } from './logger.js'
 import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import type { Schedules } from './schedules/service.js'
-import { askQuestions, openQuestions, type TaskService } from './tasks/service.js'
+import { askQuestions, openQuestions, titleFrom, type TaskService } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 import { MODEL_ALIASES } from './claude/models.js'
 import { describeUserAgent, type WebAuth } from './web/auth.js'
@@ -94,7 +94,6 @@ async function sendMarkdown(bot: Bot, chatId: number, text: string): Promise<num
     return ids
 }
 
-const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 const pct = (used: number) => `${Math.round(used * 100)}%`
 
 function resetsIn(iso: string): string {
@@ -106,13 +105,16 @@ function resetsIn(iso: string): string {
     return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
-function resetsAgo(iso: string): string {
+/** Time passed since `iso`: `under a minute`, `5 min`, `3 h`, `2 d`. */
+function elapsed(iso: string): string {
     const ms = Date.now() - new Date(iso).getTime()
-    if (ms < 60_000) return 'just now'
-    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`
-    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h ago`
-    return `${Math.floor(ms / 86_400_000)} d ago`
+    if (ms < 60_000) return 'under a minute'
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min`
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h`
+    return `${Math.floor(ms / 86_400_000)} d`
 }
+
+const resetsAgo = (iso: string): string => (Date.now() - new Date(iso).getTime() < 60_000 ? 'just now' : `${elapsed(iso)} ago`)
 
 /** One line: how full the subscription windows are, e.g. "5h 12% · week 31%". */
 function limitsLine(limits: RateLimitSnapshot | undefined): string | null {
@@ -134,16 +136,16 @@ function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
 }
 
 /**
- * Footer under every reply: what this task consumed and how full the windows
- * are now. Tokens, not money — the subscription is metered in windows.
+ * Footer under every reply: which project the agent worked in (the owner
+ * reads several threads on a phone and forgets) and how full the windows
+ * are now, with this task's share. Turns, tokens and duration stay on the
+ * task page: the subscription is metered in windows, not money.
  */
 function footer(task: Task, limits: RateLimitSnapshot | undefined): string {
-    const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
-    const parts = [`${task.num_turns} turns`, `${fmtTokens(tokens)} tokens`]
-    if (task.window_5h_delta !== null) parts.push(task.window_5h_delta < 0.01 ? '<1% of 5h' : `+${Math.round(task.window_5h_delta * 100)}% of 5h`)
-    parts.push(`${Math.round(task.duration_ms / 1000)}s`)
-    const windows = limitsLine(limits)
-    return `— ${parts.join(' · ')}${windows ? `\n— windows: ${windows}` : ''}`
+    const delta = task.window_5h_delta
+    const share = delta === null ? null : delta < 0.01 ? 'this task <1%' : `this task +${Math.round(delta * 100)}%`
+    const windows = [limitsLine(limits), share].filter(Boolean).join(' · ')
+    return `— project: ${task.project ?? 'none (workspaces root)'}${windows ? `\n— windows: ${windows}` : ''}`
 }
 
 /** What a permission request is about, in one line: the command, the file, or the arguments. */
@@ -230,9 +232,9 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 'Pocket Factory is online.',
                 '',
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
-                '/new [project] — start a fresh session, optionally inside a project checkout',
+                '/new [project] — start a fresh session; with a project name, inside its checkout',
+                '    (the repository\'s MCP servers, agents and rules apply then)',
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
-                '/project <name> — bind this chat to a project (its MCP servers, agents and rules apply)',
                 '/model [sonnet|opus|haiku|fable] — the orchestrator\'s model for every next task, in every chat',
                 '/stop — cancel the running task',
                 '/status — what is going on',
@@ -267,6 +269,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     })
 
     // `/new` forgets the session; `/new <project>` also starts the next one inside that checkout.
+    // The one project command (2026-10-05): `/project <name>` did the same minus a new thread and only confused.
     bot.command('new', async (ctx) => {
         const project = ctx.match.trim() || null
         if (project && !tasks.hasProject(project)) {
@@ -276,22 +279,6 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         const fresh = tasks.newConversation('telegram', String(ctx.chat.id), null, project)
         store.setTelegramTopic(ctx.chat.id, fresh.id)
         await ctx.reply(project ? `Fresh session in ${project}. Next message runs from its checkout.` : 'Fresh session. Next message starts from scratch.')
-    })
-
-    // `/project <name>` binds the current chat; the Claude Code session restarts in the project's directory.
-    bot.command('project', async (ctx) => {
-        const conversation = conversationFor(ctx)
-        const project = ctx.match.trim()
-        if (!project) {
-            await ctx.reply(conversation.project ? `This chat works in ${conversation.project}. /project <name> to switch, /project - to unbind.` : 'This chat is not bound to a project. /project <name> binds it.')
-            return
-        }
-        try {
-            const updated = tasks.setProject(conversation.id, project === '-' ? null : project)
-            await ctx.reply(updated.project ? `Bound to ${updated.project}. The next task runs from its checkout in a fresh session.` : 'Unbound. The next task runs from the workspaces root.')
-        } catch (error) {
-            await ctx.reply(`❌ ${error instanceof Error ? error.message : error}`)
-        }
     })
 
     // One model for the whole factory, applied to the next task everywhere; sub-agents keep the `model:` of their files.
@@ -319,21 +306,32 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         await ctx.reply('Stopping…')
     })
 
+    // What the owner needs on a phone: where the next message goes, what runs now, the model
+    // and the windows (2026-10-05: session id and the workspaces path were noise, the
+    // conversation line is shown only when the chat was switched to another thread by a reply).
     bot.command('status', async (ctx) => {
         const conversation = conversationFor(ctx)
+        // A topic is an override: after `/new` the chat's own (newest) conversation is the topic too.
+        const switched = conversation.id !== tasks.conversationFor('telegram', String(ctx.chat.id)).id ? conversation : null
         const active = tasks.activeTask(conversation.id)
+        const queued = active ? undefined : tasks.queuedTask(conversation.id)
         const windows = limitsLine(tasks.limits())
+        const running = active
+            ? `"${titleFrom(active.prompt)}" · ${active.started_at ? elapsed(active.started_at) : 'starting'}${active.ask ? ' · waiting for your answer' : ''}`
+            : queued
+              ? `"${titleFrom(queued.prompt)}" · queued, waiting for a free slot`
+              : 'nothing'
         await ctx.reply(
             [
                 `Pocket Factory v${VERSION}`,
-                `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
-                `Running task: ${active ? 'yes' : 'no'}`,
-                `Project: ${conversation.project ?? 'none (workspaces root)'}`,
-                `Session: ${conversation.session_id ?? 'none'}`,
-                `Workspaces: ${config.paths.workspacesRoot}`,
+                switched ? `Thread: ${topicName(switched)} (switched by your reply; /new comes back to this chat)` : null,
+                `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
+                `Running: ${running}`,
                 `Model: ${tasks.model()} (/model to switch)`,
                 `Limits: ${windows ?? 'unknown (see /usage)'}`
-            ].join('\n')
+            ]
+                .filter(Boolean)
+                .join('\n')
         )
     })
 

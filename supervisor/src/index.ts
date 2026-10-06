@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 
     log.info(`pocket-factory v${VERSION}`)
     log.info(`workspaces: ${config.paths.workspacesRoot}`)
-    log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns} budget=$${config.claude.maxBudgetUsd}`)
+    log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns}`)
 
     const store = new Store(openDatabase(config.paths.dbFile))
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)
@@ -138,7 +138,6 @@ async function main(): Promise<void> {
         // Registers the command menu in Telegram, so the client autocompletes them.
         await bot.api.setMyCommands([
             { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
-            { command: 'project', description: 'Bind this chat to a project: /project <name>' },
             { command: 'stop', description: 'Cancel the running task' },
             { command: 'status', description: 'What is going on' },
             { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },

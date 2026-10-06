@@ -231,7 +231,7 @@ stdin is stream-json too (since 2026-09-30): after an `initialize` control reque
               │   --input-format  stream-json      (cwd = project checkout or workspaces root;
               │   --output-format stream-json       a cwd change starts a fresh session)
               │   --permission-prompt-tool stdio
-              │   --max-turns N [--max-budget-usd X]
+              │   --max-turns N
               └─────────────┬─────────────┘
                             │ stdin:  initialize, the prompt, control responses (answers)
                             │ stdout: text, tool events, sub-agent events, rate limits, result
@@ -242,7 +242,7 @@ stdin is stream-json too (since 2026-09-30): after an `initialize` control reque
                      │             │                  owner asked on web + Telegram
                      │             ◄──────────────── control_response (answer / allow / deny)
                      │             │
-        result       │             │  /stop  ·  wall-clock timeout  ·  budget
+        result       │             │  /stop  ·  wall-clock timeout  ·  max turns
                      ▼             ▼
                    done          cancelled / failed  (SIGTERM to the process group, SIGKILL 10 s later)
                      transcript stays in CLAUDE_CONFIG_DIR/projects/<ws>/<session_id>.jsonl
@@ -255,7 +255,7 @@ Rules:
 - **Hard stop.** `/stop` (or the Stop button) sends SIGTERM to the CLI's process group, SIGKILL after 10 s, and marks the task `cancelled`. `CLAUDE_TASK_TIMEOUT_MIN` bounds a run's wall-clock time (0 = none).
 - **Resume.** The next task of the same conversation restarts the process with `--resume <session_id>`. Context continuity is Claude Code's own transcript, nothing is copied. A session that cannot be resumed is forgotten and the task runs once more from scratch. `/new` starts a conversation without a session.
 - **Crash safety.** If the supervisor restarts (deploy, reboot, crash), running CLIs are lost. A task found `running` at startup goes back to the queue and its next run resumes the conversation's session, so the agent continues from where the transcript ends (the task's prompt is sent once more to the resumed session; the dispatcher rules say a repeated prompt means "continue"). Each task survives this once (`restarts` column); a task that keeps hitting restarts fails with a notice, so a task that takes the supervisor down cannot loop. A pending question is lost with the process; the resumed session asks again. A graceful stop (SIGTERM to the supervisor) leaves running tasks `running` on purpose for the same recovery; only the owner's `/stop` cancels.
-- **Bounds.** Every spawn sets `--max-turns`; the per-task budget (§7) is passed via `--max-budget-usd` where the installed CLI version supports it, otherwise enforced by the supervisor from streamed usage.
+- **Bounds.** Every spawn sets `--max-turns`; `CLAUDE_TASK_TIMEOUT_MIN` bounds wall-clock time. No `--max-budget-usd` (dropped 2026-10-05): the CLI tells the model its remaining dollars and the agent then rations work by money, which means nothing on a subscription; the windows (§7) are the limit and the API enforces them.
 
 ---
 
@@ -293,7 +293,7 @@ Screens (v1):
 5. **Projects** — knowledge-base editor; onboarding wizard (drives the `onboard-project` skill).
 6. **Schedules** — the schedule files (cron, window, project or hosts, skill / agent, mode, prefilter, instructions) with their live state: valid / on / off, next run, last run and why, run history, seen items; Run now, Preview prefilter, Switch on / off, Forget seen items.
 7. **Quota dashboard** — the 5-hour and weekly windows as the CLI reports them (`rate_limit_event`), with reset times and a history of readings; tokens per day/project/agent/task-type; forecast to limit. No money anywhere: the owner pays a subscription, so the unit is tokens and window share.
-8. **Settings** — MCP: the registry of servers the sessions have seen (connectors first, then plugins, project and factory servers; duplicates by URL folded into the connector's row), Refresh (`claude mcp list` in the factory), Authorize for a server that needs sign-in (the CLI's `claude mcp login --no-browser` under a pseudo-terminal; the dialog shows the link and, for a redirect-style server, takes the redirect URL back), and the editor for `config/mcp.json`. Hosts: the shared SSH registry with the projects on each, test connection, host-key trust. Presets install. Shows the Claude login status (`claude.ai (team, connectors)` / `token` / `none`) but never performs the login. Telegram whitelist, concurrency, timeouts and budget policies stay in `.env`.
+8. **Settings** — MCP: the registry of servers the sessions have seen (connectors first, then plugins, project and factory servers; duplicates by URL folded into the connector's row), Refresh (`claude mcp list` in the factory), Authorize for a server that needs sign-in (the CLI's `claude mcp login --no-browser` under a pseudo-terminal; the dialog shows the link and, for a redirect-style server, takes the redirect URL back), and the editor for `config/mcp.json`. Hosts: the shared SSH registry with the projects on each, test connection, host-key trust. Presets install. Shows the Claude login status (`claude.ai (team, connectors)` / `token` / `none`) but never performs the login. Telegram whitelist, concurrency and timeouts stay in `.env`.
 9. **Audit log** — every model call (model, tokens), tool call, file edit, sub-agent start / end, task lifecycle and rate-limit reading, each attributed to the agent that produced it (orchestrator or sub-agent type) and the project the task worked in. Period selector, filter by kind / agent / project, expandable details. Built live from the stream-json events; there is no separate config git history (dropped in v1.3: the owner's repositories are on GitHub, and self-edits of agents / skills show up here as file events).
 
 Non-functional: UI is behind its own sign-in (a password from `.env`, a session cookie per browser, lockout after repeated failures, every attempt logged and reported in Telegram; Tailscale/Cloudflare Access and https in front recommended) — it controls an agent holding GitHub and mail credentials.
@@ -316,7 +316,7 @@ usage_daily (date, project, agent, task_type, tokens_in, tokens_out, cost_usd)
 
 ### Budget & quota protection
 
-- Per-task token/cost ceiling (configurable per task type), enforced via `--max-turns` / `--max-budget-usd` and the supervisor; the task is paused and the owner is asked when exceeded.
+- Per-task ceiling in turns (`--max-turns`) and wall-clock time; no dollar ceiling (see §4.4 Bounds). A per-task token budget enforced by the supervisor from streamed usage stays open.
 - Model policy: dispatcher on the strongest model; worker sub-agents default to cheaper models (Sonnet/Haiku class) via their frontmatter unless overridden.
 - Soft-stop: when the rolling 5-hour or weekly window approaches the limit, background/cron tasks are deferred; direct owner tasks keep working. Telegram warning at configurable thresholds. (The reading is the CLI's own `rate_limit_event`; it is exact as of the last API call, not an estimate.)
 
@@ -399,7 +399,7 @@ Phase 1 is deliberately the whole "driving to a conference" story: if it works, 
 0. ~~Idle timeout / closing-phrase detection~~ — **moot since v1.2:** runs are one-shot; nothing stays warm. v1.4 did introduce `--input-format stream-json`, but only to relay questions and permissions inside a run; the process still exits with the result, so the question stays closed.
 
 1. ~~Claude auth mode for production~~ — **Decided (v1.1, revised 2026-09-29):** the owner's own claude.ai login inside the container (`claude auth login`, URL + code), credentials in `data/claude/.credentials.json` written by the CLI; `claude setup-token` → `.env` only as the fallback. The tool never holds or uses the credentials itself (§8).
-2. ~~Does the pinned Claude Code version support `--max-budget-usd`?~~ — **Yes** (verified on 2.1.283); the CLI enforces it.
+2. ~~Does the pinned Claude Code version support `--max-budget-usd`?~~ — **Yes** (verified on 2.1.283), but it is not used since 2026-10-05: the model sees the remaining dollars and rations work by them.
 3. ~~Quota visibility~~ — answered 2026-09-28: `claude -p --output-format stream-json` emits `rate_limit_event` with `unifiedWindows.five_hour` / `seven_day` utilisation and reset times (CLI 2.1.283); works with a setup-token. Implemented (§7).
 4. STT: confirm Groq Whisper latency/cost from a moving car (LTE); keep faster-whisper as a fallback for offline-ish VPS setups.
 5. ~~Closing-phrase detection: pure keyword list + `/done`, or let the agent emit an explicit "session can be closed" marker in its final report?~~ — **moot** for the same reason as 0; there is no `/done`. The dispatcher suggests `/new` after a finished task instead.

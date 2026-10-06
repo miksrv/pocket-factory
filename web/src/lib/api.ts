@@ -194,7 +194,6 @@ export interface Status {
         model: string
         permission_mode: string
         max_turns: number
-        max_budget_usd: number
         config_dir: string
         logged_in: boolean
         /** `claude.ai (…)` for a full login in the container, `token` for CLAUDE_CODE_OAUTH_TOKEN, `none`. */
