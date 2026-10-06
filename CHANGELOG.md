@@ -33,7 +33,10 @@ Fixes from the owner's first day of real use from Telegram.
   another checkout (a `git status` across the fence, a path in a command) re-bound the thread to
   that project, dropped its session and the next reply was about the other repository. A task of
   a bound conversation now carries that project from creation; detection from tool inputs runs
-  only for a project-less task and binds only a project-less conversation.
+  only for a project-less task and binds only a project-less conversation. The project is read
+  again when the task starts (the binding may have changed in the web while it queued), and a
+  bound conversation whose checkout or project file is gone fails the task with a message instead
+  of running from the workspaces root under the project's name.
 
 ## [1.0.0] - 2026-10-05
 

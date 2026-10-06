@@ -394,7 +394,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
-        const task = this.store.createTask(conversationId, source, prompt, conversation.project, options.schedule ?? null, options.model ?? null)
+        const task = this.store.createTask(
+            conversationId,
+            source,
+            prompt,
+            conversation.project,
+            options.schedule ?? null,
+            options.model ?? null
+        )
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
@@ -722,6 +729,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      */
     private async attempt(task: Task, mayRetry: boolean): Promise<void> {
         const conversation = this.store.getConversation(task.conversation_id)!
+        // A bound conversation whose checkout is gone (renamed, moved, the project file
+        // deleted) must not run from the workspaces root under the project's name.
+        if (conversation.project && !this.workspace.projectPath(conversation.project)) {
+            this.finish(task.id, {
+                status: 'failed',
+                error: `project "${conversation.project}" has no checkout or project file any more; start a conversation elsewhere (/new [project] in Telegram, the project selector in Chat)`
+            })
+            return
+        }
         const cwd = this.cwdFor(conversation)
         // A session lives in the directory it started in: resuming it from another
         // cwd fails, so a conversation that moved (its project was detected or set
@@ -743,7 +759,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const latest = this.store.latestRateLimits()
         const previous = latest && Date.now() - new Date(latest.ts).getTime() < 5 * 60_000 ? latest.five_hour : null
         let first: RateLimits['five_hour'] = null
-        let project = task.project
+        // The project is where the task runs now: the conversation's binding, which the
+        // owner may have changed in the web while the task sat in the queue.
+        let project = conversation.project
+        if (project !== task.project) this.store.updateTask(task.id, { project })
         const resuming = Boolean(conversation.session_id)
         let sawOutput = false
         const startedAt = Date.now()

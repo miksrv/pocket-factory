@@ -139,7 +139,8 @@ function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
  * task page: the subscription is metered in windows, not money.
  */
 function footer(task: Task, limits: RateLimitSnapshot | undefined): string {
-    const share = task.window_5h_delta === null ? null : task.window_5h_delta < 0.01 ? 'this task <1%' : `this task +${Math.round(task.window_5h_delta * 100)}%`
+    const delta = task.window_5h_delta
+    const share = delta === null ? null : delta < 0.01 ? 'this task <1%' : `this task +${Math.round(delta * 100)}%`
     const windows = [limitsLine(limits), share].filter(Boolean).join(' · ')
     return `— project: ${task.project ?? 'none (workspaces root)'}${windows ? `\n— windows: ${windows}` : ''}`
 }
@@ -228,7 +229,8 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 'Pocket Factory is online.',
                 '',
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
-                '/new [project] — start a fresh session; with a project name, inside its checkout (its MCP servers, agents and rules apply)',
+                '/new [project] — start a fresh session; with a project name, inside its checkout',
+                '    (the repository\'s MCP servers, agents and rules apply then)',
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
                 '/model [sonnet|opus|haiku|fable] — the orchestrator\'s model for every next task, in every chat',
                 '/stop — cancel the running task',
@@ -310,7 +312,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 `Pocket Factory v${VERSION}`,
                 `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
                 `Running task: ${active ? 'yes' : 'no'}`,
-                `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> switches)`,
+                `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
                 `Session: ${conversation.session_id ?? 'none'}`,
                 `Workspaces: ${config.paths.workspacesRoot}`,
                 `Model: ${tasks.model()} (/model to switch)`,

@@ -116,8 +116,8 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`
     (sub-agent started / completed, from the CLI's `task_started` / `task_notification` system
-    events) and `limits` events besides text / tool calls. Project per task is detected from
-    workspace names in tool-call inputs
+    events) and `limits` events besides text / tool calls. A task's project is its conversation's
+    at run time; a project-less task gets it detected from workspace names in tool-call inputs
   - `web/` Hono server: sign-in (`web/auth.ts`, below), `/api/*` routes, serves `web/dist`
 - `web/src/` — Vite + React SPA, no UI framework, one `styles.css`; `lib/api.ts` typed client,
   `components/Editor.tsx` shared list+form for agents/skills/projects/schedules (an `aside`

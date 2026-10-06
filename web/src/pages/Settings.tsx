@@ -47,7 +47,7 @@ export function SettingsPage() {
                         <Row k="Login" v={s.claude.login === 'token' ? 'CLAUDE_CODE_OAUTH_TOKEN — model calls only, no claude.ai connectors' : s.claude.login === 'none' ? 'not logged in — docker compose run --rm -it supervisor claude auth login' : s.claude.login} />
                         <ModelRow model={s.claude.model} onSaved={status.reload} />
                         <Row k="Permission mode" v={s.claude.permission_mode} />
-                        <Row k="Caps per task" v={`${s.claude.max_turns} turns · no dollar budget: the subscription's 5-hour and weekly windows are the limit`} />
+                        <Row k="Caps per task" v={`${s.claude.max_turns} turns; no dollar budget, the subscription's windows are the limit`} />
                         <Row k="Concurrent sessions" v={String(s.max_concurrent_sessions)} />
                         <Row k="Config dir" v={s.claude.config_dir} mono />
                     </Section>
