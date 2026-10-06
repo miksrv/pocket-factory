@@ -130,6 +130,18 @@ export async function measure(cwd: string, start: Pick<TaskGit, 'start_head' | '
         } catch {
             // unrelated histories: keep the start
         }
+    } else if (base !== now.head) {
+        // The task ended somewhere its start does not lead to (it left its branch for main, say):
+        // compare with where the two meet, never backwards from a head that is not an ancestor.
+        try {
+            await git(cwd, ['merge-base', '--is-ancestor', base, now.head])
+        } catch {
+            try {
+                base = (await git(cwd, ['merge-base', base, now.head])).trim() || now.head
+            } catch {
+                base = now.head
+            }
+        }
     }
     const files = await listFiles(cwd, base, now.head)
     let uncommitted = 0
@@ -214,9 +226,9 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
 }
 
 /** The pull request whose head is this branch (open, else the latest), or null: no `gh`, no remote, none yet. */
-export async function findPullRequest(cwd: string, branch: string, env: NodeJS.ProcessEnv): Promise<PullRequest | null> {
+export async function findPullRequest(cwd: string, branch: string, env: NodeJS.ProcessEnv, timeout = 20_000): Promise<PullRequest | null> {
     try {
-        const out = await run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,state,title,isDraft'], cwd, env, 20_000)
+        const out = await run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,state,title,isDraft'], cwd, env, timeout)
         const list = JSON.parse(out) as PullRequest[]
         return list[0] ?? null
     } catch {

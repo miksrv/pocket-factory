@@ -88,6 +88,20 @@ export class Inbox {
         return { name, path: file, type: typeOf(originalName, type), size: data.length }
     }
 
+    /**
+     * A file saved for another conversation moves into this one's directory:
+     * the web serves a task's files from its own conversation, and deleting
+     * the conversation it was first saved for must not take them away.
+     */
+    adopt(conversationId: string, attachment: Attachment): Attachment {
+        const dir = this.dir(conversationId)
+        if (path.dirname(attachment.path) === dir || !attachment.path.startsWith(this.root + path.sep) || !fs.existsSync(attachment.path)) return attachment
+        fs.mkdirSync(dir, { recursive: true })
+        const target = path.join(dir, attachment.name)
+        fs.renameSync(attachment.path, target)
+        return { ...attachment, path: target }
+    }
+
     /** A file saved earlier in this conversation's inbox, or null (unknown name, or one trying to leave the directory). */
     get(conversationId: string, name: string): Attachment | null {
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return null

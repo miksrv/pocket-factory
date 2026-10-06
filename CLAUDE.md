@@ -201,7 +201,8 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   Deleting a conversation (`TaskService.deleteConversation`) removes its inbox directory; at
   start `Inbox.sweep` removes directories of deleted or unknown conversations (owner's rule
   2026-10-06: nothing on disk outlives its chat; any file the factory keeps for a chat belongs
-  under its inbox directory). **Changes panel** (1.1.0): `git/changes.ts`; a task of a bound
+  under its inbox directory). `TaskService.submit` runs `Inbox.adopt`, so a file saved for the
+  chat's topic moves into the conversation a topic-switching reply lands in. **Changes panel** (1.1.0): `git/changes.ts`; a task of a bound
   conversation records `tasks.git.start_head` / `start_branch` at start (`snapshotSync`, before
   the CLI is registered, so the worker cannot overshoot `MAX_CONCURRENT_SESSIONS`), and every end
   of `attempt` measures first (`measure`: branch, base = merge-base with origin's default branch
@@ -258,7 +259,9 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   default 6), keeping the session; `nextQueuedTasks` skips a conversation whose oldest queued task
   is not due, a 30 s interval ticks the worker. Telegram says when it continues once per wait;
   `/stop` cancels a queued task too; the web merge ranks a row by `limit_waits + restarts` first
-  so the running → queued step is not dropped as stale. Verified with a fake `claude` on PATH
+  so the running → queued step is not dropped as stale. A wait also sets `pausedUntil`: the worker
+  starts nothing new before the reset (each run would be refused in turn). Only the result path
+  is covered: a CLI that exits without a result fails as before. Verified with a fake `claude` on PATH
 - The CLI's environment is `process.env` minus the supervisor's own secrets (`PRIVATE_ENV` in
   `tasks/service.ts`: bot token, allowed ids, web auth, Groq key); GitHub tokens and MCP `${VAR}`
   secrets stay because the agent needs them. The supervisor never calls the Claude API with the

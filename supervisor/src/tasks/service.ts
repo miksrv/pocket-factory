@@ -80,13 +80,15 @@ export function limitReset(result: { isError: boolean; text: string; rateLimits:
     if (!result.isError) return null
     const limits = result.rateLimits
     const rejected = limits?.status === 'rejected'
-    const said = /usage limit|hit your (?:usage |session |weekly )?limit|limit reached|out of (?:extra )?usage/i.test(result.text)
+    // The CLI's own wordings only: a generic "rate limit reached" (an API 429) is not the subscription.
+    const said = /usage limit|hit your (?:usage |session |weekly )?limit|out of (?:extra )?usage/i.test(result.text)
     if (!rejected && !said) return null
     const candidates: Array<string | null | undefined> = []
-    if (limits?.resets_at) candidates.push(limits.resets_at)
+    // The event's reset is about the window it names, which matters only when that window refused.
+    if (rejected && limits?.resets_at) candidates.push(limits.resets_at)
     const epoch = /\|(\d{10})\b/.exec(result.text)
     if (epoch) candidates.push(new Date(Number(epoch[1]) * 1000).toISOString())
-    const named = limits?.window === 'seven_day' || limits?.window?.startsWith('seven_day') ? limits.seven_day : limits?.window === 'five_hour' ? limits.five_hour : null
+    const named = !rejected ? null : limits?.window?.startsWith('seven_day') ? limits.seven_day : limits?.window === 'five_hour' ? limits.five_hour : null
     if (named) candidates.push(named.resets_at)
     for (const w of [limits?.five_hour, limits?.seven_day]) if (w && w.used >= 0.99) candidates.push(w.resets_at)
     const at = candidates.map((c) => (c ? new Date(c) : null)).find((d): d is Date => d !== null && !Number.isNaN(d.getTime()))
@@ -201,6 +203,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly orphaned: Task[]
     private ticking = false
     private stopped = false
+    /** The subscription refused a run: nothing new starts before this (each would be refused in turn). */
+    private pausedUntil = 0
+    /** When old uploads were last pruned; a factory that runs for months must not keep them forever. */
+    private prunedAt = Date.now()
     private probe: Promise<RateLimitSnapshot | null> | null = null
     private workspaceCache: { names: string[]; at: number } = { names: [], at: 0 }
     /** The owner's uploads (photos, screenshots, files sent with a message), under data/inbox. */
@@ -313,7 +319,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             throw new Error('the commits of this task are gone from the checkout (rebased, squashed or pruned); see the pull request on GitHub')
         }
         const pr = git.branch && git.branch !== git.default_branch ? await findPullRequest(cwd, git.branch, this.agentEnv()) : null
-        if (pr && pr.url !== git.pr?.url) this.store.updateTask(task.id, { git: { ...git, pr } })
+        if (pr && (pr.url !== git.pr?.url || pr.state !== git.pr?.state || pr.isDraft !== git.pr?.isDraft)) this.store.updateTask(task.id, { git: { ...git, pr } })
         return { git: { ...git, pr }, files, pr }
     }
 
@@ -331,8 +337,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (!git.default_branch) throw new Error('the repository has no default branch to open the pull request against')
         if (git.branch === git.default_branch) throw new Error(`the changes are on ${git.branch} itself; a pull request needs a branch of its own`)
         const pr = await createPullRequest(cwd, git.branch, git.default_branch, this.agentEnv())
+        // No 'task' event: the task finished long ago, and listeners treat one as news (the bot would deliver its report again).
         this.store.updateTask(task.id, { git: { ...git, pr } })
-        this.emit('task', this.store.getTask(task.id)!)
         log.info(`${task.id}: pull request ${pr.url}`)
         return pr
     }
@@ -510,7 +516,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string; model?: string; attachments?: Attachment[] } = {}): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
-        const attachments = options.attachments ?? []
+        // Files saved for the chat's topic go to the conversation the message lands in (a reply that switched topics).
+        const attachments = (options.attachments ?? []).map((a) => this.inbox.adopt(conversationId, a))
         const asking = this.pendingAsk(conversationId)
         if (asking && !options.schedule) {
             const question = openQuestions(asking.ask!)[0]
@@ -825,6 +832,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     private tick(): void {
         if (this.ticking || this.stopped) return
+        if (Date.now() - this.prunedAt > 86_400_000) {
+            this.prunedAt = Date.now()
+            try {
+                this.inbox.prune(INBOX_KEEP_DAYS)
+            } catch (error) {
+                log.warn(`inbox prune failed: ${error instanceof Error ? error.message : error}`)
+            }
+        }
+        if (Date.now() < this.pausedUntil) return
         this.ticking = true
         try {
             for (const task of this.store.nextQueuedTasks()) {
@@ -1083,6 +1099,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const why = max <= 0 ? 'auto-continue is off' : task.limit_waits >= MAX_LIMIT_WAITS ? `it already waited ${task.limit_waits} times` : 'that is further away than CLAUDE_AUTO_CONTINUE_HOURS'
             return `Subscription limit reached; the window resets at ${reset.toISOString()} (not waiting: ${why}). Say "continue" after that.`
         }
+        this.pausedUntil = Math.max(this.pausedUntil, at.getTime())
         const updated = this.store.updateTask(taskId, {
             status: 'queued',
             not_before: at.toISOString(),
@@ -1103,7 +1120,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (!task?.git?.start_head) return
         try {
             const git = await measure(cwd, task.git)
-            if (git.files && git.branch && git.branch !== git.default_branch) git.pr = await findPullRequest(cwd, git.branch, this.agentEnv())
+            // A short lookup: the report waits for it, and a slow GitHub must not hold the conversation.
+            if (git.files && git.branch && git.branch !== git.default_branch) git.pr = await findPullRequest(cwd, git.branch, this.agentEnv(), 5_000)
             this.store.updateTask(taskId, { git })
         } catch (error) {
             log.warn(`${taskId}: could not measure the changes: ${error instanceof Error ? error.message : error}`)

@@ -42,7 +42,8 @@ of similar projects (`docs/LANDSCAPE.md`).
   a file only when it is tapped, as wrapped lines without sideways scrolling. The chat shows the
   size as a link under each reply that changed something, and the Telegram report adds
   `— changes: 4 files, +5 −2 on feature/x`, the PR and, with `WEB_PUBLIC_URL` set, a link to the
-  panel. Migration v14: `tasks.git`.
+  panel. Migration v14: `tasks.git`. Two conversations working in the same checkout at the same
+  time see each other's commits in their ranges: the real checkout is shared by design.
 - **Auto-continue after a window reset.** A task the CLI refused because the subscription
   window was used up goes back to the queue until the window resets (plus a minute) and then
   continues its session by itself, like a task interrupted by a restart. Telegram says when it
@@ -59,6 +60,14 @@ of similar projects (`docs/LANDSCAPE.md`).
   `tasks.git`.
 - **`Button` takes `href`** for an external link that looks like a button (the pull request).
 - **`/stop` in Telegram** cancels a queued task too, not only a running one.
+- **Review fixes before the merge**: a limit refusal pauses the whole queue until the reset, so
+  other conversations do not each start a CLI only to be refused; only the CLI's own wordings
+  and a `rejected` event count as the limit (an API 429 fails as before); files saved for the
+  chat's topic move with a reply that lands in another conversation; Create PR no longer makes
+  the bot deliver the finished report again; a task that leaves its branch for main is measured
+  from where the two meet, never backwards; the PR lookup before the report waits 5 s at most
+  and a merged or closed PR is saved as such; old uploads are pruned daily, not only at start;
+  two quick pastes cannot queue more than ten files.
 - **README and `docs/LANDSCAPE.md` reflect October 2026**: the comparison with Remote Control,
   Agent View, Projects and Routines, the open-source neighbours, the quick start with
   `claude auth login` in the container.

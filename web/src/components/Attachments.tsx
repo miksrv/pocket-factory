@@ -39,6 +39,7 @@ export function SentAttachments({ conversationId, attachments, removed }: { conv
     )
 }
 
+/** The server's limits (MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES in supervisor/src/files/inbox.ts), checked here first so a chip says why at once. */
 export const MAX_FILES = 10
 const MAX_BYTES = 20 * 1024 * 1024
 
@@ -58,6 +59,9 @@ export interface Upload {
  */
 export function useUploads(conversationId: string) {
     const [uploads, setUploads] = useState<Upload[]>([])
+    // How many files the composer holds right now: two pastes before a re-render must not both see the old count.
+    const count = useRef(0)
+    count.current = uploads.length
     const urls = useRef(new Set<string>())
     useEffect(
         () => () => {
@@ -69,10 +73,11 @@ export function useUploads(conversationId: string) {
     const patch = (key: string, change: Partial<Upload>) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, ...change } : u)))
 
     const add = (files: File[]) => {
-        const room = MAX_FILES - uploads.length
-        for (const file of files.slice(0, Math.max(0, room))) {
+        const room = Math.max(0, MAX_FILES - count.current)
+        count.current += Math.min(room, files.length)
+        for (const file of files.slice(0, room)) {
             const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-            const preview = /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : null
+            const preview = isImage({ name: file.name, path: '', type: file.type, size: file.size }) ? URL.createObjectURL(file) : null
             if (preview) urls.current.add(preview)
             const tooBig = file.size > MAX_BYTES
             setUploads((list) => [...list, { key, file, preview, status: tooBig ? 'error' : 'uploading', error: tooBig ? 'larger than 20 MB' : undefined }])

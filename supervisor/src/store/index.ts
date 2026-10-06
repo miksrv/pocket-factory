@@ -548,12 +548,6 @@ export class Store {
         ).filter(due)
     }
 
-    /** The earliest `not_before` among queued tasks still waiting, so the worker knows when to look again. */
-    nextWakeUp(): string | null {
-        const row = this.db.prepare(`SELECT MIN(not_before) AS at FROM tasks WHERE status = 'queued' AND not_before IS NOT NULL`).get() as { at: string | null }
-        return row.at
-    }
-
     /**
      * Tasks left in `running` by a previous supervisor process: their CLI is
      * gone. Those interrupted fewer than `maxRestarts` times go back to the
