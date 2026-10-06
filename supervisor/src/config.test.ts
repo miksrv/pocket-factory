@@ -48,7 +48,7 @@ describe('loadConfig', () => {
         const config = loadConfig()
         const data = path.resolve(process.cwd(), 'data')
         expect(config).toEqual({
-            telegram: { botToken: undefined, allowedUserIds: new Set() },
+            telegram: { botToken: undefined, allowedUserIds: new Set(), webNotifyAfterMs: 120_000 },
             claude: {
                 configDir: path.join(data, 'claude'),
                 maxTurns: 50,
@@ -101,7 +101,11 @@ describe('loadConfig', () => {
         vi.stubEnv('TIMEZONE', 'America/Los_Angeles')
         vi.stubEnv('SCHEDULES_LATE_MIN', '-1')
         const config = loadConfig()
-        expect(config.telegram).toEqual({ botToken: '123:abc', allowedUserIds: new Set([42, 7]) })
+        expect(config.telegram).toEqual({
+            botToken: '123:abc',
+            allowedUserIds: new Set([42, 7]),
+            webNotifyAfterMs: 120_000
+        })
         expect(config.paths).toEqual({
             dataRoot: '/srv/data',
             workspacesRoot: '/home/me/ws',

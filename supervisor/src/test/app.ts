@@ -55,7 +55,7 @@ exit 0
 /** The defaults of `loadConfig()` on an empty environment, rooted in `dataRoot`. */
 export function testConfig(dataRoot: string): Config {
     return {
-        telegram: { botToken: undefined, allowedUserIds: new Set() },
+        telegram: { botToken: undefined, allowedUserIds: new Set(), webNotifyAfterMs: 2 * 60_000 },
         claude: {
             configDir: path.join(dataRoot, 'claude'),
             maxTurns: 50,

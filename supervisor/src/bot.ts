@@ -12,6 +12,7 @@ import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } fro
 import { transcribe } from './stt/groq.js'
 import { askQuestions, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
+import { WebNotifier } from './telegram/webNotify.js'
 import { VERSION } from './version.js'
 import { describeUserAgent, type WebAuth } from './web/auth.js'
 
@@ -270,6 +271,17 @@ export function createBot(
         conversation.title || (conversation.channel === 'telegram' ? 'this chat' : 'web conversation')
     // Where scheduled runs report and ask: the owner's private chat (a user's chat id is the user id).
     const ownerChat = [...config.telegram.allowedUserIds][0]
+    /**
+     * A web task the owner left (reply unopened, question unanswered, see
+     * WebNotifier) goes to Telegram: the chat whose topic its thread is, else
+     * the owner's.
+     */
+    const notifier = new WebNotifier({
+        afterMs: config.telegram.webNotifyAfterMs,
+        task: (id) => tasks.task(id),
+        conversation: (id) => store.getConversation(id),
+        notify: (kind, task) => (kind === 'reply' ? void deliverWeb(task) : askFromWeb(task))
+    })
     /** The chat a task talks to: its own for a Telegram task, the owner's for a scheduled one or a topic's, none otherwise. */
     const chatFor = (task: Task): number | null => {
         if (task.source === 'cron')
@@ -279,8 +291,18 @@ export function createBot(
         if (conversation.channel === 'telegram') return Number(conversation.external_id) || null
         // A Telegram message into another conversation (a schedule's thread): the chat that has it as its topic.
         if (task.source === 'telegram') return store.telegramChatsFor(conversation.id)[0] ?? ownerChat ?? null
+        // A web task whose question already reached Telegram: its next questions follow there.
+        if (task.source === 'web' && notifier.isEscalated(task.id)) return webChatFor(conversation)
         return null
     }
+    const webChatFor = (conversation: Conversation): number | null =>
+        store.telegramChatsFor(conversation.id)[0] ?? ownerChat ?? null
+    /** The chat follows the thread it was told about: the next message there continues it, as after a reply. */
+    const switchTo = (chatId: number, conversation: Conversation) => {
+        if (!isTopic(chatId, conversation.id)) store.setTelegramTopic(chatId, conversation.id)
+    }
+    const fromWeb = (conversation: Conversation) =>
+        `💻 **${topicName(conversation)}** — from the web. This chat now continues that thread; /new comes back.`
 
     // Whitelist: the bot fronts an agent with repository access, so it must
     // ignore everyone who is not the owner.
@@ -303,6 +325,7 @@ export function createBot(
                 '/new [project] — start a fresh session; with a project name, inside its checkout',
                 "    (the repository's MCP servers, agents and rules apply then)",
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
+                'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, and this chat switches to its thread.',
                 "/model [sonnet|opus|haiku|fable] — the orchestrator's model for every next task, in every chat",
                 '/stop — cancel the running task',
                 '/status — what is going on',
@@ -685,12 +708,16 @@ export function createBot(
             for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— withdrawn')
             return
         }
+        sendAsk(task, chatId)
+    })
+    const sendAsk = (task: Task, chatId: number, head = '') => {
+        if (!task.ask) return
         const message = askMessage(task, task.ask, isTopic(chatId, task.conversation_id))
         if (!message || sentAsks.has(message.key)) return
         const question = task.ask.kind === 'question' ? (openQuestions(task.ask)[0]?.question ?? null) : null
         sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question })
         bot.api
-            .sendMessage(chatId, message.text, { reply_markup: message.keyboard })
+            .sendMessage(chatId, `${head}${message.text}`, { reply_markup: message.keyboard })
             .then((sent) => {
                 const entry = sentAsks.get(message.key)
                 if (entry) entry.messageId = sent.message_id
@@ -700,7 +727,14 @@ export function createBot(
                 sentAsks.delete(message.key)
                 log.error(`ask to chat ${chatId} failed`, error)
             })
-    })
+    }
+    const askFromWeb = (task: Task) => {
+        const conversation = tasks.conversationOf(task)
+        const chatId = conversation && webChatFor(conversation)
+        if (!conversation || !chatId) return
+        switchTo(chatId, conversation)
+        sendAsk(task, chatId, `💻 ${topicName(conversation)} — from the web. This chat now continues that thread.\n\n`)
+    }
     tasks.on('event', (event: TaskEvent) => {
         if (event.type !== 'answer') return
         const p = event.payload as { request_id?: string; behavior?: string; answers?: Record<string, string> }
@@ -763,6 +797,28 @@ export function createBot(
             })
             .catch((error) => log.error(`delivery to chat ${chatId} failed`, error))
     })
+
+    // A web task's reply nobody opened in the web goes here after a while (WebNotifier),
+    // and the chat switches to its thread, so the next message continues it.
+    const deliverWeb = async (task: Task) => {
+        const conversation = tasks.conversationOf(task)
+        const chatId = conversation && webChatFor(conversation)
+        if (!conversation || !chatId) return
+        switchTo(chatId, conversation)
+        const body = task.status === 'done' ? (task.result ?? '') : `❌ ${task.error || 'failed'}`
+        try {
+            const ids = await sendMarkdown(
+                bot,
+                chatId,
+                `${fromWeb(conversation)}\n\n${body}\n\n${footer(task, tasks.limits(), config.web.publicUrl)}`
+            )
+            remember(chatId, ids, task.conversation_id, task.id)
+            tasks.markRead(task.conversation_id)
+        } catch (error) {
+            log.error(`web reply to chat ${chatId} failed`, error)
+        }
+    }
+    tasks.on('task', (task) => notifier.onTask(task))
 
     // A prefilter that breaks (credentials expired, a host down) would
     // otherwise fail silently every hour: say so once per distinct error. A
