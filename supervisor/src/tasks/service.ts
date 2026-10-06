@@ -8,6 +8,8 @@ import { type McpLoginView, McpLogins } from '../claude/mcpLogin.js'
 import { type AskResponse, type McpServerStatus, type RateLimits, type RunHandle, runClaude, RunTimeout } from '../claude/runner.js'
 import { DEFAULT_MODEL, isModelAlias, MODEL_ALIASES, MODEL_META_KEY, type ModelAlias } from '../claude/models.js'
 import type { Config } from '../config.js'
+import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
+import { type ChangedFile, createPullRequest, filePatch, findPullRequest, listFiles, measure, type PullRequest, snapshotSync, type TaskGit } from '../git/changes.js'
 import { createLogger } from '../logger.js'
 import type { Ask, AskQuestion, Channel, Conversation, RateLimitSnapshot, Store, Task, TaskEvent, TaskSource } from '../store/index.js'
 
@@ -54,6 +56,42 @@ const PROBE_TIMEOUT_MS = 5 * 60_000
  * or a reboot; a task that keeps taking the supervisor down must not loop.
  */
 const MAX_RESTARTS = 1
+
+/** How many times one task may go back to the queue to wait for a window reset before it fails for good. */
+const MAX_LIMIT_WAITS = 3
+
+/** A minute past the reset, so the first call after it does not land on the old window. */
+const RESET_MARGIN_MS = 60_000
+
+/** Uploads older than this are removed at start. */
+const INBOX_KEEP_DAYS = 30
+
+/** How often the worker looks for queued tasks whose wait for a window reset is over. */
+const WAKE_INTERVAL_MS = 30_000
+
+/**
+ * When a failed run was refused for the subscription limit, the time the
+ * window resets; null for any other failure. The CLI's `rate_limit_event`
+ * says `rejected` and names the reset; older wordings put it in the result
+ * text ("Claude AI usage limit reached|<epoch>"), newer ones only say it in
+ * words, so the exhausted window's own reset is the last resort.
+ */
+export function limitReset(result: { isError: boolean; text: string; rateLimits: RateLimits | null }): Date | null {
+    if (!result.isError) return null
+    const limits = result.rateLimits
+    const rejected = limits?.status === 'rejected'
+    const said = /usage limit|hit your (?:usage |session |weekly )?limit|limit reached|out of (?:extra )?usage/i.test(result.text)
+    if (!rejected && !said) return null
+    const candidates: Array<string | null | undefined> = []
+    if (limits?.resets_at) candidates.push(limits.resets_at)
+    const epoch = /\|(\d{10})\b/.exec(result.text)
+    if (epoch) candidates.push(new Date(Number(epoch[1]) * 1000).toISOString())
+    const named = limits?.window === 'seven_day' || limits?.window?.startsWith('seven_day') ? limits.seven_day : limits?.window === 'five_hour' ? limits.five_hour : null
+    if (named) candidates.push(named.resets_at)
+    for (const w of [limits?.five_hour, limits?.seven_day]) if (w && w.used >= 0.99) candidates.push(w.resets_at)
+    const at = candidates.map((c) => (c ? new Date(c) : null)).find((d): d is Date => d !== null && !Number.isNaN(d.getTime()))
+    return at ?? null
+}
 
 /** The questions of an `AskUserQuestion` call, as far as the input is well-formed. */
 export function askQuestions(ask: Ask): AskQuestion[] {
@@ -165,6 +203,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private stopped = false
     private probe: Promise<RateLimitSnapshot | null> | null = null
     private workspaceCache: { names: string[]; at: number } = { names: [], at: 0 }
+    /** The owner's uploads (photos, screenshots, files sent with a message), under data/inbox. */
+    readonly inbox: Inbox
+    private readonly wake: NodeJS.Timeout
     /** Sign-ins to MCP servers started from the web UI; a completed one marks its server connected. */
     private readonly logins = new McpLogins((name) => this.rememberRegistry([{ name, status: 'connected', source: null }], null))
 
@@ -174,6 +215,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         private readonly workspace: Workspace
     ) {
         super()
+        this.inbox = new Inbox(path.join(config.paths.dataRoot, 'inbox'))
+        try {
+            this.inbox.prune(INBOX_KEEP_DAYS)
+            this.inbox.sweep((id) => {
+                const conversation = store.getConversation(id)
+                return Boolean(conversation && !conversation.deleted_at)
+            })
+        } catch (error) {
+            log.warn(`inbox prune failed: ${error instanceof Error ? error.message : error}`)
+        }
+        // Tasks waiting for a window reset become due on their own: look again now and then.
+        this.wake = setInterval(() => this.tick(), WAKE_INTERVAL_MS)
+        this.wake.unref()
         // Tasks that were running when the previous supervisor stopped: their
         // CLI is gone, but the conversation remembers the session, so the run
         // continues where the transcript ends (the prompt is sent once more
@@ -223,6 +277,64 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (this.activeTask(conversationId)) throw new Error('a task is running in this conversation; wait for it to finish')
         if (conversation.project !== project) this.store.updateConversation(conversationId, { project, session_id: null })
         return this.store.getConversation(conversationId)!
+    }
+
+    /**
+     * Remove a conversation from the Chat list and its files from the disk
+     * (uploads, anything kept for it under data/inbox). Its tasks and audit
+     * events stay; their attachment previews then say the file was removed.
+     */
+    deleteConversation(conversationId: string): void {
+        if (this.activeTask(conversationId) || this.queuedTask(conversationId)) throw new Error('a task of this conversation is still queued or running; stop it first')
+        this.store.deleteConversation(conversationId)
+        this.inbox.remove(conversationId)
+    }
+
+    // ---- what a task changed (the task page's Changes panel) ---------------
+
+    /** The task's recorded range and its checkout, or an error the panel shows as is. */
+    private changed(taskId: string): { task: Task; git: Required<Pick<TaskGit, 'base' | 'head'>> & TaskGit; cwd: string } {
+        const task = this.store.getTask(taskId)
+        if (!task) throw new Error('task not found')
+        const git = task.git
+        if (!git?.base || !git.head) throw new Error(task.status === 'queued' || task.status === 'running' ? 'the task has not finished yet' : 'no changes were recorded for this task (it ran outside a project, or before 1.1.0)')
+        const cwd = task.project ? this.workspace.projectPath(task.project) : null
+        if (!cwd) throw new Error(`the checkout of project "${task.project}" is not on disk any more`)
+        return { task, git: git as Required<Pick<TaskGit, 'base' | 'head'>> & TaskGit, cwd }
+    }
+
+    /** The files of the task's range, read from the checkout now, and the branch's pull request as GitHub has it now. */
+    async changes(taskId: string): Promise<{ git: TaskGit; files: ChangedFile[]; pr: PullRequest | null }> {
+        const { task, git, cwd } = this.changed(taskId)
+        let files: ChangedFile[]
+        try {
+            files = await listFiles(cwd, git.base, git.head)
+        } catch {
+            throw new Error('the commits of this task are gone from the checkout (rebased, squashed or pruned); see the pull request on GitHub')
+        }
+        const pr = git.branch && git.branch !== git.default_branch ? await findPullRequest(cwd, git.branch, this.agentEnv()) : null
+        if (pr && pr.url !== git.pr?.url) this.store.updateTask(task.id, { git: { ...git, pr } })
+        return { git: { ...git, pr }, files, pr }
+    }
+
+    async changePatch(taskId: string, file: string): Promise<{ patch: string; truncated: boolean }> {
+        const { git, cwd } = this.changed(taskId)
+        const found = (await listFiles(cwd, git.base, git.head)).find((f) => f.path === file)
+        if (!found) throw new Error(`"${file}" is not among the task's changes`)
+        return filePatch(cwd, git.base, git.head, found)
+    }
+
+    /** Push the task's branch and open its pull request (or return the open one). */
+    async createPr(taskId: string): Promise<PullRequest> {
+        const { task, git, cwd } = this.changed(taskId)
+        if (!git.branch) throw new Error('the task did not end on a branch')
+        if (!git.default_branch) throw new Error('the repository has no default branch to open the pull request against')
+        if (git.branch === git.default_branch) throw new Error(`the changes are on ${git.branch} itself; a pull request needs a branch of its own`)
+        const pr = await createPullRequest(cwd, git.branch, git.default_branch, this.agentEnv())
+        this.store.updateTask(task.id, { git: { ...git, pr } })
+        this.emit('task', this.store.getTask(task.id)!)
+        log.info(`${task.id}: pull request ${pr.url}`)
+        return pr
     }
 
     /** A project file exists and its checkout is on disk. */
@@ -395,13 +507,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return alias
     }
 
-    submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string; model?: string } = {}): Task {
+    submit(conversationId: string, source: TaskSource, prompt: string, options: { schedule?: string; model?: string; attachments?: Attachment[] } = {}): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
+        const attachments = options.attachments ?? []
         const asking = this.pendingAsk(conversationId)
         if (asking && !options.schedule) {
             const question = openQuestions(asking.ask!)[0]
-            if (question) return this.answer(asking.id, { answers: { [question.question]: prompt } })
+            // Files sent with an answer reach the agent as paths inside the answer text.
+            if (question) return this.answer(asking.id, { answers: { [question.question]: prompt + attachmentNote(attachments) } })
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
@@ -411,12 +525,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             prompt,
             conversation.project,
             options.schedule ?? null,
-            options.model ?? null
+            options.model ?? null,
+            attachments
         )
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
-        log.info(`queued ${task.id} (${source}): ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}`)
+        log.info(`queued ${task.id} (${source}): ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${attachments.length ? ` +${attachments.length} file(s)` : ''}`)
         this.emit('task', task)
         queueMicrotask(() => this.tick())
         return task
@@ -560,6 +675,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      */
     async shutdown(): Promise<void> {
         this.stopped = true
+        clearInterval(this.wake)
         this.logins.close()
         for (const handle of this.running.values()) handle.kill()
         await Promise.allSettled([...this.running.values()].map((handle) => handle.result))
@@ -752,6 +868,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             this.finish(task.id, { status: 'failed', error: error instanceof Error ? error.message : String(error) })
             return
         }
+        // Where a project's task starts in its checkout, once (a resume after a restart or a window reset keeps the first).
+        if (conversation.project && !this.store.getTask(task.id)?.git) {
+            const start = snapshotSync(cwd)
+            if (start) this.store.updateTask(task.id, { git: { start_head: start.head, start_branch: start.branch } })
+        }
+        /** Every way the run ends: what it changed in the checkout is measured first, so the report can say it. */
+        const end = async (patch: Partial<Task>) => {
+            await this.recordChanges(task.id, cwd)
+            this.finish(task.id, patch)
+        }
+
         // A session lives in the directory it started in: resuming it from another
         // cwd fails, so a conversation that moved (its project was detected or set
         // after the first task) starts a fresh session there instead of failing once.
@@ -784,8 +911,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const spent = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
 
         const handle = runClaude({
-            prompt: task.prompt,
+            // The paths of the files sent with the message follow the owner's text; the task row keeps the text alone.
+            prompt: task.prompt + attachmentNote(task.attachments ?? []),
             cwd,
+            // Uploads live outside every checkout: readable without a prompt, in this task and in later ones of the session.
+            addDirs: fs.existsSync(this.inbox.root) ? [this.inbox.root] : [],
             resumeSessionId: conversation.session_id ?? undefined,
             mcpConfig: this.mcpConfigFile(),
             settings: this.sessionSettings(conversation.project),
@@ -886,12 +1016,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 log.warn(`task ${task.id} answered with ${open} sub-agent(s) still running`)
                 if (sawText) this.emit('event', this.store.addEvent(task.id, 'text', { text: cutOff }))
             }
-            this.finish(task.id, {
+            // Refused for the subscription limit: back to the queue until the window resets, the session kept.
+            const reset = this.stopRequested.has(task.id) ? null : limitReset(result)
+            const waits = reset ? this.waitForReset(task.id, reset) : null
+            if (waits === true) return
+            await end({
                 status: this.stopRequested.has(task.id) ? 'cancelled' : result.isError ? 'failed' : 'done',
                 session_id: result.sessionId || conversation.session_id,
                 result: cutOff ? `${result.text}\n\n${cutOff}` : result.text,
                 // Error results (max turns, budget, execution errors) often carry no text: name the reason.
-                error: result.isError ? result.text || `claude stopped: ${result.subtype}` : null,
+                error: result.isError ? (typeof waits === 'string' ? waits : result.text || `claude stopped: ${result.subtype}`) : null,
                 num_turns: result.numTurns,
                 cost_usd: result.costUsd,
                 // Wall clock: the result's duration stops at the orchestrator's last turn, before background sub-agents end.
@@ -911,11 +1045,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 return
             }
             if (this.stopRequested.has(task.id)) {
-                this.finish(task.id, { status: 'cancelled', error: message })
+                await end({ status: 'cancelled', error: message })
                 return
             }
             if (error instanceof RunTimeout) {
-                this.finish(task.id, { status: 'failed', error: message })
+                await end({ status: 'failed', error: message })
                 return
             }
             if (resuming && !sawOutput && mayRetry) {
@@ -926,7 +1060,53 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 await this.attempt(task, false)
                 return
             }
-            this.finish(task.id, { status: 'failed', error: message })
+            await end({ status: 'failed', error: message })
+        }
+    }
+
+    /**
+     * A task the subscription limit stopped goes back to the queue with
+     * `not_before` = the reset (plus a minute) and continues its session
+     * then, like a task interrupted by a restart. Only when the reset is
+     * within `CLAUDE_AUTO_CONTINUE_HOURS` and the task has not waited
+     * `MAX_LIMIT_WAITS` times already; otherwise it fails as before, with
+     * the reset time in the error. Returns true when it waits, else the
+     * error to fail with.
+     */
+    private waitForReset(taskId: string, reset: Date, now = Date.now()): true | string {
+        const task = this.store.getTask(taskId)
+        if (!task) return 'subscription limit reached'
+        const at = new Date(Math.max(reset.getTime(), now) + RESET_MARGIN_MS)
+        const wait = at.getTime() - now
+        const max = this.config.claude.autoContinueMs
+        if (max <= 0 || wait > max || task.limit_waits >= MAX_LIMIT_WAITS) {
+            const why = max <= 0 ? 'auto-continue is off' : task.limit_waits >= MAX_LIMIT_WAITS ? `it already waited ${task.limit_waits} times` : 'that is further away than CLAUDE_AUTO_CONTINUE_HOURS'
+            return `Subscription limit reached; the window resets at ${reset.toISOString()} (not waiting: ${why}). Say "continue" after that.`
+        }
+        const updated = this.store.updateTask(taskId, {
+            status: 'queued',
+            not_before: at.toISOString(),
+            limit_waits: task.limit_waits + 1,
+            started_at: null,
+            ask: null,
+            error: null
+        })
+        this.emit('event', this.store.addEvent(taskId, 'status', { status: 'queued', note: `subscription limit reached; continues after the window resets`, not_before: updated.not_before }))
+        log.warn(`${taskId} hit the subscription limit; waits until ${updated.not_before}`)
+        this.emit('task', updated)
+        return true
+    }
+
+    /** The task's changes in its checkout (`tasks.git`) and the branch's pull request; never fails the task. */
+    private async recordChanges(taskId: string, cwd: string): Promise<void> {
+        const task = this.store.getTask(taskId)
+        if (!task?.git?.start_head) return
+        try {
+            const git = await measure(cwd, task.git)
+            if (git.files && git.branch && git.branch !== git.default_branch) git.pr = await findPullRequest(cwd, git.branch, this.agentEnv())
+            this.store.updateTask(taskId, { git })
+        } catch (error) {
+            log.warn(`${taskId}: could not measure the changes: ${error instanceof Error ? error.message : error}`)
         }
     }
 

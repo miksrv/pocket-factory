@@ -1,6 +1,9 @@
+import fs from 'node:fs'
+
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 
+import { type Attachment, isPreviewable, MAX_ATTACHMENTS } from '../../files/inbox.js'
 import type { Conversation, Task, TaskEvent } from '../../store/index.js'
 import type { Env } from '../context.js'
 import { cursorOf } from './cursor.js'
@@ -86,26 +89,76 @@ export function conversationRoutes(): Hono<Env> {
         return c.body(null, 204)
     })
 
-    /** Remove from the Chat list. Refused while a task of it is queued or running. */
+    /** Remove from the Chat list, with its files on disk. Refused while a task of it is queued or running. */
     app.delete('/:id', (c) => {
-        const { tasks, store } = c.get('app')
+        const { tasks } = c.get('app')
         const conversation = live(c)
         if (!conversation) return c.json({ error: 'conversation not found' }, 404)
-        if (tasks.activeTask(conversation.id) || store.listTasks({ conversationId: conversation.id, status: 'queued', limit: 1 }).length) {
-            return c.json({ error: 'a task of this conversation is still queued or running; stop it first' }, 409)
+        try {
+            tasks.deleteConversation(conversation.id)
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 409)
         }
-        store.deleteConversation(conversation.id)
         return c.body(null, 204)
     })
 
+    /**
+     * A message; `attachments` names files uploaded to this conversation
+     * beforehand (POST /:id/attachments). A message of files alone gets a
+     * neutral line, so the agent still knows the owner sent them on purpose.
+     */
     app.post('/:id/messages', async (c) => {
         const { tasks } = c.get('app')
         const conversation = live(c)
         if (!conversation) return c.json({ error: 'conversation not found' }, 404)
-        const body = (await c.req.json().catch(() => ({}))) as { prompt?: string }
-        const prompt = body.prompt?.trim()
+        const body = (await c.req.json().catch(() => ({}))) as { prompt?: unknown; attachments?: unknown }
+        if (!isOptionalString(body.prompt)) return c.json({ error: 'prompt must be a string' }, 400)
+        const names = body.attachments ?? []
+        if (!Array.isArray(names) || !names.every((n) => typeof n === 'string')) return c.json({ error: 'attachments must be a list of file names' }, 400)
+        if (names.length > MAX_ATTACHMENTS) return c.json({ error: `at most ${MAX_ATTACHMENTS} files per message` }, 400)
+        const attachments: Attachment[] = []
+        for (const name of names as string[]) {
+            const file = tasks.inbox.get(conversation.id, name)
+            if (!file) return c.json({ error: `attachment "${name}" not found; upload it again` }, 400)
+            attachments.push(file)
+        }
+        const prompt = body.prompt?.trim() || (attachments.length ? 'See the attached file(s).' : '')
         if (!prompt) return c.json({ error: 'prompt is required' }, 400)
-        return c.json(tasks.submit(conversation.id, 'web', prompt), 201)
+        return c.json(tasks.submit(conversation.id, 'web', prompt, { attachments }), 201)
+    })
+
+    /** One file for the next message: the raw bytes as the body, the name in `?name=`, the type in Content-Type. */
+    app.post('/:id/attachments', async (c) => {
+        const { tasks } = c.get('app')
+        const conversation = live(c)
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        const name = c.req.query('name')?.trim()
+        if (!name) return c.json({ error: 'name is required' }, 400)
+        const data = Buffer.from(await c.req.arrayBuffer())
+        try {
+            const type = c.req.header('content-type')?.split(';')[0]?.trim() || null
+            return c.json(tasks.inbox.save(conversation.id, name, data, type), 201)
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 400)
+        }
+    })
+
+    /**
+     * A file sent with a message, for the thread's previews. Raster images
+     * are shown inline; everything else (SVG and HTML included) is a download,
+     * so an uploaded page can never run in the UI's origin.
+     */
+    app.get('/:id/attachments/:name', (c) => {
+        const { tasks, store } = c.get('app')
+        const conversation = store.getConversation(c.req.param('id'))
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        const file = tasks.inbox.get(conversation.id, c.req.param('name'))
+        if (!file) return c.json({ error: 'file not found' }, 404)
+        const inline = isPreviewable(file.type)
+        c.header('Content-Type', inline ? file.type : 'application/octet-stream')
+        c.header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${file.name.replace(/"/g, '')}"`)
+        c.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
+        return c.body(fs.readFileSync(file.path))
     })
 
     /**

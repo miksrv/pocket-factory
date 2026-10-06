@@ -1,6 +1,10 @@
+import fs from 'node:fs'
+
 import { Bot, type Context, InlineKeyboard } from 'grammy'
 
 import type { Config } from './config.js'
+import { type Attachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './files/inbox.js'
+import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
 import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
@@ -141,11 +145,23 @@ function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
  * are now, with this task's share. Turns, tokens and duration stay on the
  * task page: the subscription is metered in windows, not money.
  */
-function footer(task: Task, limits: RateLimitSnapshot | undefined): string {
+function footer(task: Task, limits: RateLimitSnapshot | undefined, publicUrl: string | null): string {
     const delta = task.window_5h_delta
     const share = delta === null ? null : delta < 0.01 ? 'this task <1%' : `this task +${Math.round(delta * 100)}%`
     const windows = [limitsLine(limits), share].filter(Boolean).join(' · ')
-    return `— project: ${task.project ?? 'none (workspaces root)'}${windows ? `\n— windows: ${windows}` : ''}`
+    // What the task changed, so the phone decides from the summary; the task page has the files and the diff.
+    const changed = changesLine(task.git)
+    const pr = task.git?.pr ? `PR #${task.git.pr.number}${task.git.pr.state === 'OPEN' ? '' : ` (${task.git.pr.state.toLowerCase()})`} ${task.git.pr.url}` : null
+    const review = changed && publicUrl ? `${publicUrl}/tasks/${task.id}#changes` : null
+    return [
+        `— project: ${task.project ?? 'none (workspaces root)'}`,
+        changed ? `— changes: ${[changed, task.git?.branch ? `on ${task.git.branch}` : null].filter(Boolean).join(' ')}${task.git?.uncommitted ? ` · ${task.git.uncommitted} uncommitted` : ''}` : null,
+        pr ? `— ${pr}` : null,
+        review ? `— review: ${review}` : null,
+        windows ? `— windows: ${windows}` : null
+    ]
+        .filter(Boolean)
+        .join('\n')
 }
 
 /** What a permission request is about, in one line: the command, the file, or the arguments. */
@@ -232,6 +248,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                 'Pocket Factory is online.',
                 '',
                 'Send a task as text or voice. Replies continue the same Claude Code session.',
+                'Photos and files go with the task: send them with a caption, or first and then the text.',
                 '/new [project] — start a fresh session; with a project name, inside its checkout',
                 '    (the repository\'s MCP servers, agents and rules apply then)',
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
@@ -278,6 +295,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         }
         const fresh = tasks.newConversation('telegram', String(ctx.chat.id), null, project)
         store.setTelegramTopic(ctx.chat.id, fresh.id)
+        pending.delete(ctx.chat.id)
         await ctx.reply(project ? `Fresh session in ${project}. Next message runs from its checkout.` : 'Fresh session. Next message starts from scratch.')
     })
 
@@ -297,13 +315,15 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     })
 
     bot.command('stop', async (ctx) => {
-        const active = tasks.activeTask(conversationFor(ctx).id)
+        const conversation = conversationFor(ctx)
+        // A task waiting in the queue (for a window reset, or behind a running one) is cancelled too.
+        const active = tasks.activeTask(conversation.id) ?? tasks.queuedTask(conversation.id)
         if (!active) {
             await ctx.reply('Nothing is running.')
             return
         }
         tasks.stop(active.id)
-        await ctx.reply('Stopping…')
+        await ctx.reply(active.status === 'queued' ? '⏹ Cancelled.' : 'Stopping…')
     })
 
     // What the owner needs on a phone: where the next message goes, what runs now, the model
@@ -367,8 +387,10 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
     // conversation (a schedule's thread, an older session) and stays there;
     // then, while the agent waits for an answer, the message is the answer
     // (see TaskService.submit), otherwise it is the next task.
-    const submit = async (ctx: Context, prompt: string) => {
+    const submit = async (ctx: Context, prompt: string, attachments: Attachment[] = []) => {
         const chatId = ctx.chat!.id
+        // Files sent a moment ago without a caption go with this message.
+        attachments = [...takePending(chatId), ...attachments]
         let conversation = conversationFor(ctx)
         let switched: Conversation | null = null
         const replyTo = ctx.message?.reply_to_message
@@ -383,9 +405,10 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         }
         const answering = Boolean(tasks.pendingAsk(conversation.id))
         const waits = !answering && tasks.willWait(conversation.id)
-        const task = tasks.submit(conversation.id, 'telegram', prompt)
+        const task = tasks.submit(conversation.id, 'telegram', prompt, { attachments })
         const head = switched ? `↪️ ${topicName(switched)} · ` : ''
-        const sent = await ctx.reply(`${head}${answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…'}`)
+        const files = attachments.length ? ` 📎 ${attachments.length}` : ''
+        const sent = await ctx.reply(`${head}${answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…'}${files}`)
         remember(chatId, sent.message_id, conversation.id, task.id)
     }
 
@@ -418,6 +441,86 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         await submit(ctx, ctx.message.text)
     })
 
+    /** A file the owner sent, fetched from Telegram's file server. */
+    const download = async (ctx: Context, fileId: string): Promise<{ data: Buffer; filePath: string }> => {
+        const file = await ctx.api.getFile(fileId)
+        if (!file.file_path) throw new Error('Telegram returned no file path')
+        const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(60_000) })
+        if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
+        return { data: Buffer.from(await response.arrayBuffer()), filePath: file.file_path }
+    }
+
+    // Photos and files. With a caption they are a task (or an answer) at
+    // once; without one they wait for the next text or voice message of the
+    // chat, for PENDING_MS. An album arrives as one update per file sharing a
+    // media_group_id: they are gathered for a moment and handled as one.
+    const PENDING_MS = 30 * 60_000
+    const ALBUM_MS = 1500
+    const pending = new Map<number, { files: Attachment[]; at: number }>()
+    const takePending = (chatId: number): Attachment[] => {
+        const held = pending.get(chatId)
+        pending.delete(chatId)
+        // A file whose conversation was deleted in the web meanwhile is gone from the disk.
+        return held && Date.now() - held.at < PENDING_MS ? held.files.filter((f) => fs.existsSync(f.path)) : []
+    }
+    type Incoming = { ctx: Context; fileId: string; name: string; type: string | null; size: number | undefined; caption: string }
+    const albums = new Map<string, Incoming[]>()
+    const receive = async (items: Incoming[]) => {
+        const { ctx } = items[0]
+        const chatId = ctx.chat!.id
+        try {
+            const tooBig = items.find((i) => (i.size ?? 0) > MAX_ATTACHMENT_BYTES)
+            if (tooBig) throw new Error(`"${tooBig.name}" is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB, the most a bot may download`)
+            // Saved where the next message will go; a reply that switches the topic still finds them by path.
+            const conversation = conversationFor(ctx)
+            const saved: Attachment[] = []
+            for (const item of items.slice(0, MAX_ATTACHMENTS)) {
+                const { data, filePath } = await download(item.ctx, item.fileId)
+                const name = item.name || filePath.split('/').pop() || 'file'
+                saved.push(tasks.inbox.save(conversation.id, name, data, item.type))
+            }
+            const caption = items.map((i) => i.caption).find(Boolean) ?? ''
+            if (caption) {
+                await submit(ctx, caption, saved)
+                return
+            }
+            const held = pending.get(chatId)
+            const files = [...(held && Date.now() - held.at < PENDING_MS ? held.files : []), ...saved].slice(-MAX_ATTACHMENTS)
+            pending.set(chatId, { files, at: Date.now() })
+            const what = files.length === 1 ? (files[0].type.startsWith('image/') ? 'Photo' : 'File') : `${files.length} files`
+            await ctx.reply(`📎 ${what} saved. Now send the task as text or voice (within 30 minutes), and ${files.length === 1 ? 'it goes' : 'they go'} with it.`)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            log.error(`attachment handling failed: ${message}`)
+            await ctx.reply(`❌ Could not take the file: ${message}`)
+        }
+    }
+    bot.on(['message:photo', 'message:document', 'message:video'], async (ctx) => {
+        const m = ctx.message
+        const photo = m.photo?.at(-1) // the largest size
+        const media = photo ?? m.document ?? m.video
+        if (!media) return
+        const item: Incoming = {
+            ctx,
+            fileId: media.file_id,
+            name: photo ? 'photo.jpg' : (m.document?.file_name ?? m.video?.file_name ?? ''),
+            type: photo ? 'image/jpeg' : (m.document?.mime_type ?? m.video?.mime_type ?? null),
+            size: media.file_size,
+            caption: m.caption?.trim() ?? ''
+        }
+        const group = m.media_group_id
+        if (!group) return void detached('attachment', () => receive([item]))
+        const key = `${ctx.chat.id}:${group}`
+        const list = albums.get(key)
+        if (list) return void list.push(item)
+        albums.set(key, [item])
+        setTimeout(() => {
+            const items = albums.get(key) ?? []
+            albums.delete(key)
+            detached('album', () => receive(items))
+        }, ALBUM_MS)
+    })
+
     // Voice notes and audio files: download from Telegram, transcribe, then
     // treat the text exactly like a typed message. The transcript is echoed
     // back so the owner can see what the agent is going to act on.
@@ -430,12 +533,8 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         const apiKey = config.stt.groqApiKey
         detached('voice message', async () => {
             try {
-                const file = await ctx.api.getFile(media.file_id)
-                if (!file.file_path) throw new Error('Telegram returned no file path')
-                const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(60_000) })
-                if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
-                const audio = Buffer.from(await response.arrayBuffer())
-                const text = await transcribe(audio, file.file_path, {
+                const { data: audio, filePath } = await download(ctx, media.file_id)
+                const text = await transcribe(audio, filePath, {
                     apiKey,
                     model: config.stt.model,
                     language: config.stt.language,
@@ -509,6 +608,24 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         }
     })
 
+    // A task the subscription limit stopped waits for the window to reset:
+    // say when it continues, once per wait (keyed by the wait's number).
+    const toldWaits = new Map<string, number>()
+    tasks.on('task', (task) => {
+        if (task.status !== 'queued' || !task.not_before || toldWaits.get(task.id) === task.limit_waits) return
+        toldWaits.set(task.id, task.limit_waits)
+        if (task.source !== 'telegram' && task.source !== 'cron') return
+        const chatId = chatFor(task)
+        if (!chatId) return
+        const at = new Date(task.not_before)
+        const clock = at.toLocaleString('en-GB', { timeZone: config.timezone, weekday: 'short', hour: '2-digit', minute: '2-digit' })
+        const head = task.schedule ? `⏱ ${task.schedule}: ` : ''
+        void bot.api
+            .sendMessage(chatId, `${head}⏸ Subscription limit reached. The task continues by itself at ${clock} (in ${resetsIn(task.not_before)}), in the same session. ${task.schedule ? 'Tasks in the web UI can cancel it.' : '/stop cancels it.'}`)
+            .then((sent) => remember(chatId, sent.message_id, task.conversation_id, task.id))
+            .catch((error) => log.error(`limit notice to chat ${chatId} failed`, error))
+    })
+
     // Deliver results of Telegram-originated tasks back to their chat, and of
     // scheduled runs to the owner (unless the schedule says notify: none).
     tasks.on('task', (task) => {
@@ -523,7 +640,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
                   : `❌ ${task.error || 'failed'}`
         const head = task.schedule ? `⏱ **${task.schedule}**\n\n` : ''
         // Delivered = seen: the web's "unread" mark goes; a failed delivery keeps it, so the reply is not lost.
-        void sendMarkdown(bot, chatId, `${head}${body}\n\n${footer(task, tasks.limits())}`)
+        void sendMarkdown(bot, chatId, `${head}${body}\n\n${footer(task, tasks.limits(), config.web.publicUrl)}`)
             .then((ids) => {
                 remember(chatId, ids, task.conversation_id, task.id)
                 tasks.markRead(task.conversation_id)

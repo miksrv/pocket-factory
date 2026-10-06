@@ -483,7 +483,51 @@ dialog.modal[open]::backdrop { animation: fade-in .16s ease-out; }
 .chat .messages-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--surface-2); }
 .chat .messages { flex: 1; overflow: auto; padding: 22px 28px 28px; display: flex; flex-direction: column; gap: 22px; }
 .chat .jump { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: 999px; padding: 5px 12px; font-size: 11.5px; box-shadow: var(--shadow); }
-.chat .composer { border-top: 1px solid var(--border); padding: 12px 16px 8px; display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: end; background: var(--surface); }
+.chat .composer { border-top: 1px solid var(--border); padding: 12px 16px 8px; display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: end; background: var(--surface); }
+.chat .composer.dragging { outline: 2px dashed var(--blue); outline-offset: -6px; background: var(--blue-bg); }
+.chat .composer .attach { width: 40px; height: 40px; padding: 0; border-radius: 10px; }
+/* Files sent with a message (under the bubble) and about to be sent (above the composer). */
+.composer-files { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.attachment-thumb { display: block; width: 120px; height: 90px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); }
+.attachment-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 280px; padding: 4px 4px 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: 11.5px; color: var(--text-2); text-decoration: none; }
+.attachments .attachment-chip { padding-right: 8px; }
+.attachment-chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+.attachment-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.attachment-chip .dim { white-space: nowrap; }
+.attachment-chip.uploading { opacity: .7; }
+.attachment-chip.error { border-color: var(--red); color: var(--red); }
+.attachment-chip.gone { border-style: dashed; color: var(--text-dim); }
+.attachment-chip .remove { width: 22px; height: 22px; padding: 0; }
+.working.waiting { color: var(--amber); }
+/* A task's Changes panel (`components/Changes.tsx`): summary, size + PR, files by folder, one diff at a time. */
+.changes-card { display: flex; flex-direction: column; gap: 12px; }
+.changes-summary { border-left: 2px solid var(--border-strong); padding-left: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.changes-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.changes-head .branch { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes .add { color: var(--green); }
+.changes .del { color: var(--red); }
+.file-tree { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--border); padding-top: 10px; }
+.file-dir { font-size: 11px; color: var(--text-dim); padding: 2px 0 2px 2px; word-break: break-all; }
+.btn.file-row { display: flex; width: 100%; height: auto; min-height: 36px; justify-content: flex-start; align-items: center; gap: 8px; padding: 6px 6px; border: 0; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 400; text-align: left; color: var(--text); }
+.btn.file-row:hover { background: var(--surface-2); }
+.file-row svg { flex: none; transition: transform .15s; color: var(--text-dim); }
+.file-row svg.open { transform: rotate(90deg); }
+.file-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .counts { flex: none; font-size: 11.5px; white-space: nowrap; }
+.file-status { flex: none; width: 18px; height: 18px; border-radius: 4px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 600; background: var(--gray-bg); color: var(--gray); }
+.file-status.s-A { background: var(--green-bg); color: var(--green); }
+.file-status.s-D { background: var(--red-bg); color: var(--red); }
+.file-status.s-R, .file-status.s-C { background: var(--blue-bg); color: var(--blue); }
+.file-diff { padding: 4px 0 8px 26px; }
+.patch { font-variant-ligatures: none; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); }
+.patch .pl { white-space: pre-wrap; word-break: break-all; padding: 0 8px; }
+.patch .pl.add { background: var(--green-bg); }
+.patch .pl.del { background: var(--red-bg); }
+.patch .pl.hunk { background: var(--surface-2); color: var(--text-dim); padding: 2px 8px; }
+.patch .pl.meta { color: var(--text-dim); }
+.reply-foot .changes-chip { font-size: 11px; }
 .chat .composer textarea { min-height: 40px; max-height: 220px; resize: none; overflow: auto; line-height: 1.5; }
 .chat .composer .send { width: 40px; height: 40px; padding: 0; border-radius: 10px; }
 .chat .composer-hint { grid-column: 1 / -1; font-size: 11px; }

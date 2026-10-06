@@ -53,10 +53,67 @@ export interface Task {
     ask: Ask | null
     /** The schedule that queued the task; null for the owner's own tasks. */
     schedule: string | null
+    /** Files the owner sent with the message; their paths reached the agent after the prompt. */
+    attachments: Attachment[] | null
+    /** A queued task waits for the subscription window to reset and starts after this time. */
+    not_before: string | null
+    /** How many times the task went back to the queue to wait for a window reset. */
+    limit_waits: number
+    /** What the task changed in its project's checkout; null outside a project. */
+    git: TaskGit | null
     created_at: string
     started_at: string | null
     finished_at: string | null
 }
+
+export interface PullRequest {
+    number: number
+    url: string
+    state: string
+    title: string
+    isDraft?: boolean
+}
+
+/** A task's changes: where it started and, once it ended, the branch and the range `base..head` with its size. */
+export interface TaskGit {
+    start_head: string
+    start_branch: string | null
+    branch?: string | null
+    head?: string
+    base?: string
+    default_branch?: string | null
+    files?: number
+    added?: number
+    removed?: number
+    uncommitted?: number
+    pr?: PullRequest | null
+}
+
+export interface ChangedFile {
+    path: string
+    from?: string
+    status: string
+    added: number
+    removed: number
+    binary: boolean
+    generated: boolean
+}
+
+/** "7 files +210 −40", or null when nothing changed. */
+export const changesText = (g: TaskGit | null) => (g?.files ? `${g.files} file${g.files === 1 ? '' : 's'} +${g.added ?? 0} −${g.removed ?? 0}` : null)
+
+/** A file sent with a message, saved in the factory's inbox. */
+export interface Attachment {
+    name: string
+    path: string
+    type: string
+    size: number
+}
+
+/** Raster images the thread previews inline (the server serves only these inline). */
+export const isImage = (a: Attachment) => /^image\/(png|jpeg|gif|webp)$/.test(a.type)
+
+export const attachmentUrl = (conversationId: string, a: Attachment) => `/api/conversations/${conversationId}/attachments/${encodeURIComponent(a.name)}`
 
 export interface TaskEvent {
     id: number
@@ -577,6 +634,9 @@ export const api = {
     taskProjects: () => request<string[]>('/tasks/projects'),
     task: (id: string) => request<Task & { events: TaskEvent[]; conversation: Conversation }>(`/tasks/${id}`),
     stopTask: (id: string) => request<{ stopped: boolean }>(`/tasks/${id}/stop`, { method: 'POST' }),
+    taskChanges: (id: string) => request<{ git: TaskGit; files: ChangedFile[]; pr: PullRequest | null }>(`/tasks/${id}/changes`),
+    taskChangeFile: (id: string, path: string) => request<{ patch: string; truncated: boolean }>(`/tasks/${id}/changes/file?path=${encodeURIComponent(path)}`),
+    createPullRequest: (id: string) => request<PullRequest>(`/tasks/${id}/pr`, { method: 'POST' }),
     /** Answer what a running task asked: `{ answers }` by question text, or `{ behavior: 'allow' | 'deny' }` for a permission. */
     answerTask: (id: string, body: { answers: Record<string, string> } | { behavior: 'allow' } | { behavior: 'deny'; message?: string }) =>
         request<Task>(`/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify(body) }),
@@ -618,8 +678,15 @@ export const api = {
     /** The orchestrator's model for every next task, in every conversation; sub-agents keep the `model:` of their files. */
     setModel: (model: string) => request<{ model: string; aliases: string[] }>('/settings/model', { method: 'PUT', body: JSON.stringify({ model }) }),
     saveMcp: (mcpServers: Record<string, McpServerConfig>) => request<{ saved: number }>('/mcp/global', { method: 'PUT', body: JSON.stringify({ mcpServers }) }),
-    sendMessage: (id: string, prompt: string) =>
-        request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt }) }),
+    sendMessage: (id: string, prompt: string, attachments: string[] = []) =>
+        request<Task>(`/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ prompt, attachments }) }),
+    /** One file for the next message of the conversation; the reply names it for `sendMessage`. */
+    uploadAttachment: (id: string, file: File) =>
+        request<Attachment>(`/conversations/${id}/attachments?name=${encodeURIComponent(file.name || 'pasted.png')}`, {
+            method: 'POST',
+            body: file,
+            headers: { 'content-type': file.type || 'application/octet-stream' }
+        }),
 
     list: (kind: Kind) => request<CatalogEntry[]>(`/${kind}`),
     /** `create` refuses to replace a file that already exists (409); `updated_at` (the version the form edited) refuses to overwrite a newer file (409). */

@@ -5,6 +5,8 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+
+import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
 import { getCookie } from 'hono/cookie'
 import { secureHeaders } from 'hono/secure-headers'
 
@@ -55,7 +57,10 @@ export function createApp(app: AppContext): Hono<Env> {
     hono.use('*', secureHeaders({ xFrameOptions: 'DENY', referrerPolicy: 'same-origin' }))
 
     // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
-    hono.use('/api/*', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
+    // An uploaded file (a photo, a log) gets Telegram's own ceiling instead.
+    const smallBodies = bodyLimit({ maxSize: 2 * 1024 * 1024 })
+    const uploads = bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES + 64 * 1024 })
+    hono.use('/api/*', (c, next) => (c.req.method === 'POST' && /^\/api\/conversations\/[^/]+\/attachments$/.test(c.req.path) ? uploads(c, next) : smallBodies(c, next)))
 
     hono.use('/api/*', async (c, next) => {
         // What the API answers is the owner's: never a shared cache's, never the browser's after sign-out.

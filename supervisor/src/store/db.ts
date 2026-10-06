@@ -194,7 +194,20 @@ const MIGRATIONS: string[] = [
     );
     CREATE INDEX login_attempts_ts ON login_attempts(ts);
     CREATE INDEX login_attempts_ip ON login_attempts(ip, ts);
+    `,
+    // v13: files the owner sent with a task (photos, screenshots, logs; JSON
+    // list of { name, path, type, size } under data/inbox), and the wait for
+    // a subscription window to reset: a task that hit the limit goes back to
+    // the queue with `not_before` = the reset time, `limit_waits` times at most.
     `
+    ALTER TABLE tasks ADD COLUMN attachments TEXT;
+    ALTER TABLE tasks ADD COLUMN not_before TEXT;
+    ALTER TABLE tasks ADD COLUMN limit_waits INTEGER NOT NULL DEFAULT 0;
+    `,
+    // v14: what a task changed in its project's checkout (JSON: start head and
+    // branch, at the end the branch, base..head, file and line counts, the PR),
+    // for the task page's Changes panel and the line under a Telegram report.
+    `ALTER TABLE tasks ADD COLUMN git TEXT`
 ]
 
 export function openDatabase(file: string): DatabaseSync {

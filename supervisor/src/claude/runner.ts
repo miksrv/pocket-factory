@@ -81,6 +81,9 @@ export interface RateLimits {
     status: 'allowed' | 'allowed_warning' | 'rejected' | string
     five_hour: RateLimitWindow | null
     seven_day: RateLimitWindow | null
+    /** The window the status is about (`five_hour`, `seven_day`, …) and when it resets, as far as the CLI said; what a `rejected` task waits for. */
+    window?: string | null
+    resets_at?: string | null
 }
 
 export interface RunOptions {
@@ -99,6 +102,8 @@ export interface RunOptions {
     mcpConfig?: string
     /** Settings for this run (`--settings`), e.g. `disabledMcpjsonServers`. */
     settings?: Record<string, unknown>
+    /** Directories outside the cwd the session may read without asking (`--add-dir`), e.g. the owner's uploads. */
+    addDirs?: string[]
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -227,7 +232,9 @@ function parseRateLimits(info: NonNullable<StreamEvent['rate_limit_info']>): Rat
     const limits: RateLimits = {
         status: info.status ?? 'allowed',
         five_hour: window(info.unifiedWindows?.five_hour),
-        seven_day: window(info.unifiedWindows?.seven_day)
+        seven_day: window(info.unifiedWindows?.seven_day),
+        window: info.rateLimitType ?? null,
+        resets_at: typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000).toISOString() : null
     }
     return limits.five_hour || limits.seven_day ? limits : null
 }
@@ -269,6 +276,7 @@ export function runClaude(options: RunOptions): RunHandle {
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
     if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig)
     if (options.settings && Object.keys(options.settings).length) args.push('--settings', JSON.stringify(options.settings))
+    for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 

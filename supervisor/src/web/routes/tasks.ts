@@ -47,6 +47,35 @@ export function taskRoutes(): Hono<Env> {
         }
     })
 
+    /** What the task changed in its checkout: the range, the files (live from git) and the branch's pull request. */
+    app.get('/:id/changes', async (c) => {
+        try {
+            return c.json(await c.get('app').tasks.changes(c.req.param('id')))
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 409)
+        }
+    })
+
+    /** The diff of one file of the task's changes: `?path=`. */
+    app.get('/:id/changes/file', async (c) => {
+        const file = c.req.query('path')
+        if (!file) return c.json({ error: 'path is required' }, 400)
+        try {
+            return c.json(await c.get('app').tasks.changePatch(c.req.param('id'), file))
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 409)
+        }
+    })
+
+    /** Push the task's branch and open a pull request against the default branch. */
+    app.post('/:id/pr', async (c) => {
+        try {
+            return c.json(await c.get('app').tasks.createPr(c.req.param('id')))
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 409)
+        }
+    })
+
     app.post('/:id/stop', (c) => {
         const { tasks } = c.get('app')
         return c.json({ stopped: tasks.stop(c.req.param('id')) })
