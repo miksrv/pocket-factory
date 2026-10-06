@@ -9,6 +9,7 @@ import { askQuestions, openQuestions, type TaskService } from './tasks/service.j
 import { markdownToTelegramHtml } from './telegram/format.js'
 import { MODEL_ALIASES } from './claude/models.js'
 import { describeUserAgent, type WebAuth } from './web/auth.js'
+import { VERSION } from './version.js'
 
 const log = createLogger('bot')
 
@@ -324,6 +325,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, sche
         const windows = limitsLine(tasks.limits())
         await ctx.reply(
             [
+                `Pocket Factory v${VERSION}`,
                 `Conversation: ${conversation.channel === 'telegram' ? 'this chat' : topicName(conversation)} (reply to a message to switch, /new for a fresh one)`,
                 `Running task: ${active ? 'yes' : 'no'}`,
                 `Project: ${conversation.project ?? 'none (workspaces root)'}`,
