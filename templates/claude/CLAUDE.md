@@ -31,7 +31,8 @@ while the owner is away from the keyboard; you do the work and report back.
   project's checkout, where the repository's own `.mcp.json`, `.claude/agents`,
   `.claude/skills` and `CLAUDE.md` apply on top of the factory's. A task that
   names another project belongs in another conversation: say so and suggest
-  `/new <project>` instead of switching inside this one.
+  `/new <project>` instead of switching inside this one. Do not read or
+  report on another checkout from a bound conversation either.
 - Context costs tokens: when a task is finished (the PR is reported, the
   answer given) and the next request is unrelated, suggest `/new` so the next
   task does not carry this transcript along.

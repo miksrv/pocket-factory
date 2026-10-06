@@ -392,9 +392,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const question = openQuestions(asking.ask!)[0]
             if (question) return this.answer(asking.id, { answers: { [question.question]: prompt } })
         }
-        // The project is detected per task from its own tool calls, never inherited
-        // from the conversation: one session may serve several projects in turn.
-        const task = this.store.createTask(conversationId, source, prompt, null, options.schedule ?? null, options.model ?? null)
+        // A bound conversation's task runs in that project's checkout, so that is its
+        // project; an unbound one gets it detected from the task's own tool calls.
+        const task = this.store.createTask(conversationId, source, prompt, conversation.project, options.schedule ?? null, options.model ?? null)
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
         }
@@ -808,11 +808,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     spent.cacheRead += event.cacheReadTokens
                     spent.cacheCreation += event.cacheCreationTokens
                 }
+                // A project-less task takes the first workspace its tools touch, and binds the
+                // conversation only when it has no project yet (2026-10-05: a bound conversation
+                // used to follow any mention of another checkout, so one `git status` across the
+                // fence moved the thread, dropped its session and the next reply was about the
+                // other repository). Later tasks of a bound conversation never leave it.
                 if (event.type === 'tool_use' && !project) {
                     project = detectProject(event.input, this.workspaces(), (name) => this.workspace.projectPath(name) !== null)
                     if (project) {
                         this.store.updateTask(task.id, { project })
-                        this.store.updateConversation(conversation.id, { project })
+                        if (!conversation.project) this.store.updateConversation(conversation.id, { project })
                     }
                 }
                 this.emit('event', this.store.addEvent(task.id, type, payload, origin))

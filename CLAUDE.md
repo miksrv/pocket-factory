@@ -267,7 +267,9 @@ section as notes. Never tag a branch; never tag before the merge.
   `/new <p>` / `/project <p>`, or detected from the first task) spawns `claude -p` with
   cwd = the project's checkout, so the repository's `.mcp.json`, `.claude/agents`, `.claude/skills`
   and `CLAUDE.md` load on top of `data/claude`; a project-less conversation runs from the
-  workspaces root. A session cannot follow a cwd change: `TaskService` compares the transcript's
+  workspaces root. A task of a bound conversation carries that project from creation; detection
+  from tool inputs runs only for a project-less task and binds only a project-less conversation
+  (2026-10-05: a bound thread used to follow any mention of another checkout and lose its session). A session cannot follow a cwd change: `TaskService` compares the transcript's
   directory slug with the cwd and starts a fresh session when they differ.
 - MCP in three layers: the repository's `.mcp.json` (loaded from the cwd; in `-p` mode project
   servers load without approval, and a project file's `mcp:` list turns the others off via
