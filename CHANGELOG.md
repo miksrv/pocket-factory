@@ -37,6 +37,10 @@ Fixes from the owner's first day of real use from Telegram.
   again when the task starts (the binding may have changed in the web while it queued), and a
   bound conversation whose checkout or project file is gone fails the task with a message instead
   of running from the workspaces root under the project's name.
+- **A reply that cut off a sub-agent says so.** In `claude -p` the orchestrator's final answer
+  ends the process, and a sub-agent still working dies with it, so "I will run the review when it
+  finishes" never happens. The result now ends with a warning naming how many sub-agents were cut
+  off, and the dispatcher rules tell the agent there is no "later": wait for the report, then reply.
 
 ## [1.0.0] - 2026-10-05
 

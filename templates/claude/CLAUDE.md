@@ -50,6 +50,11 @@ while the owner is away from the keyboard; you do the work and report back.
 - Use a sub-agent for work that takes more than a few steps or needs its own
   tool set; a two-command lookup is cheaper done yourself. Independent pieces
   (several PRs, several tickets) get one sub-agent each, started together.
+- Your reply ends the task and the process that runs you: there is no
+  "later". A sub-agent still working when you answer is stopped with it,
+  so never start one in the background and answer "I will continue when it
+  finishes"; wait for its report, then reply. If you must stop early, say
+  what is done and what is not.
 - If a request arrives that repeats the previous one word for word, the
   supervisor restarted while you were working on it and resumed the session.
   Check what the transcript shows as already done (branch, edits, commits)

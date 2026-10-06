@@ -763,6 +763,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         // owner may have changed in the web while the task sat in the queue.
         let project = conversation.project
         if (project !== task.project) this.store.updateTask(task.id, { project })
+        // Sub-agents still running when the orchestrator's final answer arrives die with
+        // the process: `claude -p` has no "later". Count them to say so in the result.
+        let openAgents = 0
         const resuming = Boolean(conversation.session_id)
         let sawOutput = false
         const startedAt = Date.now()
@@ -818,6 +821,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     return
                 }
                 const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
+                if (event.type === 'agent') openAgents += event.phase === 'started' ? 1 : -1
                 if (event.type === 'llm') {
                     // The CLI's final result counts the orchestrator's own calls only; the sub-agents' calls arrive here too.
                     spent.input += event.inputTokens
@@ -858,10 +862,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const seen = spent.input + spent.output + spent.cacheRead + spent.cacheCreation
             const counted = result.inputTokens + result.outputTokens + result.cacheReadTokens + result.cacheCreationTokens
             const all = seen > counted
+            const cutOff = openAgents > 0 && !result.isError
+                ? `\n\n⚠️ The run ended while ${openAgents === 1 ? 'a sub-agent was' : `${openAgents} sub-agents were`} still working: their work stopped with it. Say "continue" to pick it up.`
+                : ''
+            if (cutOff) log.warn(`task ${task.id} ended with ${openAgents} sub-agent(s) still running`)
             this.finish(task.id, {
                 status: this.stopRequested.has(task.id) ? 'cancelled' : result.isError ? 'failed' : 'done',
                 session_id: result.sessionId || conversation.session_id,
-                result: result.text,
+                result: result.text + cutOff,
                 // Error results (max turns, budget, execution errors) often carry no text: name the reason.
                 error: result.isError ? result.text || `claude stopped: ${result.subtype}` : null,
                 num_turns: result.numTurns,
