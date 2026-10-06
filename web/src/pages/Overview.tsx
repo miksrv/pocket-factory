@@ -49,7 +49,7 @@ export function OverviewPage() {
                 </div>
                 <div className="card-foot">
                     <span>Tokens include cache reads and writes — the subscription meters windows, not money.</span>
-                    <span>{d?.claude.version ?? ''}</span>
+                    <span title="Pocket Factory · Claude Code">{d ? `v${d.version} · ${d.claude.version ?? ''}` : ''}</span>
                 </div>
             </div>
 

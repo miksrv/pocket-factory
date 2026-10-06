@@ -208,8 +208,8 @@ export function Layout() {
                             )}
                         </span>
                     </div>
-                    <div className="label" style={{ marginTop: 4 }}>
-                        {status.data?.claude.version ?? ''}
+                    <div className="label" style={{ marginTop: 4 }} title={status.data ? `Pocket Factory ${status.data.version} · Claude Code ${status.data.claude.version ?? '?'}` : undefined}>
+                        {status.data ? `v${status.data.version} · ${status.data.claude.version ?? ''}` : ''}
                     </div>
                     <div className="label">{status.data ? `model: ${status.data.claude.model ?? 'default'}` : ''}</div>
                     <NavLink to="/" className="label limits-foot" title="Subscription limits — see Overview">

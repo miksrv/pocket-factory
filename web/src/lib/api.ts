@@ -183,6 +183,8 @@ export interface RateLimits {
 }
 
 export interface Status {
+    /** The factory's own version (root `package.json`, see CHANGELOG.md). */
+    version: string
     stats: Stats
     running: string[]
     limits: RateLimits | null
