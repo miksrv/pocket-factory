@@ -13,6 +13,11 @@
     --text-2: #4d4b46;
     --text-dim: #8a877f;
     --ink: #1d1d1b;
+    --on-ink: #fff;
+    --ink-hover: #333;
+    --placeholder: #b3b0a8;
+    --backdrop: rgba(29, 29, 27, 0.35);
+    --on-red: #fff;
     --green-bg: #e7f3ea;
     --green: #2f7d43;
     --amber-bg: #fbeee1;
@@ -44,6 +49,56 @@
     --radius-sm: 6px;
     --shadow: 0 1px 2px rgba(29, 29, 27, 0.04), 0 8px 24px -12px rgba(29, 29, 27, 0.12);
     --sidebar: 248px;
+}
+
+/* Dark theme: the same palette on charcoal instead of paper. Chosen with the switch in the sidebar
+   foot (data-theme on <html>, set before the first paint by the inline script in index.html) or by
+   the browser's own preference when nothing is chosen. Ink flips: the dark tiles, primary buttons
+   and the user's bubble become pale on dark, and on-ink text follows them. */
+:root[data-theme='dark'] {
+    color-scheme: dark;
+    --bg: #171716;
+    --bg-dot: #242320;
+    --surface: #1f1e1c;
+    --surface-2: #262522;
+    --surface-3: #2e2d29;
+    --border: #2d2c28;
+    --border-strong: #3d3b36;
+    --text: #e6e4df;
+    --text-2: #b4b1aa;
+    --text-dim: #7f7c74;
+    --ink: #e6e4df;
+    --on-ink: #171716;
+    --ink-hover: #cfccc5;
+    --placeholder: #5f5c55;
+    --backdrop: rgba(0, 0, 0, 0.6);
+    --on-red: #171716;
+    --green-bg: #1b2f22;
+    --green: #6cc784;
+    --amber-bg: #352617;
+    --amber: #e5a35f;
+    --red-bg: #3a1f1c;
+    --red: #ef8a80;
+    --blue-bg: #1f2440;
+    --blue: #93a3f2;
+    --purple-bg: #2a2340;
+    --purple: #b9a0f2;
+    --teal-bg: #182f2e;
+    --teal: #6cc7c4;
+    --gray-bg: #2a2925;
+    --gray: #a39f96;
+    --rose-bg: #381e2a;
+    --rose: #f08ab2;
+    --lime-bg: #292f1b;
+    --lime: #b7d35f;
+    --sky-bg: #1a2b38;
+    --sky: #7bb8e0;
+    --gold-bg: #332e19;
+    --gold: #e0c35c;
+    --brown-bg: #32271f;
+    --brown: #d2a380;
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237f7c74' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
 }
 
 * {
@@ -1152,10 +1207,10 @@ button:hover,
 .btn.primary {
     background: var(--ink);
     border-color: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
 }
 .btn.primary:hover {
-    background: #333;
+    background: var(--ink-hover);
 }
 .btn.danger {
     color: var(--red);
@@ -1248,7 +1303,7 @@ select {
 }
 input::placeholder,
 textarea::placeholder {
-    color: #b3b0a8;
+    color: var(--placeholder);
 }
 select {
     appearance: none;
@@ -1527,11 +1582,11 @@ label.row > input[type='checkbox'] {
 }
 .btn.chip.on {
     background: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
     border-color: var(--ink);
 }
 .btn.chip.on:hover {
-    background: #333;
+    background: var(--ink-hover);
 }
 .tool-more summary {
     cursor: pointer;
@@ -1783,7 +1838,7 @@ label.mcp-server {
     bottom: 20px;
     right: 20px;
     background: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
     border-radius: var(--radius-sm);
     padding: 9px 14px;
     font-size: 12px;
@@ -1838,7 +1893,7 @@ dialog.modal .modal-foot {
     border-top: 1px solid var(--border);
 }
 dialog.modal::backdrop {
-    background: rgba(29, 29, 27, 0.35);
+    background: var(--backdrop);
 }
 dialog.modal[open] {
     animation: modal-in 0.16s ease-out;
@@ -1915,7 +1970,7 @@ dialog.modal[open]::backdrop {
 .modal-foot .btn.danger {
     background: var(--red);
     border-color: var(--red);
-    color: #fff;
+    color: var(--on-red);
 }
 .modal-foot .btn.danger:hover {
     background: #9a1e14;
@@ -2289,7 +2344,7 @@ dialog.modal[open]::backdrop {
 }
 .msg.user .bubble {
     background: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
     border-radius: 14px 14px 4px 14px;
     padding: 9px 14px;
     white-space: pre-wrap;
@@ -2639,7 +2694,7 @@ dialog.modal[open]::backdrop {
         display: block;
         position: fixed;
         inset: 0;
-        background: rgba(29, 29, 27, 0.35);
+        background: var(--backdrop);
         z-index: 30;
         opacity: 0;
         pointer-events: none;

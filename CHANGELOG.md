@@ -9,6 +9,15 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.2.0] - 2026-10-09
+
+### Added
+
+- **Dark theme.** The same palette on charcoal, chosen with the sun / moon in the sidebar foot or
+  in Settings → Appearance (System / Light / Dark; System follows the browser). The choice stays
+  in the browser, a reload paints the right theme from the first frame, and the phone's status
+  bar follows it.
+
 ## [1.1.2] - 2026-10-06
 
 A task started in the web UI no longer goes silent when the owner walks away from the laptop:

@@ -453,7 +453,13 @@ it (review fixes, more changes) only extend that CHANGELOG section, never bump a
   it would add a runtime and duplicate the types for nothing).
 - Web UI is a Vite SPA served by the supervisor, not a separate Next.js service: one container, no SSR.
 - UI theme: light, Guild.ai-like (paper background, dot grid, mono font, pastel pills, icon tiles).
-  Tokens live in `web/src/styles.css`; no UI framework, keep it that way. Icons are `lucide-react`
+  Tokens live in `web/src/styles.css`; no UI framework, keep it that way. **Dark theme** (1.2.0): the
+  same tokens redefined under `:root[data-theme='dark']` (charcoal; `--ink` flips to pale and
+  `--on-ink` / `--ink-hover` / `--on-red` / `--placeholder` / `--backdrop` go with it, so never write a
+  literal `#fff` on an ink or red surface); `lib/theme.ts` keeps the choice in `localStorage`
+  `pf.theme` (`light` / `dark`, absent = system) and sets `data-theme` on `<html>` plus the
+  `theme-color` meta; an inline script in `index.html` does the same before the first paint. The
+  sidebar foot's sun / moon flips light ↔ dark, Settings → Appearance offers System too. Icons are `lucide-react`
   (an icon set, not a framework) mapped once in `components/Icon.tsx`: the sidebar, `Tile` and
   card heads all draw the same icon for the same concept (chat = speech bubble, agents = bot,
   audit = clipboard, sessions = document, limits = gauge). A tile never changes size for its
