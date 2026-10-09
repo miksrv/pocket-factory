@@ -1,3 +1,5 @@
+import { activeHeaders } from './activity'
+
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 /** One question of an `AskUserQuestion` call. */
@@ -552,7 +554,7 @@ export interface AuthState {
     authenticated: boolean
     user: string | null
     session: { created_at: string; ip: string | null } | null
-    policy: { max_failures: number; lock_minutes: number; session_days: number }
+    policy: { max_failures: number; lock_minutes: number; session_days: number; idle_hours: number }
 }
 
 export interface WebSession {
@@ -591,7 +593,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`/api${path}`, {
         ...init,
-        headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+        headers: { 'content-type': 'application/json', ...activeHeaders(), ...(init?.headers ?? {}) }
     })
     if (response.status === 204) return undefined as T
     const text = await response.text()

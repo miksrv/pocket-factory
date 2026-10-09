@@ -252,7 +252,12 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
   sign-in page (`components/Auth.tsx`: `AuthProvider` asks `/api/auth/me` first, a 401 from any
   later call brings the page back) and the API wants a session cookie (`pf_session`, 32 random
   bytes, HttpOnly, SameSite=Strict, Secure behind an https proxy; the store keeps the SHA-256 in
-  `web_sessions`, migration v12, sliding `WEB_SESSION_DAYS`). `web/auth.ts` `WebAuth`: constant-time
+  `web_sessions`, migration v12, sliding `WEB_SESSION_DAYS`; **idle timeout** (1.2.0): a session the
+  owner has not used for `WEB_SESSION_IDLE_HOURS` (default 8, 0 = off) is deleted by the next request
+  that finds it so, and only a request the SPA marks `x-factory-active: 1` (`lib/activity.ts`: a key,
+  pointer, wheel or touch event or the tab becoming visible within 5 min) counts as use and slides the
+  session; the status poll, the chat stream and image loads do not, so a tab left open overnight is
+  signed out by morning). `web/auth.ts` `WebAuth`: constant-time
   compare of `WEB_AUTH_USER` / password, every attempt a `login_attempts` row and a log line,
   `WEB_LOGIN_MAX_FAILURES` (5) failures from one address within `WEB_LOGIN_LOCK_MIN` (10) lock
   that address for as long (429 + `Retry-After`; four times as many from anywhere lock everyone;

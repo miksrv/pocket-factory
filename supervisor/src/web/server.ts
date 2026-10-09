@@ -11,7 +11,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { BadName, NotFound } from '../files/catalog.js'
 import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
 import { createLogger } from '../logger.js'
-import { SESSION_COOKIE } from './auth.js'
+import { ACTIVE_HEADER, SESSION_COOKIE } from './auth.js'
 import type { AppContext, Env } from './context.js'
 import { clientIp, clientOf } from './request.js'
 import { activityRoutes } from './routes/activity.js'
@@ -104,7 +104,7 @@ export function createApp(app: AppContext): Hono<Env> {
         const { auth } = app
         c.set('session', null)
         if (auth.mode === 'open') return next()
-        const session = auth.sessionOf(getCookie(c, SESSION_COOKIE), clientIp(c))
+        const session = auth.sessionOf(getCookie(c, SESSION_COOKIE), clientIp(c), c.req.header(ACTIVE_HEADER) === '1')
         if (session) {
             c.set('session', session)
             return next()

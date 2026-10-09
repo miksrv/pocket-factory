@@ -17,6 +17,10 @@ section (`node scripts/release.mjs tag`).
   in Settings → Appearance (System / Light / Dark; System follows the browser). The choice stays
   in the browser, a reload paints the right theme from the first frame, and the phone's status
   bar follows it.
+- **The web signs you out after a day away.** A session the owner has not used for
+  `WEB_SESSION_IDLE_HOURS` (default 8, 0 = off) ends by itself; only your own activity at the
+  page (a key, a click, a scroll, the tab coming back) counts as use, a tab polling on its own
+  overnight does not. Settings → Security states the policy.
 
 ## [1.1.2] - 2026-10-06
 

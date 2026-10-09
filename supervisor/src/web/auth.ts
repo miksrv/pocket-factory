@@ -12,6 +12,12 @@ export const SESSION_COOKIE = 'pf_session'
 
 /** How often a used session's `last_seen_at` and expiry are written (every request would be a write per poll). */
 const TOUCH_EVERY_MS = 5 * 60_000
+/**
+ * A request counts as the owner's activity when the browser says so (the SPA
+ * sends this header while the owner touched the page in the last minutes);
+ * its polls, streams and image loads alone keep no session alive.
+ */
+export const ACTIVE_HEADER = 'x-factory-active'
 /** Sign-in attempts are kept this long for Settings → Security. */
 const ATTEMPTS_KEEP_DAYS = 90
 
@@ -47,7 +53,10 @@ export interface LoginNotice {
  * - A session is 32 random bytes in an HttpOnly cookie; the store holds the
  *   SHA-256, so a copy of the database signs nobody in. Sessions slide:
  *   each use (at most every few minutes) pushes the expiry `sessionDays`
- *   ahead; an unused one lapses.
+ *   ahead; an unused one lapses. A session also ends after `sessionIdleHours`
+ *   without the owner's activity, so a browser left open at the office
+ *   overnight asks for the password in the morning: only requests the SPA
+ *   marks with `ACTIVE_HEADER` count as use, a tab polling by itself does not.
  * - After `loginMaxFailures` failed attempts from one address within
  *   `loginLockMinutes`, sign-in from that address is refused for that long
  *   without even checking the password; attempts during the lock are
@@ -61,6 +70,7 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
     private readonly user: string
     private readonly password: string | undefined
     private readonly sessionMs: number
+    private readonly idleMs: number
     private readonly lockMs: number
     private readonly maxFailures: number
     private readonly touched = new Map<string, number>()
@@ -74,6 +84,7 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
         this.user = config.authUser
         this.password = config.authPassword
         this.sessionMs = config.sessionDays * 86_400_000
+        this.idleMs = config.sessionIdleHours * 3_600_000
         this.lockMs = config.loginLockMinutes * 60_000
         this.maxFailures = config.loginMaxFailures
     }
@@ -87,11 +98,12 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
         return this.user
     }
 
-    get policy(): { max_failures: number; lock_minutes: number; session_days: number } {
+    get policy(): { max_failures: number; lock_minutes: number; session_days: number; idle_hours: number } {
         return {
             max_failures: this.maxFailures,
             lock_minutes: this.lockMs / 60_000,
-            session_days: this.sessionMs / 86_400_000
+            session_days: this.sessionMs / 86_400_000,
+            idle_hours: this.idleMs / 3_600_000
         }
     }
 
@@ -188,12 +200,26 @@ export class WebAuth extends EventEmitter<{ notice: [LoginNotice] }> {
         }
     }
 
-    /** The session a cookie token names, if it is alive; its expiry slides on use. */
-    sessionOf(token: string | undefined, ip: string | null): WebSession | undefined {
+    /**
+     * The session a cookie token names, if it is alive. An `active` request (the owner is at the page)
+     * slides its expiry and refreshes `last_seen_at`; one that finds the session idle for longer than
+     * `sessionIdleHours` ends it instead, whichever kind it is.
+     */
+    sessionOf(token: string | undefined, ip: string | null, active = true): WebSession | undefined {
         if (!token || token.length > 128) return undefined
         const id = hash(token)
         const session = this.store.getWebSession(id)
         if (!session) return undefined
+        const idle = Date.now() - Date.parse(session.last_seen_at)
+        if (this.idleMs && idle > this.idleMs) {
+            this.touched.delete(id)
+            this.store.deleteWebSession(id)
+            log.info(
+                `session of ${describeUserAgent(session.user_agent)} ended after ${Math.round(idle / 3_600_000)} h idle`
+            )
+            return undefined
+        }
+        if (!active) return session
         const last = this.touched.get(id) ?? 0
         if (Date.now() - last > TOUCH_EVERY_MS) {
             this.touched.set(id, Date.now())

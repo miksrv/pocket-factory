@@ -6,7 +6,7 @@ import { type AuthState, UNAUTHORIZED } from '../lib/api'
 import { json, mockFetch } from '../test/fetch'
 import { AuthProvider, useAuth } from './Auth'
 
-const POLICY = { max_failures: 5, lock_minutes: 10, session_days: 30 }
+const POLICY = { max_failures: 5, lock_minutes: 10, session_days: 30, idle_hours: 8 }
 
 const state = (overrides: Partial<AuthState> = {}): AuthState => ({
     mode: 'password',
