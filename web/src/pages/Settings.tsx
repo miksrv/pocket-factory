@@ -5,6 +5,7 @@ import { HostsSection } from '../components/Hosts'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
 import { SecuritySection } from '../components/Security'
+import { ToolchainsSection } from '../components/Toolchains'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
 import { type McpEntry, type McpOverview, type McpServerConfig } from '../lib/api'
 import { api } from '../lib/api'
@@ -15,6 +16,7 @@ import { useAsync } from '../lib/useAsync'
 export function SettingsPage() {
     const status = useAsync(() => api.status(), [], 10_000)
     const mcp = useAsync(() => api.mcp(), [], 30_000)
+    const toolchains = useAsync(() => api.toolchains(), [], 60_000)
     const s = status.data
     // `/settings#hosts` opens the page scrolled to that section (the links "Edit in Settings", "Settings → MCP").
     // The sections exist only once the status has loaded, and the MCP list above Hosts grows when its
@@ -164,6 +166,16 @@ export function SettingsPage() {
                             data={mcp.data}
                             error={mcp.error}
                             onSaved={mcp.reload}
+                        />
+                    </Section>
+                    <Section
+                        id='toolchains'
+                        title='Toolchains'
+                    >
+                        <ToolchainsSection
+                            data={toolchains.data}
+                            error={toolchains.error}
+                            onChanged={toolchains.reload}
                         />
                     </Section>
                     <Section

@@ -1598,6 +1598,11 @@ label.row > input[type='checkbox'] {
     flex-direction: column;
     gap: 6px;
 }
+/* Settings → Toolchains: the installed versions and the sidecar's containers, rows like the MCP list. */
+.tc-list {
+    display: flex;
+    flex-direction: column;
+}
 /* Settings → MCP: one row per server the factory has seen. */
 .mcp-list {
     display: flex;

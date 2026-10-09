@@ -13,6 +13,7 @@ import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
 import { TaskService, type Workspace } from './tasks/service.js'
+import { Toolchains } from './toolchains/service.js'
 import { VERSION } from './version.js'
 import { WebAuth } from './web/auth.js'
 import { startServer } from './web/server.js'
@@ -120,6 +121,12 @@ async function main(): Promise<void> {
     // otherwise fight over long polling).
     // The web UI's sign-in: sessions and the lockout live in the store, failed attempts are told in Telegram.
     const auth = new WebAuth(store, config.web)
+    // What the agents build with: mise runtimes on data/tools, the image's PHP, the dind sidecar.
+    const toolchains = new Toolchains({
+        projectPath: workspace.projectPath,
+        projects: () => catalog.list('projects').map((entry) => entry.name)
+    })
+    tasks.docker = toolchains.docker
     const bot = config.telegram.botToken ? createBot(config, tasks, store, schedules, auth) : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
@@ -133,7 +140,8 @@ async function main(): Promise<void> {
         transcripts,
         presets: new Presets(config.presetsDir),
         schedules,
-        auth
+        auth,
+        toolchains
     })
     auth.start()
 

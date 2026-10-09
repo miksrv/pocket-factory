@@ -175,6 +175,20 @@ export function OverviewPage() {
                             label='Workspaces'
                             detail={`${d?.workspaces.length ?? 0} repositories in ${d?.paths.workspaces ?? '…'}`}
                         />
+                        <Check
+                            ok={Boolean(
+                                d?.toolchains.mise && (!d.toolchains.docker.enabled || d.toolchains.docker.reachable)
+                            )}
+                            label='Toolchains'
+                            detail={toolchainsDetail(d?.toolchains)}
+                            warn={Boolean(d?.toolchains.mise)}
+                        />
+                        {/* Red: a server that failed to start. Unauthorized connectors are the normal state of the ones not in use. */}
+                        <Check
+                            ok={Boolean(d && !d.mcp.failed.length)}
+                            label='MCP servers'
+                            detail={mcpDetail(d?.mcp)}
+                        />
                         {/* Red: a file that cannot fire or a prefilter that fails. Amber: a firing the factory slept through. */}
                         <Check
                             ok={Boolean(
@@ -292,6 +306,32 @@ function githubDetail(github: Status['github'] | undefined): string {
         parts.push(`${fmt.plural(github.owners.length, 'owner token')} (${github.owners.join(', ')})`)
     if (!parts.length) return 'GH_TOKEN / GH_TOKEN_<OWNER> missing — no push / PR'
     return `${parts.join(' + ')} · ${github.cli ?? 'gh not found'}`
+}
+
+/** "mise · 4 versions, 1.2 GB · PHP 8.2.34 · docker on, 2 running" — or what is missing. */
+function toolchainsDetail(t: Status['toolchains'] | undefined): string {
+    if (!t) return '…'
+    const parts: string[] = []
+    parts.push(
+        t.mise
+            ? `mise · ${fmt.plural(t.tools, 'version')}${t.size_kb ? `, ${fmt.bytes(t.size_kb * 1024)}` : ''}`
+            : 'mise missing — no runtimes for the agents'
+    )
+    parts.push(t.php ? `PHP ${t.php}` : 'no PHP')
+    if (!t.docker.enabled) parts.push('docker off')
+    else if (!t.docker.reachable) parts.push(`docker on but unreachable${t.docker.error ? ` (${t.docker.error})` : ''}`)
+    else parts.push(`docker on, ${fmt.plural(t.docker.running, 'container')} running`)
+    return parts.join(' · ')
+}
+
+/** "9 of 27 authorized · 18 need authentication · failed: Trac" — the registry in numbers, failures by name. */
+function mcpDetail(m: Status['mcp'] | undefined): string {
+    if (!m) return '…'
+    if (!m.total) return 'none seen yet — Settings → MCP → Refresh'
+    const parts = [`${m.connected} of ${m.total} authorized`]
+    if (m.needs_auth.length) parts.push(`${m.needs_auth.length} need authentication`)
+    if (m.failed.length) parts.push(`failed: ${m.failed.join(', ')}`)
+    return parts.join(' · ')
 }
 
 /** "2 on · next inbox-morning in 3h" — or what needs the owner: invalid files, failing prefilters, a minute slept through. */

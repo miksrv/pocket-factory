@@ -268,6 +268,70 @@ export interface Status {
     paths: { data: string; workspaces: string; config: string }
     max_concurrent_sessions: number
     workspaces: Array<{ name: string; git: boolean }>
+    /** What the agents build with (Settings → Toolchains); `docker` is the dind sidecar. */
+    toolchains: ToolchainsHealth
+    /** The MCP registry in numbers: Overview → Health. */
+    mcp: { total: number; connected: number; needs_auth: string[]; failed: string[] }
+}
+
+export interface ToolchainsHealth {
+    mise: string | null
+    tools: number
+    size_kb: number | null
+    php: string | null
+    docker: { enabled: boolean; reachable: boolean; version: string | null; running: number; error: string | null }
+}
+
+export interface ToolVersion {
+    tool: string
+    version: string
+    install_path: string
+    source: string | null
+    active: boolean
+    size_kb: number | null
+    used_by: string[]
+}
+
+export interface DockerContainer {
+    id: string
+    name: string
+    image: string
+    state: string
+    status: string
+    ports: string
+    created: string
+    compose: { working_dir: string | null; project: string | null; service: string | null }
+}
+
+export interface ToolchainsOverview {
+    mise: { version: string | null; data_dir: string; size_kb: number | null; tools: ToolVersion[] }
+    image: { php: string | null; composer: string | null }
+    docker: {
+        enabled: boolean
+        host: string | null
+        reachable: boolean
+        version: string | null
+        error: string | null
+        containers: DockerContainer[]
+        disk: Array<{ type: string; total: number; active: number; size: string; reclaimable: string }>
+    }
+}
+
+export interface ProjectTool {
+    tool: string
+    version: string | null
+    source: string
+    spec: string
+    status: 'installed' | 'image' | 'missing' | 'unknown'
+    installed_version: string | null
+}
+
+export interface ProjectToolchain {
+    slug: string
+    path: string | null
+    tools: ProjectTool[]
+    services: Array<{ file: string; services: string[] }>
+    docker: { enabled: boolean }
 }
 
 export type Kind = 'agents' | 'skills' | 'projects' | 'schedules'
@@ -700,6 +764,20 @@ export const api = {
     mcp: () => request<McpOverview>('/mcp'),
     /** Runs `claude mcp list` in the factory (about 15 s) and returns the registry with fresh statuses. */
     refreshMcp: () => request<{ servers: McpEntry[] }>('/mcp/refresh', { method: 'POST' }),
+
+    toolchains: () => request<ToolchainsOverview>('/toolchains'),
+    projectToolchain: (slug: string) => request<ProjectToolchain>(`/toolchains/projects/${encodeURIComponent(slug)}`),
+    /** `go@1.25.1`; a Go or Python download takes a minute or two. */
+    installTool: (spec: string) =>
+        request<{ installed: string }>('/toolchains/install', { method: 'POST', body: JSON.stringify({ spec }) }),
+    removeTool: (tool: string, version: string) =>
+        request<{ removed: boolean }>(`/toolchains/tools/${encodeURIComponent(tool)}/${encodeURIComponent(version)}`, {
+            method: 'DELETE'
+        }),
+    pruneToolchains: () => request<{ mise: string; docker: string | null }>('/toolchains/prune', { method: 'POST' }),
+    stopContainer: (id: string) =>
+        request<{ stopped: string }>('/toolchains/docker/stop', { method: 'POST', body: JSON.stringify({ id }) }),
+    pruneDocker: () => request<{ reclaimed: string }>('/toolchains/docker/prune', { method: 'POST' }),
     startMcpLogin: (name: string) =>
         request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
     mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),

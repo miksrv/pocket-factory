@@ -39,6 +39,7 @@ import type {
     TaskEvent,
     TaskSource
 } from '../store/index.js'
+import { type DockerContainer, DockerSidecar } from '../toolchains/docker.js'
 
 const log = createLogger('tasks')
 
@@ -271,6 +272,8 @@ export function detectProject(
  * transcript — we only remember the session id on the conversation.
  */
 export class TaskService extends EventEmitter<TaskServiceEvents> {
+    /** The factory's Docker daemon (the dind sidecar, when the compose profile is on): a task's containers are stopped at its end. */
+    docker = new DockerSidecar()
     private readonly running = new Map<string, RunHandle>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
@@ -920,6 +923,31 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. Prefilters run with the same one. */
+    /**
+     * Stop the containers a task started on the factory's Docker, unless they belong
+     * (by their compose directory) to the project of another task still running.
+     */
+    private async stopContainers(task: Task, before: Set<string>): Promise<void> {
+        if (!this.docker.enabled) return
+        const others = this.runningTaskIds()
+            .filter((id) => id !== task.id)
+            .map((id) => this.store.getTask(id)?.project ?? null)
+            .map((project) => (project ? this.workspace.projectPath(project) : null))
+            .filter((dir): dir is string => Boolean(dir))
+        const keep = (c: DockerContainer) =>
+            Boolean(c.compose.working_dir && others.some((dir) => c.compose.working_dir!.startsWith(dir)))
+        const stopped = await this.docker.stopStartedSince(before, keep)
+        if (!stopped.length) return
+        log.info(`${task.id}: stopped ${stopped.join(', ')} (started during the task)`)
+        this.emit(
+            'event',
+            this.store.addEvent(task.id, 'status', {
+                status: 'running',
+                note: `stopped containers: ${stopped.join(', ')}`
+            })
+        )
+    }
+
     agentEnv(): NodeJS.ProcessEnv {
         const env: NodeJS.ProcessEnv = {
             // In -p the CLI waits for background tasks after the orchestrator's last turn only
@@ -1074,8 +1102,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (start) this.store.updateTask(task.id, { git: { start_head: start.head, start_branch: start.branch } })
         }
         /** Every way the run ends: what it changed in the checkout is measured first, so the report can say it. */
+        // Services the agent starts on the factory's Docker (a project's db for its tests) end with the task.
+        const containersBefore = await this.docker.snapshot()
         const end = async (patch: Partial<Task>) => {
             await this.recordChanges(task.id, cwd)
+            await this.stopContainers(task, containersBefore)
             this.finish(task.id, patch)
         }
 

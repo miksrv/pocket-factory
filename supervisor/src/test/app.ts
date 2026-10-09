@@ -15,6 +15,7 @@ import { Transcripts } from '../sessions/transcripts.js'
 import { openDatabase } from '../store/db.js'
 import { Store } from '../store/index.js'
 import { TaskService, type Workspace } from '../tasks/service.js'
+import { Toolchains } from '../toolchains/service.js'
 import { WebAuth } from '../web/auth.js'
 import type { AppContext, Env } from '../web/context.js'
 import { createApp } from '../web/server.js'
@@ -147,6 +148,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         agentEnv: () => tasks.agentEnv()
     })
     const auth = new WebAuth(store, config.web)
+    const toolchains = new Toolchains({ projectPath, projects: () => catalog.list('projects').map((e) => e.name) })
+    tasks.docker = toolchains.docker
     const ctx: AppContext = {
         config,
         store,
@@ -157,7 +160,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         transcripts,
         presets: new Presets(config.presetsDir),
         schedules,
-        auth
+        auth,
+        toolchains
     }
     const app = createApp(ctx)
 

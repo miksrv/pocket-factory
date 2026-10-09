@@ -28,6 +28,7 @@ import { sessionRoutes } from './routes/sessions.js'
 import { settingsRoutes } from './routes/settings.js'
 import { statusRoutes } from './routes/status.js'
 import { taskRoutes } from './routes/tasks.js'
+import { toolchainRoutes } from './routes/toolchains.js'
 import { usageRoutes } from './routes/usage.js'
 
 const log = createLogger('web')
@@ -136,6 +137,7 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/hosts', hostRoutes())
     api.route('/mcp', mcpRoutes())
     api.route('/settings', settingsRoutes())
+    api.route('/toolchains', toolchainRoutes())
     // Before the file routes: /schedules/status and /schedules/:name/… must not be taken for a file name.
     api.route('/schedules', scheduleRoutes())
     api.route('/', fileRoutes())

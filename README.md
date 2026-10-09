@@ -85,6 +85,12 @@ lists what is taken from each.
   allowlist), one per schedule (cron, prefilter, instructions and the agent's own notes). The UI,
   the owner and the agent edit the same files; what the agent changes shows up in the Audit log
   as file events.
+- **Toolchains** — the image carries `mise`, PHP with composer and the docker CLI. The agents
+  install the runtimes a checkout asks for (Go, Node, Python … from its own version files) into
+  `data/tools` before the checks; with `COMPOSE_PROFILES=docker` in `.env` the factory runs its own
+  Docker daemon (a dind sidecar, state in `data/docker`), so a project's compose file brings up its
+  database or the whole application for the tests, and what a task started is stopped when it ends.
+  Settings → Toolchains lists versions, sizes and containers; nothing is installed on the host.
 - **Presets** — shareable bundles under `presets/`: `fullstack-ts-go`, `fullstack-ts-php`,
   `pr-review`, `devops` (read-only server checks over SSH), `email-assistant` (Gmail drafts
   through the claude.ai connector, nothing ever sent). A colleague installs one with a click

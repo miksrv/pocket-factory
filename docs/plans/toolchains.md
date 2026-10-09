@@ -1,7 +1,20 @@
 # Plan: toolchains and test services inside the factory
 
-Status: **planned, not started** (2026-10-06, owner: "save as a plan, we'll come back to it").
-Target: release 1.2.0, branch `feature/toolchains`.
+Status: **implemented 2026-10-09** in release 1.2.0 (branch `release/1.2.0`) after the owner's
+decisions below. The sections that follow are the plan as discussed; what shipped is in
+`CLAUDE.md` (Toolchains) and the CHANGELOG.
+
+## Decisions (owner, 2026-10-09)
+
+- mise in the factory image, tools on `data/tools` (not a dev container per project: the agent
+  works in one container and runs the project's commands directly).
+- dind on, as a compose profile (`COMPOSE_PROFILES=docker`), 8 GB; the host's socket was
+  rejected (root on the host, leftovers on the host).
+- The agent installs what a checkout needs itself (`mise install`, `mise use -g`); Settings →
+  Toolchains shows every version with its size and projects, Remove and Prune clean up.
+- A project's services are stopped when the task ends (the supervisor stops what appeared
+  during the task); the next task starts them again from the cached images in seconds.
+- Overview → Health got two lines: Toolchains and MCP servers.
 
 ## Problem
 

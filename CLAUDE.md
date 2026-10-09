@@ -134,6 +134,25 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     `.env.example` says America/Los_Angeles), which is also where "today" starts for the
     `done_today` / `failed_today` / `tokens_today` stats (`startOfDay` in `cron.ts`), `tz:` and `window:` in a
     file are honoured but not offered — weekdays and hours belong in the cron itself
+  - `toolchains/` — **Toolchains** (1.2.0): `detect.ts` reads a checkout's needs (go.mod `toolchain` /
+    `go`, `.nvmrc`, `package.json` engines, `composer.json`, `.python-version`, `mise.toml`,
+    `.tool-versions`; root and `server/` `client/` …; compose files and their services), `mise.ts`
+    wraps the `mise` CLI (`ls --installed/--current --json`, install, uninstall, prune), `docker.ts`
+    the dind sidecar through `DOCKER_HOST` (`ps`, `system df`, stop, prune, and `snapshot` +
+    `stopStartedSince` so `TaskService` stops what a task started unless another running task's
+    project owns it, by the compose `working_dir` label), `service.ts` `Toolchains` caches the
+    overview a minute. Routes `web/routes/toolchains.ts` (`GET /api/toolchains`,
+    `/projects/:slug`, `POST /install`, `DELETE /tools/:tool/:version`, `POST /prune`,
+    `/docker/stop`, `/docker/prune`); `/api/status` carries `toolchains` and `mcp` summaries for
+    the Overview Health lines. Web: `components/Toolchains.tsx` (Settings → Toolchains, the
+    project form's Toolchain block). Image: `tools` stage in the Dockerfile (build-essential, sury
+    PHP, docker CLI + compose, mise with `/etc/mise/config.toml`: `yes`, idiomatic version files,
+    `trusted_config_paths`, `node = "<image major>"` installed by the entrypoint so the shim always
+    resolves; `MISE_DATA_DIR` etc. on the `data/tools` volume, shims first on PATH, the supervisor
+    started by absolute path). dind: compose profile `docker` (`COMPOSE_PROFILES=docker` in
+    `.env`), TLS certs through the `docker-certs` volume, workspaces mounted at the same path,
+    `DOCKER_MEMORY` (8g). On macOS Docker Desktop dind's `/var/lib/docker` must be a named volume
+    (the local `docker-compose.override.yml`, untracked), on Linux the bind mount is fine
   - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`
     (sub-agent started / completed, from the CLI's `task_started` / `task_notification` system
@@ -598,9 +617,11 @@ Not done / next:
    open PR) and mail cadence; an IMAP prefilter for mail.
 6. Phase 6: quota estimate, budgets / soft-stop, backups; web-side notifications to Telegram;
    README for forkers.
-7. **Toolchains in the factory** (planned 2026-10-06, not started): mise + `data/tools`, PHP 8.2
-   from sury in the image, an optional `docker:dind` sidecar for test services; the owner's rule is
-   cleanliness (nothing on the host, nothing left after removal). Plan: `docs/plans/toolchains.md`.
+7. ~~**Toolchains in the factory**~~ — done 2026-10-09 (release 1.2.0, see `toolchains/` above and
+   the decisions in `docs/plans/toolchains.md`): mise + `data/tools`, PHP 8.2 from sury, the dind
+   sidecar behind `COMPOSE_PROFILES=docker`; the agent installs what a checkout needs itself, a
+   task's services are stopped when it ends. Not done: a weekly prune schedule, a `data/docker`
+   size in Health (the supervisor does not see that directory), toolchains in the Telegram `/status`.
 8. Nice-to-haves: `useBlocker` for browser back in the editor, one shared status poll, CodeMirror,
    audit log export.
 9. Release 1.1 from the October survey: ~~photos and files in~~ and ~~auto-continue after a window
