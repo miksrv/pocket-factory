@@ -24,6 +24,8 @@ export interface TestAppOptions {
     web?: Partial<Config['web']>
     /** Any other change to the finished config (it is a fresh object per app). */
     config?: (config: Config) => void
+    /** The body of the fake `claude` on PATH instead of the default one (a shell script; `--version` must answer). */
+    claude?: string
 }
 
 export interface RequestOptions extends RequestInit {
@@ -103,7 +105,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-app-'))
     const bin = path.join(dataRoot, 'bin')
     fs.mkdirSync(bin)
-    fs.writeFileSync(path.join(bin, 'claude'), FAKE_CLAUDE, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'claude'), options.claude ?? FAKE_CLAUDE, { mode: 0o755 })
     vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`)
     // The status route reports these from the environment; the developer's own must not leak into assertions.
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '')

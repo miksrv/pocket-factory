@@ -22,6 +22,17 @@ section (`node scripts/release.mjs tag`).
   page (a key, a click, a scroll, the tab coming back) counts as use, a tab polling on its own
   overnight does not. Settings → Security states the policy.
 
+### Changed
+
+- Durations read `1h 23m 10s` instead of a bare count of minutes and seconds (and `1m 59.6s` no
+  longer shows as `1m 60s`).
+
+### Fixed
+
+- A running task showed 0 turns, 0 tokens and 0s until its result landed, so a long run looked
+  stuck on the task page and in the list. The supervisor now writes turns, tokens and wall-clock
+  to the task every few seconds, and the page and the list tick the duration from the start.
+
 ## [1.1.2] - 2026-10-06
 
 A task started in the web UI no longer goes silent when the owner walks away from the laptop:

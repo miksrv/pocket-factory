@@ -851,6 +851,10 @@ export const taskTokens = (
     t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'>
 ) => t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
 
+/** A finished task's recorded wall-clock; a running one is timed from its start, so the figure moves between polls. */
+export const taskDuration = (t: Pick<Task, 'status' | 'started_at' | 'duration_ms'>, now = Date.now()) =>
+    t.status === 'running' && t.started_at ? Math.max(t.duration_ms, now - Date.parse(t.started_at)) : t.duration_ms
+
 export const fmt = {
     /** "1 run", "3 runs". */
     plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`,
@@ -869,8 +873,14 @@ export const fmt = {
         if (h >= 48) return `${Math.round(h / 24)}d`
         return h > 0 ? `${h}h ${m}m` : `${m}m`
     },
-    duration: (ms: number) =>
-        ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`,
+    /** "4s", "2m 5s", "1h 23m 10s": whole seconds first, so 1m 59.6s is "2m 0s" and never "1m 60s". */
+    duration: (ms: number) => {
+        const total = Math.max(0, Math.round(ms / 1000))
+        const h = Math.floor(total / 3600)
+        const m = Math.floor((total % 3600) / 60)
+        const s = total % 60
+        return h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`
+    },
     when: (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—'),
     ago: (iso: string | null) => {
         if (!iso) return '—'

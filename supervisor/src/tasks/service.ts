@@ -96,6 +96,12 @@ const INBOX_KEEP_DAYS = 30
 
 /** How often the worker looks for queued tasks whose wait for a window reset is over. */
 const WAKE_INTERVAL_MS = 30_000
+/**
+ * A running task's turns, tokens and wall-clock are written to its row this
+ * often (the first model call at once), so the task page and the list show a
+ * long run moving instead of 0 turns and 0s until the result lands.
+ */
+const PROGRESS_EVERY_MS = 5_000
 
 /**
  * When a failed run was refused for the subscription limit, the time the
@@ -1108,6 +1114,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         let sawOutput = false
         const startedAt = Date.now()
         const spent = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
+        /** The orchestrator's model calls so far; the CLI's own count replaces it with the result. */
+        let turns = 0
+        let progressAt = 0
 
         const handle = runClaude({
             // The paths of the files sent with the message follow the owner's text; the task row keeps the text alone.
@@ -1178,6 +1187,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     spent.output += event.outputTokens
                     spent.cacheRead += event.cacheReadTokens
                     spent.cacheCreation += event.cacheCreationTokens
+                    if (!event.agent) turns++
+                    const at = Date.now()
+                    if (at - progressAt >= PROGRESS_EVERY_MS) {
+                        progressAt = at
+                        this.store.updateTask(task.id, {
+                            num_turns: turns,
+                            duration_ms: at - startedAt,
+                            input_tokens: spent.input,
+                            output_tokens: spent.output,
+                            cache_read_tokens: spent.cacheRead,
+                            cache_creation_tokens: spent.cacheCreation
+                        })
+                    }
                 }
                 // A project-less task takes the first workspace its tools touch, and binds the
                 // conversation only when it has no project yet (2026-10-05: a bound conversation
