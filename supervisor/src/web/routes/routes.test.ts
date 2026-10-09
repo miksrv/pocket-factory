@@ -22,6 +22,31 @@ describe('API routes (open mode)', () => {
 
     const put = (url: string, body: unknown) => t.request(url, json(body, { method: 'PUT' }))
 
+    describe('toolchains', () => {
+        it('reports mise, the image and Docker, off or missing here', async () => {
+            const res = await t.request('/api/toolchains')
+            expect(res.status).toBe(200)
+            const body = (await res.json()) as {
+                mise: { tools: unknown[] }
+                image: object
+                docker: { enabled: boolean }
+            }
+            expect(Array.isArray(body.mise.tools)).toBe(true)
+            expect(body.image).toHaveProperty('php')
+            expect(body.docker).toHaveProperty('enabled')
+            const status = (await (await t.request('/api/status')).json()) as { toolchains: object; mcp: object }
+            expect(status.toolchains).toHaveProperty('docker')
+            expect(status.mcp).toMatchObject({ total: 0, connected: 0, needs_auth: [], failed: [] })
+        })
+
+        it('refuses a spec that is not tool@version and an unknown project', async () => {
+            const bad = await t.request('/api/toolchains/install', json({ spec: 'go@1; rm -rf /' }, { method: 'POST' }))
+            expect(bad.status).toBe(400)
+            expect(((await bad.json()) as { error: string }).error).toMatch(/not a tool spec/)
+            expect((await t.request('/api/toolchains/projects/nope')).status).toBe(404)
+        })
+    })
+
     describe('GET /api/status', () => {
         it('reports the version, the stats and the environment', async () => {
             const res = await t.request('/api/status')

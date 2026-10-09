@@ -10,7 +10,8 @@ mkdir -p "$CLAUDE_CONFIG_DIR" \
     "$DATA_ROOT/workspaces" \
     "$DATA_ROOT/db" \
     "$DATA_ROOT/logs" \
-    "$DATA_ROOT/secrets"
+    "$DATA_ROOT/secrets" \
+    "$DATA_ROOT/tools"
 
 # Seed Claude Code's config dir from the templates. `cp -n` never overwrites
 # the owner's edited files, so new template files (agents, skills) appear on
@@ -40,5 +41,14 @@ if [ -n "$GH_TOKEN" ] || [ -n "$owners" ]; then
 else
     echo "[entrypoint] warning: no GH_TOKEN / GH_TOKEN_<OWNER> — git push and gh will fail"
 fi
+
+# Toolchains: mise keeps what it installs on the /data/tools volume; the image's
+# policy (/etc/mise/config.toml) names a node, installed here once so the shim
+# resolves everywhere. The docker CLI talks to the dind sidecar when the `docker`
+# compose profile is on.
+if command -v mise >/dev/null 2>&1; then
+    (cd / && mise install 2>&1 | sed 's/^/[entrypoint] mise: /') || echo "[entrypoint] warning: mise install failed (is $DATA_ROOT/tools writable by uid $(id -u)?)"
+fi
+echo "[entrypoint] toolchains: $(mise --version 2>/dev/null || echo 'mise missing') · php $(php -r 'echo PHP_VERSION;' 2>/dev/null || echo missing) · docker ${DOCKER_HOST:-off}"
 
 exec "$@"

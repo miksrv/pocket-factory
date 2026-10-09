@@ -32,6 +32,9 @@ describe('web sign-in', () => {
         return sessionCookie(res)!
     }
 
+    /** What the SPA sends while the owner is at the page. */
+    const active: RequestOptions = { headers: { 'x-factory-active': '1' } }
+
     const withCookie = (token: string, init: RequestOptions = {}): RequestOptions => {
         const headers = new Headers(init.headers)
         headers.set('cookie', `pf_session=${token}`)
@@ -182,7 +185,9 @@ describe('web sign-in', () => {
         it('reports the lock policy on /api/auth/me', async () => {
             setup({ web: { loginMaxFailures: 7, loginLockMinutes: 15, sessionDays: 3 } })
             const res = await t.request('/api/auth/me')
-            expect(await res.json()).toMatchObject({ policy: { max_failures: 7, lock_minutes: 15, session_days: 3 } })
+            expect(await res.json()).toMatchObject({
+                policy: { max_failures: 7, lock_minutes: 15, session_days: 3, idle_hours: 8 }
+            })
         })
     })
 
@@ -317,11 +322,55 @@ describe('web sign-in', () => {
         it('slides the expiry of a session in use', async () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(START)
-            setup({ web: { sessionDays: 1 } })
+            setup({ web: { sessionDays: 1, sessionIdleHours: 0 } })
             const token = await signIn()
             vi.setSystemTime(new Date(START.getTime() + 20 * 3_600_000))
-            expect((await t.request('/api/conversations', withCookie(token))).status).toBe(200)
+            expect((await t.request('/api/conversations', withCookie(token, active))).status).toBe(200)
             vi.setSystemTime(new Date(START.getTime() + 30 * 3_600_000))
+            expect((await t.request('/api/conversations', withCookie(token, active))).status).toBe(200)
+            // A poll alone does not slide it: gone a day after the last activity.
+            vi.setSystemTime(new Date(START.getTime() + 55 * 3_600_000))
+            expect((await t.request('/api/conversations', withCookie(token))).status).toBe(401)
+        })
+
+        it('ends a session after WEB_SESSION_IDLE_HOURS without the owner at the page', async () => {
+            vi.useFakeTimers({ toFake: ['Date'] })
+            vi.setSystemTime(START)
+            setup({ web: { sessionDays: 30, sessionIdleHours: 8 } })
+            const token = await signIn()
+            vi.setSystemTime(new Date(START.getTime() + 7 * 3_600_000))
+            expect((await t.request('/api/conversations', withCookie(token, active))).status).toBe(200)
+            // Slid by the activity at +7 h: alive at +14 h …
+            vi.setSystemTime(new Date(START.getTime() + 14 * 3_600_000))
+            expect((await t.request('/api/conversations', withCookie(token, active))).status).toBe(200)
+            // … and gone at +23 h, for good: a later active request does not revive it.
+            vi.setSystemTime(new Date(START.getTime() + 23 * 3_600_000))
+            expect((await t.request('/api/conversations', withCookie(token))).status).toBe(401)
+            expect((await t.request('/api/conversations', withCookie(token, active))).status).toBe(401)
+            expect(
+                await t.request('/api/auth/sessions', withCookie(await signIn())).then((r) => r.json())
+            ).toHaveLength(1)
+        })
+
+        it('does not count a tab polling by itself as activity', async () => {
+            vi.useFakeTimers({ toFake: ['Date'] })
+            vi.setSystemTime(START)
+            setup({ web: { sessionIdleHours: 8 } })
+            const token = await signIn()
+            for (let h = 1; h <= 8; h++) {
+                vi.setSystemTime(new Date(START.getTime() + h * 3_600_000 - 1000))
+                expect((await t.request('/api/status', withCookie(token))).status).toBe(200)
+            }
+            vi.setSystemTime(new Date(START.getTime() + 8 * 3_600_000 + 1000))
+            expect((await t.request('/api/status', withCookie(token))).status).toBe(401)
+        })
+
+        it('keeps a session for WEB_SESSION_DAYS when the idle timeout is off', async () => {
+            vi.useFakeTimers({ toFake: ['Date'] })
+            vi.setSystemTime(START)
+            setup({ web: { sessionDays: 30, sessionIdleHours: 0 } })
+            const token = await signIn()
+            vi.setSystemTime(new Date(START.getTime() + 20 * 86_400_000))
             expect((await t.request('/api/conversations', withCookie(token))).status).toBe(200)
         })
 

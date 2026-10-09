@@ -39,6 +39,7 @@ import type {
     TaskEvent,
     TaskSource
 } from '../store/index.js'
+import { type DockerContainer, DockerSidecar } from '../toolchains/docker.js'
 
 const log = createLogger('tasks')
 
@@ -96,6 +97,12 @@ const INBOX_KEEP_DAYS = 30
 
 /** How often the worker looks for queued tasks whose wait for a window reset is over. */
 const WAKE_INTERVAL_MS = 30_000
+/**
+ * A running task's turns, tokens and wall-clock are written to its row this
+ * often (the first model call at once), so the task page and the list show a
+ * long run moving instead of 0 turns and 0s until the result lands.
+ */
+const PROGRESS_EVERY_MS = 5_000
 
 /**
  * When a failed run was refused for the subscription limit, the time the
@@ -265,6 +272,8 @@ export function detectProject(
  * transcript — we only remember the session id on the conversation.
  */
 export class TaskService extends EventEmitter<TaskServiceEvents> {
+    /** The factory's Docker daemon (the dind sidecar, when the compose profile is on): a task's containers are stopped at its end. */
+    docker = new DockerSidecar()
     private readonly running = new Map<string, RunHandle>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
@@ -914,6 +923,35 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. Prefilters run with the same one. */
+    /**
+     * Stop the containers a task started on the factory's Docker, unless another task
+     * still running may own them: one whose project's checkout (or, for a project-less
+     * task, the whole workspaces root) holds the container's compose directory, and any
+     * container without compose labels while another task runs at all. Leaving a
+     * container up costs memory; stopping another task's database costs its tests.
+     */
+    private async stopContainers(task: Task, before: Set<string>): Promise<void> {
+        if (!this.docker.enabled) return
+        const others = this.runningTaskIds()
+            .filter((id) => id !== task.id)
+            .map((id) => this.store.getTask(id)?.project ?? null)
+            .map((project) => (project ? this.workspace.projectPath(project) : this.config.paths.workspacesRoot))
+            .filter((dir): dir is string => Boolean(dir))
+        const under = (file: string, dir: string) => file === dir || file.startsWith(dir.replace(/\/+$/, '') + '/')
+        const keep = (c: DockerContainer) =>
+            others.length > 0 && (!c.compose.working_dir || others.some((dir) => under(c.compose.working_dir!, dir)))
+        const stopped = await this.docker.stopStartedSince(before, keep)
+        if (!stopped.length) return
+        log.info(`${task.id}: stopped ${stopped.join(', ')} (started during the task)`)
+        this.emit(
+            'event',
+            this.store.addEvent(task.id, 'status', {
+                status: 'running',
+                note: `stopped containers: ${stopped.join(', ')}`
+            })
+        )
+    }
+
     agentEnv(): NodeJS.ProcessEnv {
         const env: NodeJS.ProcessEnv = {
             // In -p the CLI waits for background tasks after the orchestrator's last turn only
@@ -1068,8 +1106,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (start) this.store.updateTask(task.id, { git: { start_head: start.head, start_branch: start.branch } })
         }
         /** Every way the run ends: what it changed in the checkout is measured first, so the report can say it. */
+        // Services the agent starts on the factory's Docker (a project's db for its tests) end with the
+        // task. Not awaited here: nothing may yield before the CLI is registered in `running`, or the
+        // worker's concurrency check overshoots (the git snapshot is synchronous for the same reason).
+        const containersBefore = this.docker.snapshot()
         const end = async (patch: Partial<Task>) => {
             await this.recordChanges(task.id, cwd)
+            await this.stopContainers(task, await containersBefore)
             this.finish(task.id, patch)
         }
 
@@ -1108,6 +1151,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         let sawOutput = false
         const startedAt = Date.now()
         const spent = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
+        /** The orchestrator's model calls so far; the CLI's own count replaces it with the result. */
+        let turns = 0
+        let progressAt = 0
 
         const handle = runClaude({
             // The paths of the files sent with the message follow the owner's text; the task row keeps the text alone.
@@ -1178,6 +1224,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     spent.output += event.outputTokens
                     spent.cacheRead += event.cacheReadTokens
                     spent.cacheCreation += event.cacheCreationTokens
+                    if (!event.agent) turns++
+                    const at = Date.now()
+                    if (at - progressAt >= PROGRESS_EVERY_MS) {
+                        progressAt = at
+                        this.store.updateTask(task.id, {
+                            num_turns: turns,
+                            duration_ms: at - startedAt,
+                            input_tokens: spent.input,
+                            output_tokens: spent.output,
+                            cache_read_tokens: spent.cacheRead,
+                            cache_creation_tokens: spent.cacheCreation
+                        })
+                    }
                 }
                 // A project-less task takes the first workspace its tools touch, and binds the
                 // conversation only when it has no project yet (2026-10-05: a bound conversation

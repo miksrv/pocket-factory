@@ -16,11 +16,13 @@ import {
     LogOut,
     type LucideIcon,
     MessageSquare,
+    Moon,
     Package,
     Send,
     Server,
     Settings,
     ShieldCheck,
+    Sun,
     Trash2,
     TriangleAlert,
     X,
@@ -66,7 +68,10 @@ export const ICONS = {
     shield: ShieldCheck,
     /** Show / hide the password on the sign-in page. */
     eye: Eye,
-    eyeOff: EyeOff
+    eyeOff: EyeOff,
+    /** The sidebar's theme switch: the icon names what a click gives. */
+    sun: Sun,
+    moon: Moon
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

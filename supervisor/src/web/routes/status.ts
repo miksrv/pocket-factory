@@ -68,7 +68,7 @@ export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
     app.get('/', async (c) => {
-        const { config, store, tasks } = c.get('app')
+        const { config, store, tasks, toolchains } = c.get('app')
         const workspaces = fs.existsSync(config.paths.workspacesRoot)
             ? fs
                   .readdirSync(config.paths.workspacesRoot, { withFileTypes: true })
@@ -78,7 +78,17 @@ export function statusRoutes(): Hono<Env> {
                       git: fs.existsSync(path.join(config.paths.workspacesRoot, entry.name, '.git'))
                   }))
             : []
-        const [claude, gh, git] = await toolVersions()
+        const [[claude, gh, git], toolchainHealth] = await Promise.all([
+            toolVersions(),
+            toolchains.health().catch(() => null)
+        ])
+        const mcpServers = tasks.mcpRegistry()
+        const mcp = {
+            total: mcpServers.length,
+            connected: mcpServers.filter((s) => s.status === 'connected').length,
+            needs_auth: mcpServers.filter((s) => s.status === 'needs-auth').map((s) => s.label),
+            failed: mcpServers.filter((s) => s.status === 'failed').map((s) => s.label)
+        }
         const schedules = c.get('app').schedules.list()
         const upcoming = schedules.filter((s) => s.next_run).sort((a, b) => a.next_run!.localeCompare(b.next_run!))[0]
         return c.json({
@@ -126,7 +136,9 @@ export function statusRoutes(): Hono<Env> {
                 config: config.paths.configRoot
             },
             max_concurrent_sessions: config.maxConcurrentSessions,
-            workspaces
+            workspaces,
+            toolchains: toolchainHealth,
+            mcp
         })
     })
 

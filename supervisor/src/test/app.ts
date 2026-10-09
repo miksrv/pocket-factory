@@ -15,6 +15,7 @@ import { Transcripts } from '../sessions/transcripts.js'
 import { openDatabase } from '../store/db.js'
 import { Store } from '../store/index.js'
 import { TaskService, type Workspace } from '../tasks/service.js'
+import { Toolchains } from '../toolchains/service.js'
 import { WebAuth } from '../web/auth.js'
 import type { AppContext, Env } from '../web/context.js'
 import { createApp } from '../web/server.js'
@@ -24,6 +25,8 @@ export interface TestAppOptions {
     web?: Partial<Config['web']>
     /** Any other change to the finished config (it is a fresh object per app). */
     config?: (config: Config) => void
+    /** The body of the fake `claude` on PATH instead of the default one (a shell script; `--version` must answer). */
+    claude?: string
 }
 
 export interface RequestOptions extends RequestInit {
@@ -77,6 +80,7 @@ export function testConfig(dataRoot: string): Config {
             authPassword: undefined,
             allowedHosts: new Set(),
             sessionDays: 30,
+            sessionIdleHours: 8,
             loginMaxFailures: 5,
             loginLockMinutes: 10,
             trustProxy: false,
@@ -102,7 +106,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-app-'))
     const bin = path.join(dataRoot, 'bin')
     fs.mkdirSync(bin)
-    fs.writeFileSync(path.join(bin, 'claude'), FAKE_CLAUDE, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'claude'), options.claude ?? FAKE_CLAUDE, { mode: 0o755 })
     vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`)
     // The status route reports these from the environment; the developer's own must not leak into assertions.
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '')
@@ -144,6 +148,12 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         agentEnv: () => tasks.agentEnv()
     })
     const auth = new WebAuth(store, config.web)
+    const toolchains = new Toolchains({
+        root: config.paths.workspacesRoot,
+        projectPath,
+        projects: () => catalog.list('projects').map((e) => e.name)
+    })
+    tasks.docker = toolchains.docker
     const ctx: AppContext = {
         config,
         store,
@@ -154,7 +164,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         transcripts,
         presets: new Presets(config.presetsDir),
         schedules,
-        auth
+        auth,
+        toolchains
     }
     const app = createApp(ctx)
 

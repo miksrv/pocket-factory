@@ -10,6 +10,7 @@ import {
     notify,
     toggleNotifications
 } from '../lib/notify'
+import { applyTheme, currentTheme, onThemeChange, type Theme, toggleTheme, watchSystemTheme } from '../lib/theme'
 import { useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { useAuth } from './Auth'
@@ -116,6 +117,7 @@ export function Layout() {
         }
     }, [status.data, unread, needsReply, navigate])
     const [notifyOn, setNotifyOn] = useState(notificationsEnabled)
+    const theme = useTheme()
     const notifyTitle = !notificationsSupported
         ? 'Desktop notifications need https (or localhost)'
         : notificationsBlocked()
@@ -244,6 +246,18 @@ export function Layout() {
                         <span className='foot-actions'>
                             <Button
                                 variant='ghost'
+                                className='foot-btn'
+                                title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+                                aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
+                                onClick={() => toggleTheme()}
+                            >
+                                <Icon
+                                    name={theme === 'dark' ? 'sun' : 'moon'}
+                                    size={14}
+                                />
+                            </Button>
+                            <Button
+                                variant='ghost'
                                 className={`foot-btn notify-toggle${notifyOn ? ' on' : ''}`}
                                 title={notifyTitle}
                                 aria-label={notifyTitle}
@@ -367,4 +381,19 @@ function Logo() {
             height={30}
         />
     )
+}
+
+/** The theme on screen; applies the stored choice at mount and follows the OS and the switches in the page. */
+export function useTheme(): Theme {
+    const [theme, setTheme] = useState<Theme>(currentTheme)
+    useEffect(() => {
+        setTheme(applyTheme())
+        const stopWatching = watchSystemTheme()
+        const stopListening = onThemeChange(() => setTheme(currentTheme()))
+        return () => {
+            stopWatching()
+            stopListening()
+        }
+    }, [])
+    return theme
 }

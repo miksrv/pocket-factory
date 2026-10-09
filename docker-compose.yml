@@ -13,6 +13,12 @@ services:
         environment:
             # The container is the sandbox; inside it Claude Code runs unattended.
             CLAUDE_PERMISSION_MODE: bypassPermissions
+            # With the `docker` profile on (COMPOSE_PROFILES=docker in .env) the agents' docker
+            # commands go to the dind sidecar below over TLS (its client certificates arrive
+            # through the shared volume); without the profile the CLI has nowhere to connect.
+            DOCKER_HOST: ${COMPOSE_PROFILES:+tcp://docker:2376}
+            DOCKER_TLS_VERIFY: ${COMPOSE_PROFILES:+1}
+            DOCKER_CERT_PATH: ${COMPOSE_PROFILES:+/certs/client}
         ports:
             # Web UI. Bound to localhost by default: reach it over SSH tunnel /
             # Tailscale, or put Caddy / Cloudflare Tunnel in front and set
@@ -28,9 +34,37 @@ services:
             - ${WORKSPACES_DIR:-./data/workspaces}:/data/workspaces
             - ./data/db:/data/db
             - ./data/logs:/data/logs
+            # Toolchains mise installs for the agents (Go, Node, Python versions the checkouts ask for).
+            - ./data/tools:/data/tools
+            - docker-certs:/certs:ro
             # SSH keys for project hosts (linked to ~/.ssh by the entrypoint).
             - ./data/secrets:/data/secrets:ro
         # For one-off interactive runs in the container, e.g. an MCP OAuth login:
         #   docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser
         stdin_open: true
         tty: true
+
+    # The agents' own Docker daemon (COMPOSE_PROFILES=docker in .env): a project's
+    # `docker compose up -d db` or a whole application runs here, never on the host's
+    # daemon, and `docker compose down -v` + `rm -rf data/docker` removes every trace.
+    # Workspaces are mounted at the same path, so a project's bind mounts resolve.
+    # dind needs `privileged`; it listens on the compose network only, with TLS (the
+    # image generates the certificates into the shared volume at first start), and the
+    # supervisor stops a task's containers when the task ends.
+    docker:
+        image: docker:29-dind
+        container_name: pocket-factory-docker
+        profiles: [docker]
+        restart: unless-stopped
+        privileged: true
+        mem_limit: ${DOCKER_MEMORY:-8g}
+        environment:
+            DOCKER_TLS_CERTDIR: /certs
+        volumes:
+            - ./data/docker:/var/lib/docker
+            - docker-certs:/certs
+            - ${WORKSPACES_DIR:-./data/workspaces}:/data/workspaces
+
+volumes:
+    # dind's TLS certificates: the daemon writes them, the supervisor reads the client's.
+    docker-certs:

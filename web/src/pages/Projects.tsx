@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
+import { ProjectToolchainField } from '../components/Toolchains'
 import { api, type CatalogEntry, type McpEntry, type ProjectHost } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
@@ -187,6 +188,7 @@ export function ProjectsPage() {
                             registry={mcp.data?.servers ?? []}
                             onChange={(next) => set({ mcp: next })}
                         />
+                        <ProjectToolchainField slug={str(fm.slug)} />
                         <Field
                             label='Checks (one per line)'
                             hint='Run from the repository root before a PR is opened. All must pass.'

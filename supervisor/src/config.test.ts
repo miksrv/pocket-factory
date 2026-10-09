@@ -70,6 +70,7 @@ describe('loadConfig', () => {
                 authPassword: undefined,
                 allowedHosts: new Set(),
                 sessionDays: 30,
+                sessionIdleHours: 8,
                 loginMaxFailures: 5,
                 loginLockMinutes: 10,
                 trustProxy: false,

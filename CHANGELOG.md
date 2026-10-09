@@ -9,6 +9,40 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.2.0] - 2026-10-09
+
+### Added
+
+- **Dark theme.** The same palette on charcoal, chosen with the sun / moon in the sidebar foot or
+  in Settings → Appearance (System / Light / Dark; System follows the browser). The choice stays
+  in the browser, a reload paints the right theme from the first frame, and the phone's status
+  bar follows it.
+- **Toolchains for the agents.** The image carries `mise`, PHP 8.2 with composer and the docker
+  CLI; the agents install the runtimes a checkout asks for (Go, Node, Python … from its own
+  version files) into `data/tools` themselves before the checks, and PHP is there already.
+  With `COMPOSE_PROFILES=docker` in `.env` the factory runs its own Docker daemon (a
+  `docker:dind` sidecar, state in `data/docker`, 8 GB), so a project's compose file brings up
+  its database or the whole application for the tests; what a task started is stopped when the
+  task ends. Settings → Toolchains lists every installed version with its size and the projects
+  on it (Install, Remove, Prune) and the sidecar's containers (Stop); the project form shows what
+  the checkout needs with a badge each; Overview → Health has a Toolchains line and an MCP
+  servers line. The PR reviewer's "the factory has no toolchains" rule is gone.
+- **The web signs you out after a day away.** A session the owner has not used for
+  `WEB_SESSION_IDLE_HOURS` (default 8, 0 = off) ends by itself; only your own activity at the
+  page (a key, a click, a scroll, the tab coming back) counts as use, a tab polling on its own
+  overnight does not. Settings → Security states the policy.
+
+### Changed
+
+- Durations read `1h 23m 10s` instead of a bare count of minutes and seconds (and `1m 59.6s` no
+  longer shows as `1m 60s`).
+
+### Fixed
+
+- A running task showed 0 turns, 0 tokens and 0s until its result landed, so a long run looked
+  stuck on the task page and in the list. The supervisor now writes turns, tokens and wall-clock
+  to the task every few seconds, and the page and the list tick the duration from the start.
+
 ## [1.1.2] - 2026-10-06
 
 A task started in the web UI no longer goes silent when the owner walks away from the laptop:

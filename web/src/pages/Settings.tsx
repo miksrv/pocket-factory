@@ -5,15 +5,18 @@ import { HostsSection } from '../components/Hosts'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
 import { SecuritySection } from '../components/Security'
+import { ToolchainsSection } from '../components/Toolchains'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
 import { type McpEntry, type McpOverview, type McpServerConfig } from '../lib/api'
 import { api } from '../lib/api'
+import { onThemeChange, setTheme, THEME_CHOICES, themeChoice } from '../lib/theme'
 import { setUnsaved } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 
 export function SettingsPage() {
     const status = useAsync(() => api.status(), [], 10_000)
     const mcp = useAsync(() => api.mcp(), [], 30_000)
+    const toolchains = useAsync(() => api.toolchains(), [], 60_000)
     const s = status.data
     // `/settings#hosts` opens the page scrolled to that section (the links "Edit in Settings", "Settings → MCP").
     // The sections exist only once the status has loaded, and the MCP list above Hosts grows when its
@@ -84,6 +87,12 @@ export function SettingsPage() {
                             v={s.claude.config_dir}
                             mono
                         />
+                    </Section>
+                    <Section
+                        id='appearance'
+                        title='Appearance'
+                    >
+                        <ThemeRow />
                     </Section>
                     <Section
                         id='security'
@@ -157,6 +166,16 @@ export function SettingsPage() {
                             data={mcp.data}
                             error={mcp.error}
                             onSaved={mcp.reload}
+                        />
+                    </Section>
+                    <Section
+                        id='toolchains'
+                        title='Toolchains'
+                    >
+                        <ToolchainsSection
+                            data={toolchains.data}
+                            error={toolchains.error}
+                            onChanged={toolchains.reload}
                         />
                     </Section>
                     <Section
@@ -446,6 +465,51 @@ function Section({ id, title, children }: { id: string; title: string; children:
  * the `model:` of their files, `inherit` among them follows this one. The list is the CLI's aliases,
  * which it resolves to the subscription's current model of that tier.
  */
+/** Light / dark / system for this browser; the sidebar's sun / moon flips between the first two. */
+function ThemeRow() {
+    const [choice, setChoice] = useState(themeChoice)
+    // The sidebar's sun / moon changes the choice too: follow it.
+    useEffect(() => onThemeChange(() => setChoice(themeChoice())), [])
+    const pick = (value: (typeof THEME_CHOICES)[number]['value']) => {
+        setTheme(value)
+        setChoice(value)
+    }
+    return (
+        <div className='kv'>
+            <span>Theme</span>
+            <span
+                className='row wrap'
+                style={{ gap: 10 }}
+            >
+                <span
+                    className='row'
+                    style={{ gap: 4 }}
+                    role='radiogroup'
+                    aria-label='Theme'
+                >
+                    {THEME_CHOICES.map((t) => (
+                        <Button
+                            key={t.value}
+                            size='sm'
+                            className={`chip${choice === t.value ? ' on' : ''}`}
+                            role='radio'
+                            aria-checked={choice === t.value}
+                            title={t.hint}
+                            onClick={() => pick(t.value)}
+                        >
+                            {t.label}
+                        </Button>
+                    ))}
+                </span>
+                <span className='dim small'>
+                    this browser only, kept in its storage; the sun / moon in the sidebar foot flips between light and
+                    dark
+                </span>
+            </span>
+        </div>
+    )
+}
+
 function ModelRow({ model, onSaved }: { model: string; onSaved: () => void }) {
     const [toast, showToast] = useToast()
     const [busy, setBusy] = useState(false)

@@ -1,3 +1,5 @@
+import { activeHeaders } from './activity'
+
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 /** One question of an `AskUserQuestion` call. */
@@ -266,6 +268,80 @@ export interface Status {
     paths: { data: string; workspaces: string; config: string }
     max_concurrent_sessions: number
     workspaces: Array<{ name: string; git: boolean }>
+    /** What the agents build with (Settings → Toolchains); `docker` is the dind sidecar. null: the probe failed. */
+    toolchains: ToolchainsHealth | null
+    /** The MCP registry in numbers: Overview → Health. */
+    mcp: { total: number; connected: number; needs_auth: string[]; failed: string[] }
+}
+
+export interface ToolchainsHealth {
+    mise: string | null
+    tools: number
+    size_kb: number | null
+    php: string | null
+    docker: { enabled: boolean; reachable: boolean; version: string | null; running: number; error: string | null }
+}
+
+export interface ToolVersion {
+    tool: string
+    version: string
+    install_path: string
+    source: string | null
+    active: boolean
+    size_kb: number | null
+    used_by: string[]
+    /** The version file that asked for it, relative to the workspaces root. */
+    asked_by: string | null
+}
+
+export interface DockerContainer {
+    id: string
+    name: string
+    image: string
+    state: string
+    status: string
+    ports: string
+    created: string
+    compose: { working_dir: string | null; project: string | null; service: string | null }
+    /** The factory project whose checkout the compose file ran in. */
+    project: string | null
+}
+
+export interface ToolchainsOverview {
+    mise: {
+        version: string | null
+        data_dir: string
+        size_kb: number | null
+        tools: ToolVersion[]
+        error: string | null
+    }
+    image: { php: string | null; composer: string | null }
+    docker: {
+        enabled: boolean
+        host: string | null
+        reachable: boolean
+        version: string | null
+        error: string | null
+        containers: DockerContainer[]
+        disk: Array<{ type: string; total: number; active: number; size: string; reclaimable: string }>
+    }
+}
+
+export interface ProjectTool {
+    tool: string
+    version: string | null
+    source: string
+    spec: string
+    status: 'installed' | 'image' | 'missing' | 'unknown'
+    installed_version: string | null
+}
+
+export interface ProjectToolchain {
+    slug: string
+    path: string | null
+    tools: ProjectTool[]
+    services: Array<{ file: string; services: string[] }>
+    docker: { enabled: boolean }
 }
 
 export type Kind = 'agents' | 'skills' | 'projects' | 'schedules'
@@ -552,7 +628,7 @@ export interface AuthState {
     authenticated: boolean
     user: string | null
     session: { created_at: string; ip: string | null } | null
-    policy: { max_failures: number; lock_minutes: number; session_days: number }
+    policy: { max_failures: number; lock_minutes: number; session_days: number; idle_hours: number }
 }
 
 export interface WebSession {
@@ -591,7 +667,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`/api${path}`, {
         ...init,
-        headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+        headers: { 'content-type': 'application/json', ...activeHeaders(), ...(init?.headers ?? {}) }
     })
     if (response.status === 204) return undefined as T
     const text = await response.text()
@@ -698,6 +774,20 @@ export const api = {
     mcp: () => request<McpOverview>('/mcp'),
     /** Runs `claude mcp list` in the factory (about 15 s) and returns the registry with fresh statuses. */
     refreshMcp: () => request<{ servers: McpEntry[] }>('/mcp/refresh', { method: 'POST' }),
+
+    toolchains: () => request<ToolchainsOverview>('/toolchains'),
+    projectToolchain: (slug: string) => request<ProjectToolchain>(`/toolchains/projects/${encodeURIComponent(slug)}`),
+    /** `go@1.25.1`; a Go or Python download takes a minute or two. */
+    installTool: (spec: string) =>
+        request<{ installed: string }>('/toolchains/install', { method: 'POST', body: JSON.stringify({ spec }) }),
+    removeTool: (tool: string, version: string) =>
+        request<{ removed: boolean }>(`/toolchains/tools/${encodeURIComponent(tool)}/${encodeURIComponent(version)}`, {
+            method: 'DELETE'
+        }),
+    pruneToolchains: () => request<{ mise: string; docker: string | null }>('/toolchains/prune', { method: 'POST' }),
+    stopContainer: (id: string) =>
+        request<{ stopped: string }>('/toolchains/docker/stop', { method: 'POST', body: JSON.stringify({ id }) }),
+    pruneDocker: () => request<{ reclaimed: string }>('/toolchains/docker/prune', { method: 'POST' }),
     startMcpLogin: (name: string) =>
         request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
     mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),
@@ -849,6 +939,10 @@ export const taskTokens = (
     t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'>
 ) => t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
 
+/** A finished task's recorded wall-clock; a running one is timed from its start, so the figure moves between polls. */
+export const taskDuration = (t: Pick<Task, 'status' | 'started_at' | 'duration_ms'>, now = Date.now()) =>
+    t.status === 'running' && t.started_at ? Math.max(t.duration_ms, now - Date.parse(t.started_at)) : t.duration_ms
+
 export const fmt = {
     /** "1 run", "3 runs". */
     plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`,
@@ -867,8 +961,14 @@ export const fmt = {
         if (h >= 48) return `${Math.round(h / 24)}d`
         return h > 0 ? `${h}h ${m}m` : `${m}m`
     },
-    duration: (ms: number) =>
-        ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`,
+    /** "4s", "2m 5s", "1h 23m 10s": whole seconds first, so 1m 59.6s is "2m 0s" and never "1m 60s". */
+    duration: (ms: number) => {
+        const total = Math.max(0, Math.round(ms / 1000))
+        const h = Math.floor(total / 3600)
+        const m = Math.floor((total % 3600) / 60)
+        const s = total % 60
+        return h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`
+    },
     when: (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—'),
     ago: (iso: string | null) => {
         if (!iso) return '—'

@@ -7,6 +7,7 @@ import type { Schedules } from '../schedules/service.js'
 import type { Transcripts } from '../sessions/transcripts.js'
 import type { Store } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
+import type { Toolchains } from '../toolchains/service.js'
 import type { WebAuth } from './auth.js'
 
 /** Everything the HTTP routes need; assembled once in index.ts. */
@@ -21,6 +22,7 @@ export interface AppContext {
     presets: Presets
     schedules: Schedules
     auth: WebAuth
+    toolchains: Toolchains
 }
 
 import type { WebSession } from '../store/index.js'

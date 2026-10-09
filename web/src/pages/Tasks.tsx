@@ -7,8 +7,9 @@ import { Changes } from '../components/Changes'
 import { EventFeed } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
 import { Empty, ErrorBox, FilterSelect, PageHead, Stat, StatusBadge, StopButton, Tabs } from '../components/ui'
-import { api, fmt, type TaskStatus, taskTokens } from '../lib/api'
+import { api, fmt, taskDuration, type TaskStatus, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { useNow } from '../lib/useNow'
 import { usePaged } from '../lib/usePaged'
 
 const FILTERS = (['all', 'running', 'queued', 'done', 'failed', 'cancelled'] as const).map((value) => ({
@@ -36,6 +37,10 @@ export function TasksPage() {
             deps: [filter, project],
             pollMs: 5_000
         }
+    )
+    const now = useNow(
+        1000,
+        tasks.items.some((t) => t.status === 'running')
     )
 
     return (
@@ -112,7 +117,7 @@ export function TasksPage() {
                                         <td>{task.num_turns}</td>
                                         <td className='nowrap'>{fmt.tokens(taskTokens(task))}</td>
                                         <td className='dim nowrap'>{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
-                                        <td className='nowrap'>{fmt.duration(task.duration_ms)}</td>
+                                        <td className='nowrap'>{fmt.duration(taskDuration(task, now))}</td>
                                         <td className='dim nowrap'>{fmt.ago(task.created_at)}</td>
                                         <td>
                                             {(task.status === 'running' || task.status === 'queued') && (
@@ -151,6 +156,7 @@ export function TaskPage() {
     const t = task.data
     const active = t?.status === 'running' || t?.status === 'queued'
     useEffect(() => setLive(!t || active), [t, active])
+    const now = useNow(1000, t?.status === 'running')
 
     // A transient poll error must not replace the task on screen: it shows above it.
     if (task.error && !t)
@@ -197,7 +203,7 @@ export function TaskPage() {
                 <Stat
                     card
                     label='Duration'
-                    value={fmt.duration(t.duration_ms)}
+                    value={fmt.duration(taskDuration(t, now))}
                 />
                 <Stat
                     card

@@ -9,6 +9,7 @@ import {
     changesText,
     fmt,
     isImage,
+    taskDuration,
     taskTokens,
     UNAUTHORIZED
 } from './api'
@@ -190,11 +191,21 @@ describe('fmt', () => {
         expect(fmt.duration(4_400)).toBe('4s')
         expect(fmt.duration(59_000)).toBe('59s')
         expect(fmt.duration(125_000)).toBe('2m 5s')
+        expect(fmt.duration(4_990_000)).toBe('1h 23m 10s')
+        expect(fmt.duration(0)).toBe('0s')
     })
 
-    // Bug: seconds are rounded after the minutes are floored, so 1m 59.6s reads "1m 60s".
-    it.fails('duration never shows 60 seconds', () => {
+    it('duration never shows 60 seconds', () => {
         expect(fmt.duration(119_600)).toBe('2m 0s')
+        expect(fmt.duration(3_599_600)).toBe('1h 0m 0s')
+    })
+
+    it('taskDuration times a running task from its start', () => {
+        const now = Date.parse('2026-10-09T16:00:00Z')
+        const started_at = '2026-10-09T15:00:00Z'
+        expect(taskDuration({ status: 'running', started_at, duration_ms: 0 }, now)).toBe(3_600_000)
+        expect(taskDuration({ status: 'done', started_at, duration_ms: 1234 }, now)).toBe(1234)
+        expect(taskDuration({ status: 'queued', started_at: null, duration_ms: 0 }, now)).toBe(0)
     })
 
     it('when', () => {

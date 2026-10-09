@@ -38,6 +38,8 @@ export interface Config {
         allowedHosts: Set<string>
         /** A browser session lives this long since it was last used. */
         sessionDays: number
+        /** A session the owner has not used for this long ends; 0 = only `sessionDays`. */
+        sessionIdleHours: number
         /** Failed sign-ins from one address within `loginLockMinutes` that lock sign-in for as long. */
         loginMaxFailures: number
         loginLockMinutes: number
@@ -134,6 +136,8 @@ export function loadConfig(): Config {
                     .filter(Boolean)
             ),
             sessionDays: Math.max(1, number('WEB_SESSION_DAYS', 30)),
+            // A session the owner has not used for this long signs itself out; 0 = only the days above.
+            sessionIdleHours: Math.max(0, number('WEB_SESSION_IDLE_HOURS', 8)),
             loginMaxFailures: Math.max(1, Math.floor(number('WEB_LOGIN_MAX_FAILURES', 5))),
             loginLockMinutes: Math.max(1, number('WEB_LOGIN_LOCK_MIN', 10)),
             trustProxy: flag('WEB_TRUST_PROXY'),

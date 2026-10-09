@@ -81,8 +81,12 @@ export function SecuritySection({ telegram }: { telegram: boolean }) {
             <div className='kv'>
                 <span>Sessions</span>
                 <span>
-                    an HttpOnly, SameSite=Strict cookie; a browser stays signed in for{' '}
-                    {fmt.plural(policy.session_days, 'day')} since its last visit (WEB_SESSION_DAYS)
+                    an HttpOnly, SameSite=Strict cookie;{' '}
+                    {policy.idle_hours > 0
+                        ? `a browser asks for the password again after ${fmt.plural(policy.idle_hours, 'hour')} without you at the page (WEB_SESSION_IDLE_HOURS; a tab polling by itself does not count) and `
+                        : 'no idle timeout (WEB_SESSION_IDLE_HOURS=0); a browser '}
+                    stays signed in for at most {fmt.plural(policy.session_days, 'day')} since its last visit
+                    (WEB_SESSION_DAYS)
                 </span>
             </div>
             <div className='kv'>
