@@ -40,12 +40,17 @@ const COMPOSE_DIRS = ['', 'config', 'docker', 'deploy', 'install/docker', 'dev',
 const MAX_BYTES = 256 * 1024
 
 function readSmall(file: string): string | null {
+    // One descriptor for the check and the read: the file cannot be swapped between them.
+    let fd: number | null = null
     try {
-        const stat = fs.statSync(file)
+        fd = fs.openSync(file, 'r')
+        const stat = fs.fstatSync(fd)
         if (!stat.isFile() || stat.size > MAX_BYTES) return null
-        return fs.readFileSync(file, 'utf8')
+        return fs.readFileSync(fd, 'utf8')
     } catch {
         return null
+    } finally {
+        if (fd !== null) fs.closeSync(fd)
     }
 }
 
@@ -59,6 +64,60 @@ function json(text: string | null): Record<string, unknown> | null {
     } catch {
         return null
     }
+}
+
+/**
+ * The version a `mise.toml` tool line names: `"20"`, `["20", "18"]` (the first),
+ * `{ version = "3.12", virtualenv = ".venv" }`; null when the form is unknown.
+ */
+export function miseTomlVersion(value: string): string | null {
+    const v = value.trim()
+    const quoted = /^["']([^"']+)["']/.exec(v)
+    if (quoted) return quoted[1]
+    if (v.startsWith('[')) return /["']([^"']+)["']/.exec(v)?.[1] ?? null
+    if (v.startsWith('{')) return /version\s*=\s*["']([^"']+)["']/.exec(v)?.[1] ?? null
+    return null
+}
+
+/**
+ * Whether an installed version satisfies a range the way composer / npm read it:
+ * `^8.1` (same major, at least 8.1), `~8.1` (same major.minor), `>=8.1`, `>8.0`,
+ * `8.2.*` / `8.2` (prefix), `<9`, alternatives with `||`, conjunctions by space or
+ * comma. Unknown operators count as not satisfied. Compared on major.minor.patch.
+ */
+export function versionSatisfies(version: string, range: string): boolean {
+    const nums = (v: string) => (lowestVersion(v) ?? '0').split('.').map(Number)
+    const cmp = (a: number[], b: number[]) => {
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+            const d = (a[i] ?? 0) - (b[i] ?? 0)
+            if (d) return d
+        }
+        return 0
+    }
+    const have = nums(version)
+    const one = (term: string): boolean => {
+        const t = term.trim()
+        if (!t || t === '*') return true
+        const m = /^(\^|~|>=|<=|>|<|=)?\s*v?(\d+(?:\.\d+)*(?:\.\*)?)$/.exec(t)
+        if (!m) return false
+        const op = m[1] ?? ''
+        const want = nums(m[2])
+        const parts = m[2].replace(/\.\*$/, '').split('.').length
+        if (op === '^') return have[0] === want[0] && cmp(have, want) >= 0
+        if (op === '~') return have[0] === want[0] && (parts < 2 || have[1] === want[1]) && cmp(have, want) >= 0
+        if (op === '>=') return cmp(have, want) >= 0
+        if (op === '>') return cmp(have, want) > 0
+        if (op === '<=') return cmp(have, want) <= 0
+        if (op === '<') return cmp(have, want) < 0
+        // `8.2`, `8.2.*`, `=8.2.34`: the named part must match.
+        return want.slice(0, parts).every((n, i) => (have[i] ?? 0) === n)
+    }
+    return range.split('||').some((alt) =>
+        alt
+            .split(/\s*,\s*|\s+/)
+            .filter(Boolean)
+            .every(one)
+    )
 }
 
 /** `^8.2 || ^8.3` → "8.2": the lowest major.minor a range admits is the one to install. */
@@ -77,12 +136,14 @@ function toolsIn(dir: string, prefix: string): ToolNeed[] {
     }
 
     // mise.toml / .tool-versions name tools outright; they win over the ecosystem files.
-    const mise = readSmall(at('mise.toml')) ?? readSmall(at('.mise.toml'))
-    if (mise) {
+    for (const file of ['mise.toml', '.mise.toml']) {
+        const mise = readSmall(at(file))
+        if (!mise) continue
         for (const line of mise.split('\n')) {
-            const m = /^\s*(go|node|php|python|ruby|java|bun|deno)\s*=\s*["']?([^"'\s]+)/.exec(line)
-            if (m) push(m[1] as ToolName, m[2], rel('mise.toml'))
+            const m = /^\s*(go|node|php|python|ruby|java|bun|deno)\s*=\s*(.+)$/.exec(line)
+            if (m) push(m[1] as ToolName, miseTomlVersion(m[2]), rel(file))
         }
+        break
     }
     const toolVersions = readSmall(at('.tool-versions'))
     if (toolVersions) {

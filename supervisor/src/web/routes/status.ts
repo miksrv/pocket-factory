@@ -78,7 +78,10 @@ export function statusRoutes(): Hono<Env> {
                       git: fs.existsSync(path.join(config.paths.workspacesRoot, entry.name, '.git'))
                   }))
             : []
-        const [[claude, gh, git], toolchainHealth] = await Promise.all([toolVersions(), toolchains.health()])
+        const [[claude, gh, git], toolchainHealth] = await Promise.all([
+            toolVersions(),
+            toolchains.health().catch(() => null)
+        ])
         const mcpServers = tasks.mcpRegistry()
         const mcp = {
             total: mcpServers.length,

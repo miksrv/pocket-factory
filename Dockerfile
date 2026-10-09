@@ -110,6 +110,9 @@ ENV NODE_ENV=production \
     MISE_STATE_DIR=/data/tools/state \
     MISE_GLOBAL_CONFIG_FILE=/data/tools/config.toml \
     PATH=/data/tools/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Shims first: an agent's `node`, `npm`, `yarn` follow the checkout's own version file. The
+# Claude Code CLI is a native binary (bin/claude.exe, verified 2026-10-09), so a `.nvmrc` in
+# the project it runs in does not touch it; the supervisor starts by absolute path.
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/supervisor/dist ./supervisor/dist

@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { detectNeeds, lowestVersion, miseSpec } from './detect.js'
+import { detectNeeds, lowestVersion, miseSpec, miseTomlVersion, versionSatisfies } from './detect.js'
 
 describe('detectNeeds', () => {
     let root: string
@@ -58,6 +58,18 @@ describe('detectNeeds', () => {
         ])
     })
 
+    it('reads the table and array forms of mise.toml and names the file it read', () => {
+        write(
+            '.mise.toml',
+            '[tools]\npython = { version = "3.12", virtualenv = ".venv" }\nnode = ["20", "18"]\ngo = 1.25\n'
+        )
+        expect(detectNeeds(root).tools).toEqual([
+            { tool: 'python', version: '3.12', source: '.mise.toml' },
+            { tool: 'node', version: '20', source: '.mise.toml' },
+            { tool: 'go', version: null, source: '.mise.toml' }
+        ])
+    })
+
     it('is empty for a missing or bare directory, and tolerates a broken compose file', () => {
         expect(detectNeeds(path.join(root, 'nope'))).toEqual({ tools: [], services: [] })
         write('compose.yaml', 'services: [not: a: map\n')
@@ -71,6 +83,26 @@ describe('versions', () => {
         expect(lowestVersion('>=20 <23')).toBe('20')
         expect(lowestVersion('~3.11.4')).toBe('3.11.4')
         expect(lowestVersion('lts')).toBeNull()
+    })
+    it('miseTomlVersion reads the quoted, array and table forms', () => {
+        expect(miseTomlVersion('"22"')).toBe('22')
+        expect(miseTomlVersion("['20', '18']")).toBe('20')
+        expect(miseTomlVersion('{ version = "3.12", virtualenv = ".venv" }')).toBe('3.12')
+        expect(miseTomlVersion('{ virtualenv = ".venv" }')).toBeNull()
+        expect(miseTomlVersion('1.25')).toBeNull()
+    })
+    it('versionSatisfies reads composer / npm ranges against major.minor.patch', () => {
+        expect(versionSatisfies('8.2.34', '^8.1')).toBe(true)
+        expect(versionSatisfies('8.2.34', '>=8.1')).toBe(true)
+        expect(versionSatisfies('8.2.34', '^8.3')).toBe(false)
+        expect(versionSatisfies('8.2.34', '~8.1')).toBe(false)
+        expect(versionSatisfies('8.2.34', '~8.2.0')).toBe(true)
+        expect(versionSatisfies('8.2.34', '8.2.*')).toBe(true)
+        expect(versionSatisfies('8.2.34', '8.1 || 8.2')).toBe(true)
+        expect(versionSatisfies('8.2.34', '>=8.1 <8.2')).toBe(false)
+        expect(versionSatisfies('8.2.34', '>=8.1, <9')).toBe(true)
+        expect(versionSatisfies('8.2.34', '*')).toBe(true)
+        expect(versionSatisfies('8.2.34', 'latest')).toBe(false)
     })
     it('miseSpec names tool@version, or the tool alone', () => {
         expect(miseSpec({ tool: 'php', version: '^8.2' })).toBe('php@8.2')

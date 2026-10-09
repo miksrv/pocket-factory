@@ -177,11 +177,11 @@ export function OverviewPage() {
                         />
                         <Check
                             ok={Boolean(
-                                d?.toolchains.mise && (!d.toolchains.docker.enabled || d.toolchains.docker.reachable)
+                                d?.toolchains?.mise && (!d.toolchains.docker.enabled || d.toolchains.docker.reachable)
                             )}
                             label='Toolchains'
                             detail={toolchainsDetail(d?.toolchains)}
-                            warn={Boolean(d?.toolchains.mise)}
+                            warn={Boolean(d?.toolchains?.mise)}
                         />
                         {/* Red: a server that failed to start. Unauthorized connectors are the normal state of the ones not in use. */}
                         <Check
@@ -218,11 +218,15 @@ export function OverviewPage() {
     )
 }
 
+/** The number of <Check> rows in the Health card; the MCP card shows as many servers. */
+const HEALTH_ROWS = 9
+
 /** The servers the agents can use right now: those the CLI last reported as connected. The rest live in Settings → MCP. */
 function McpConnected({ servers }: { servers: McpEntry[] | undefined }) {
     const connected = (servers ?? []).filter((s) => s.status === 'connected')
     const rest = (servers?.length ?? 0) - connected.length
-    const shown = connected.slice(0, 7)
+    // As many rows as the Health card next to it has checks, so the two cards end level.
+    const shown = connected.slice(0, HEALTH_ROWS)
     const more = connected.length - shown.length
     return (
         <div className='card pad0'>
@@ -310,6 +314,7 @@ function githubDetail(github: Status['github'] | undefined): string {
 
 /** "mise · 4 versions, 1.2 GB · PHP 8.2.34 · docker on, 2 running" — or what is missing. */
 function toolchainsDetail(t: Status['toolchains'] | undefined): string {
+    if (t === null) return 'probe failed — see the supervisor log'
     if (!t) return '…'
     const parts: string[] = []
     parts.push(

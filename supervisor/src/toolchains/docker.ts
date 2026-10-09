@@ -124,7 +124,8 @@ export class DockerSidecar {
         }
         if (!this.enabled) return off
         try {
-            const version = (await this.docker(['version', '--format', '{{.Server.Version}}'], 10_000)).trim()
+            // A sidecar that is down must not hold the UI: a short timeout, and the callers cache the answer.
+            const version = (await this.docker(['version', '--format', '{{.Server.Version}}'], 3_000)).trim()
             const [containers, df] = await Promise.all([
                 this.containers(),
                 this.docker(['system', 'df', '--format', '{{json .}}'])

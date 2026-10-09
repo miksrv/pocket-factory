@@ -489,8 +489,9 @@ p {
     min-width: 0;
     overflow: auto;
 }
+/* The same room under the last block as the full-height list pages leave (.page.fill below). */
 .page {
-    padding: 26px 32px 56px;
+    padding: 26px 32px 20px;
 }
 .page-head {
     display: flex;
@@ -1597,6 +1598,21 @@ label.row > input[type='checkbox'] {
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+/* A line of controls: an input with the buttons that act on it. The input takes the width,
+   every control the same height (the row stretches them; the input's own padding sets it). */
+.controls {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+.controls > input,
+.controls > select {
+    flex: 1;
+    min-width: 0;
+}
+.controls > .btn {
+    flex: none;
 }
 /* Settings → Toolchains: the installed versions and the sidecar's containers, rows like the MCP list. */
 .tc-list {

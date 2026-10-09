@@ -148,7 +148,11 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         agentEnv: () => tasks.agentEnv()
     })
     const auth = new WebAuth(store, config.web)
-    const toolchains = new Toolchains({ projectPath, projects: () => catalog.list('projects').map((e) => e.name) })
+    const toolchains = new Toolchains({
+        root: config.paths.workspacesRoot,
+        projectPath,
+        projects: () => catalog.list('projects').map((e) => e.name)
+    })
     tasks.docker = toolchains.docker
     const ctx: AppContext = {
         config,

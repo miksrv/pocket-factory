@@ -268,8 +268,8 @@ export interface Status {
     paths: { data: string; workspaces: string; config: string }
     max_concurrent_sessions: number
     workspaces: Array<{ name: string; git: boolean }>
-    /** What the agents build with (Settings → Toolchains); `docker` is the dind sidecar. */
-    toolchains: ToolchainsHealth
+    /** What the agents build with (Settings → Toolchains); `docker` is the dind sidecar. null: the probe failed. */
+    toolchains: ToolchainsHealth | null
     /** The MCP registry in numbers: Overview → Health. */
     mcp: { total: number; connected: number; needs_auth: string[]; failed: string[] }
 }
@@ -290,6 +290,8 @@ export interface ToolVersion {
     active: boolean
     size_kb: number | null
     used_by: string[]
+    /** The version file that asked for it, relative to the workspaces root. */
+    asked_by: string | null
 }
 
 export interface DockerContainer {
@@ -301,10 +303,18 @@ export interface DockerContainer {
     ports: string
     created: string
     compose: { working_dir: string | null; project: string | null; service: string | null }
+    /** The factory project whose checkout the compose file ran in. */
+    project: string | null
 }
 
 export interface ToolchainsOverview {
-    mise: { version: string | null; data_dir: string; size_kb: number | null; tools: ToolVersion[] }
+    mise: {
+        version: string | null
+        data_dir: string
+        size_kb: number | null
+        tools: ToolVersion[]
+        error: string | null
+    }
     image: { php: string | null; composer: string | null }
     docker: {
         enabled: boolean

@@ -924,18 +924,22 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. Prefilters run with the same one. */
     /**
-     * Stop the containers a task started on the factory's Docker, unless they belong
-     * (by their compose directory) to the project of another task still running.
+     * Stop the containers a task started on the factory's Docker, unless another task
+     * still running may own them: one whose project's checkout (or, for a project-less
+     * task, the whole workspaces root) holds the container's compose directory, and any
+     * container without compose labels while another task runs at all. Leaving a
+     * container up costs memory; stopping another task's database costs its tests.
      */
     private async stopContainers(task: Task, before: Set<string>): Promise<void> {
         if (!this.docker.enabled) return
         const others = this.runningTaskIds()
             .filter((id) => id !== task.id)
             .map((id) => this.store.getTask(id)?.project ?? null)
-            .map((project) => (project ? this.workspace.projectPath(project) : null))
+            .map((project) => (project ? this.workspace.projectPath(project) : this.config.paths.workspacesRoot))
             .filter((dir): dir is string => Boolean(dir))
+        const under = (file: string, dir: string) => file === dir || file.startsWith(dir.replace(/\/+$/, '') + '/')
         const keep = (c: DockerContainer) =>
-            Boolean(c.compose.working_dir && others.some((dir) => c.compose.working_dir!.startsWith(dir)))
+            others.length > 0 && (!c.compose.working_dir || others.some((dir) => under(c.compose.working_dir!, dir)))
         const stopped = await this.docker.stopStartedSince(before, keep)
         if (!stopped.length) return
         log.info(`${task.id}: stopped ${stopped.join(', ')} (started during the task)`)
@@ -1102,11 +1106,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (start) this.store.updateTask(task.id, { git: { start_head: start.head, start_branch: start.branch } })
         }
         /** Every way the run ends: what it changed in the checkout is measured first, so the report can say it. */
-        // Services the agent starts on the factory's Docker (a project's db for its tests) end with the task.
-        const containersBefore = await this.docker.snapshot()
+        // Services the agent starts on the factory's Docker (a project's db for its tests) end with the
+        // task. Not awaited here: nothing may yield before the CLI is registered in `running`, or the
+        // worker's concurrency check overshoots (the git snapshot is synchronous for the same reason).
+        const containersBefore = this.docker.snapshot()
         const end = async (patch: Partial<Task>) => {
             await this.recordChanges(task.id, cwd)
-            await this.stopContainers(task, containersBefore)
+            await this.stopContainers(task, await containersBefore)
             this.finish(task.id, patch)
         }
 

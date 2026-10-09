@@ -9,7 +9,7 @@ import { ToolchainsSection } from '../components/Toolchains'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
 import { type McpEntry, type McpOverview, type McpServerConfig } from '../lib/api'
 import { api } from '../lib/api'
-import { setTheme, THEME_CHOICES, themeChoice } from '../lib/theme'
+import { onThemeChange, setTheme, THEME_CHOICES, themeChoice } from '../lib/theme'
 import { setUnsaved } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 
@@ -468,6 +468,8 @@ function Section({ id, title, children }: { id: string; title: string; children:
 /** Light / dark / system for this browser; the sidebar's sun / moon flips between the first two. */
 function ThemeRow() {
     const [choice, setChoice] = useState(themeChoice)
+    // The sidebar's sun / moon changes the choice too: follow it.
+    useEffect(() => onThemeChange(() => setChoice(themeChoice())), [])
     const pick = (value: (typeof THEME_CHOICES)[number]['value']) => {
         setTheme(value)
         setChoice(value)

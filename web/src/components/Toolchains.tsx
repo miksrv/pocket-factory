@@ -23,14 +23,6 @@ import { Button, useToast } from './ui'
 
 const kb = (n: number | null) => (n === null ? '?' : fmt.bytes(n * 1024))
 
-/** `/data/workspaces/geometki` → `geometki`, the project the container belongs to. */
-function composeProject(c: DockerContainer): string | null {
-    const dir = c.compose.working_dir
-    if (!dir) return c.compose.project
-    const rel = dir.replace(/^\/data\/workspaces\//, '')
-    return rel === dir ? c.compose.project : rel.split('/')[0]
-}
-
 export function ToolchainsSection({
     data,
     error,
@@ -114,9 +106,14 @@ export function ToolchainsSection({
                         <>
                             mise {data.mise.version.split(' ')[0]} · {fmt.plural(data.mise.tools.length, 'version')} in{' '}
                             <code>{data.mise.data_dir}</code> · {kb(data.mise.size_kb)}
+                            {data.mise.error && <span className='error'> · {data.mise.error}</span>}
                         </>
                     ) : (
-                        <span className='error'>mise is not on PATH here — the agents cannot install runtimes</span>
+                        <span className='error'>
+                            {data.mise.data_dir
+                                ? 'mise is not on PATH here — the agents cannot install runtimes'
+                                : 'no factory mise outside the container (yarn dev): the agents install nothing here'}
+                        </span>
                     )}
                 </span>
             </div>
@@ -147,9 +144,9 @@ export function ToolchainsSection({
                                 <span className='dim small'>
                                     · {kb(t.size_kb)}
                                     {t.used_by.length
-                                        ? ` · ${t.used_by.map((p) => p).join(', ')}`
-                                        : t.source
-                                          ? ` · asked by ${t.source.replace(/^\/data\/workspaces\//, '')}`
+                                        ? ` · ${t.used_by.join(', ')}`
+                                        : t.asked_by
+                                          ? ` · asked by ${t.asked_by}`
                                           : ' · no project resolves to it'}
                                 </span>
                             </span>
@@ -166,7 +163,7 @@ export function ToolchainsSection({
                 </div>
             )}
             {data.mise.version && (
-                <div className='row wrap'>
+                <div className='controls'>
                     <input
                         className='mono'
                         placeholder='go@1.25.1, node@20, python@3.12…'
@@ -176,10 +173,8 @@ export function ToolchainsSection({
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') install()
                         }}
-                        style={{ width: 240 }}
                     />
                     <Button
-                        size='sm'
                         disabled={busy !== null || !spec.trim()}
                         onClick={install}
                         title='mise install; a Go or Python download takes a minute or two'
@@ -187,7 +182,6 @@ export function ToolchainsSection({
                         {busy?.startsWith('install') ? 'Installing…' : 'Install'}
                     </Button>
                     <Button
-                        size='sm'
                         variant='ghost'
                         disabled={busy !== null}
                         onClick={prune}
@@ -232,7 +226,7 @@ export function ToolchainsSection({
                                 <strong>{c.name}</strong>{' '}
                                 <span className='dim small'>
                                     · {c.image} · {c.status}
-                                    {composeProject(c) ? ` · ${composeProject(c)}` : ''}
+                                    {(c.project ?? c.compose.project) ? ` · ${c.project ?? c.compose.project}` : ''}
                                     {c.ports ? ` · ${c.ports}` : ''}
                                 </span>
                             </span>

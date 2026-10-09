@@ -123,6 +123,7 @@ async function main(): Promise<void> {
     const auth = new WebAuth(store, config.web)
     // What the agents build with: mise runtimes on data/tools, the image's PHP, the dind sidecar.
     const toolchains = new Toolchains({
+        root: config.paths.workspacesRoot,
         projectPath: workspace.projectPath,
         projects: () => catalog.list('projects').map((entry) => entry.name)
     })

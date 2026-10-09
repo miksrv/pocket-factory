@@ -20,7 +20,8 @@ const OVERVIEW: ToolchainsOverview = {
                 source: null,
                 active: false,
                 size_kb: 250_000,
-                used_by: ['user-management', 'tenant-management']
+                used_by: ['user-management', 'tenant-management'],
+                asked_by: null
             },
             {
                 tool: 'node',
@@ -29,9 +30,11 @@ const OVERVIEW: ToolchainsOverview = {
                 source: '/data/workspaces/geometki/client/.nvmrc',
                 active: false,
                 size_kb: 60_000,
-                used_by: []
+                used_by: [],
+                asked_by: 'geometki/client/.nvmrc'
             }
-        ]
+        ],
+        error: null
     },
     image: { php: '8.2.34', composer: '2.10.3 2026-08-27' },
     docker: {
@@ -49,7 +52,8 @@ const OVERVIEW: ToolchainsOverview = {
                 status: 'Up 3 minutes',
                 ports: '3306/tcp',
                 created: '',
-                compose: { working_dir: '/data/workspaces/geometki', project: 'geometki', service: 'db' }
+                compose: { working_dir: '/data/workspaces/geometki', project: 'geometki', service: 'db' },
+                project: 'geometki'
             }
         ],
         disk: [{ type: 'Images', total: 3, active: 1, size: '1.2GB', reclaimable: '800MB (66%)' }]
@@ -95,6 +99,7 @@ describe('ToolchainsSection', () => {
         expect(screen.getByText('go 1.25.1')).toBeInTheDocument()
         expect(screen.getByText(/244\.1 MB · user-management, tenant-management/)).toBeInTheDocument()
         expect(screen.getByText(/asked by geometki\/client\/\.nvmrc/)).toBeInTheDocument()
+        expect(screen.getByText(/mysql:8 · Up 3 minutes · geometki/)).toBeInTheDocument()
         expect(screen.getByText(/PHP 8\.2\.34/)).toBeInTheDocument()
         expect(screen.getByText(/dind 29\.9\.0 at/)).toBeInTheDocument()
         expect(screen.getByText('geometki-db-1')).toBeInTheDocument()

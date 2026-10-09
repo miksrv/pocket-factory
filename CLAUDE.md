@@ -141,7 +141,11 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     the dind sidecar through `DOCKER_HOST` (`ps`, `system df`, stop, prune, and `snapshot` +
     `stopStartedSince` so `TaskService` stops what a task started unless another running task's
     project owns it, by the compose `working_dir` label), `service.ts` `Toolchains` caches the
-    overview a minute. Routes `web/routes/toolchains.ts` (`GET /api/toolchains`,
+    overview a minute and never rejects; `health()` for the status heartbeat answers from the cache
+    at once and refreshes in the background (a sidecar that is down must not stall `/api/status`);
+    the factory's mise is the one `MISE_DATA_DIR` names, so under `yarn dev` a developer's own mise on
+    PATH is never listed or pruned (review 2026-10-09). The Claude CLI is a native binary, so the
+    shims ahead on PATH never change the node it runs on. Routes `web/routes/toolchains.ts` (`GET /api/toolchains`,
     `/projects/:slug`, `POST /install`, `DELETE /tools/:tool/:version`, `POST /prune`,
     `/docker/stop`, `/docker/prune`); `/api/status` carries `toolchains` and `mcp` summaries for
     the Overview Health lines. Web: `components/Toolchains.tsx` (Settings → Toolchains, the
