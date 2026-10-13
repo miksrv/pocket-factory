@@ -9,6 +9,16 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.2.1] - 2026-10-13
+
+### Fixed
+
+- **A scheduled run skipped for the subscription limit is told in Telegram.** When the 5-hour or
+  the weekly window is past `SCHEDULES_SOFT_STOP`, every skipped cron firing now sends the owner
+  a message with the window, its share and when scheduled runs resume (plus `/run <name>` to
+  run it anyway), instead of leaving the chat silent for days. A schedule with `notify: none`
+  stays quiet.
+
 ## [1.2.0] - 2026-10-09
 
 ### Added

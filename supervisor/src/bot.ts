@@ -8,7 +8,8 @@ import { type Attachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './files/
 import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
 import type { Schedules } from './schedules/service.js'
-import type { Ask, Conversation, RateLimitSnapshot, Store, Task, TaskEvent } from './store/index.js'
+import type { ScheduleSpec } from './schedules/spec.js'
+import type { Ask, Conversation, RateLimitSnapshot, ScheduleRun, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import { askQuestions, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
@@ -110,6 +111,48 @@ function resetsIn(iso: string): string {
     const m = Math.round((ms % 3_600_000) / 60_000)
     if (h >= 48) return `${Math.round(h / 24)}d`
     return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+/** `Tue 17:00` in the owner's zone. */
+function clockAt(iso: string, timeZone: string): string {
+    return new Date(iso).toLocaleString('en-GB', { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+/**
+ * What the owner hears about a schedule's run row, or null. Errors, missed
+ * minutes and a firing stuck behind the previous run are told once per
+ * distinct note (`lastNotice` remembers it per schedule). A firing skipped
+ * for the soft-stop is told every time, unless the schedule says
+ * `notify: none`: it would have sent a report, so silence would read as a
+ * dead factory.
+ */
+export function scheduleNotice(
+    run: ScheduleRun,
+    spec: ScheduleSpec | null,
+    lastNotice: Map<string, string>,
+    timeZone: string
+): string | null {
+    const note = run.note ?? ''
+    if (run.status === 'skipped' && note.startsWith('soft stop')) {
+        if (spec?.notify === 'none') return null
+        const reason = note.replace(/^soft stop: /, '').replace(/, resets \S+/, '')
+        const resets = /resets (\S+)/.exec(note)?.[1]
+        const until =
+            resets && !Number.isNaN(Date.parse(resets)) ? `${clockAt(resets, timeZone)} (in ${resetsIn(resets)})` : null
+        return `⏸ Schedule **${run.schedule}** skipped this run: subscription ${reason}.${until ? ` Scheduled runs resume after the reset, ${until}.` : ''} /run ${run.schedule} runs it anyway.`
+    }
+    const stuck = run.status === 'skipped' && note.startsWith('the previous run is still')
+    if (run.status !== 'error' && run.status !== 'missed' && !stuck) {
+        if (run.status !== 'skipped') lastNotice.delete(run.schedule)
+        return null
+    }
+    if (lastNotice.get(run.schedule) === note) return null
+    lastNotice.set(run.schedule, note)
+    return run.status === 'missed'
+        ? `⏭ Schedule **${run.schedule}** ${run.note ?? 'missed a firing'}. /run ${run.schedule} starts it now.`
+        : stuck
+          ? `⏸ Schedule **${run.schedule}** skipped a firing: ${run.note}. It waits for your answer or for the task to end.`
+          : `⚠️ Schedule **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`
 }
 
 /** Time passed since `iso`: `under a minute`, `5 min`, `3 h`, `2 d`. */
@@ -754,13 +797,7 @@ export function createBot(
         if (task.source !== 'telegram' && task.source !== 'cron') return
         const chatId = chatFor(task)
         if (!chatId) return
-        const at = new Date(task.not_before)
-        const clock = at.toLocaleString('en-GB', {
-            timeZone: config.timezone,
-            weekday: 'short',
-            hour: '2-digit',
-            minute: '2-digit'
-        })
+        const clock = clockAt(task.not_before, config.timezone)
         const head = task.schedule ? `⏱ ${task.schedule}: ` : ''
         void bot.api
             .sendMessage(
@@ -822,25 +859,13 @@ export function createBot(
 
     // A prefilter that breaks (credentials expired, a host down) would
     // otherwise fail silently every hour: say so once per distinct error. A
-    // minute the factory slept through, and a firing skipped because the
-    // previous run still waits, are told the same way (the note names the
-    // minute or the task, so each is told once).
+    // minute the factory slept through, a firing skipped because the previous
+    // run still waits, and a firing skipped for the soft-stop are told too.
     const lastNotice = new Map<string, string>()
-    schedules?.on('run', (run) => {
+    schedules?.on('run', (run, spec) => {
         if (!ownerChat) return
-        const stuck = run.status === 'skipped' && (run.note ?? '').startsWith('the previous run is still')
-        if (run.status !== 'error' && run.status !== 'missed' && !stuck) {
-            if (run.status !== 'skipped') lastNotice.delete(run.schedule)
-            return
-        }
-        if (lastNotice.get(run.schedule) === run.note) return
-        lastNotice.set(run.schedule, run.note ?? '')
-        const text =
-            run.status === 'missed'
-                ? `⏭ Schedule **${run.schedule}** ${run.note ?? 'missed a firing'}. /run ${run.schedule} starts it now.`
-                : stuck
-                  ? `⏸ Schedule **${run.schedule}** skipped a firing: ${run.note}. It waits for your answer or for the task to end.`
-                  : `⚠️ Schedule **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`
+        const text = scheduleNotice(run, spec, lastNotice, config.timezone)
+        if (!text) return
         void sendMarkdown(bot, ownerChat, text)
             .then((ids) => {
                 const conversation = store.findConversation('web', `schedule:${run.schedule}`)

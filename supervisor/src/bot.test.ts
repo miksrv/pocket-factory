@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunk } from './bot.js'
+import { chunk, scheduleNotice } from './bot.js'
+import type { ScheduleSpec } from './schedules/spec.js'
+import type { ScheduleRun } from './store/index.js'
 
 const LIMIT = 4000
 
@@ -65,5 +67,45 @@ describe('chunk', () => {
         const parts = chunk(text)
         expect(parts.length).toBeGreaterThan(1)
         expect(parts[1].startsWith('```')).toBe(false)
+    })
+})
+
+describe('scheduleNotice', () => {
+    const resets = new Date(Date.now() + 26 * 3_600_000).toISOString()
+    const softStop = `soft stop: weekly window at 90% (limit 85%), resets ${resets}`
+    const run = (status: ScheduleRun['status'], note: string | null): ScheduleRun => ({
+        id: 1,
+        schedule: 'inbox',
+        fired_at: new Date().toISOString(),
+        trigger: 'cron',
+        status,
+        note,
+        items: 0,
+        task_id: null,
+        duration_ms: 0,
+        task_status: null
+    })
+    const spec = (notify?: string) => ({ notify }) as unknown as ScheduleSpec
+
+    it('tells every firing skipped for the soft-stop, with the reason and the reset', () => {
+        const seen = new Map<string, string>()
+        const first = scheduleNotice(run('skipped', softStop), spec(), seen, 'UTC')
+        expect(first).toContain('**inbox** skipped this run: subscription weekly window at 90% (limit 85%)')
+        expect(first).toContain('resume after the reset')
+        expect(first).toContain('/run inbox')
+        expect(first).not.toContain(resets)
+        expect(scheduleNotice(run('skipped', softStop), spec(), seen, 'UTC')).toBe(first)
+    })
+
+    it('keeps quiet about the soft-stop for a schedule with notify: none', () => {
+        expect(scheduleNotice(run('skipped', softStop), spec('none'), new Map(), 'UTC')).toBeNull()
+    })
+
+    it('tells an error once per distinct note and nothing about a queued run', () => {
+        const seen = new Map<string, string>()
+        expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
+        expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toBeNull()
+        expect(scheduleNotice(run('queued', null), spec(), seen, 'UTC')).toBeNull()
+        expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
     })
 })
