@@ -805,12 +805,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hono/node-server@npm:^2.1.1":
-  version: 2.1.1
-  resolution: "@hono/node-server@npm:2.1.1"
+"@hono/node-server@npm:^2.1.4":
+  version: 2.1.4
+  resolution: "@hono/node-server@npm:2.1.4"
   peerDependencies:
-    hono: ^4
-  checksum: 10c0/7ef810ca647c56d8d9386fd81609e18443b3a5634aa5ecabdf357e7ca724613c535e863c15ded9b7ae89b935a073040fb11e6d59041f3b1c3e153d8ecb699880
+    hono: ^4 || ^5.0.0-0
+  checksum: 10c0/2a09255a816272b95fd5720ada632faf88ec64a33ceb0a1f3e1478680e4fcc1add65ba8b2ab6008a7b9b852856badbb0848be09c60b76f3ac486c122b5224134
   languageName: node
   linkType: hard
 
@@ -949,10 +949,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@pocket-factory/supervisor@workspace:supervisor"
   dependencies:
-    "@hono/node-server": "npm:^2.1.1"
+    "@hono/node-server": "npm:^2.1.4"
     "@types/node": "npm:^22.15.0"
     grammy: "npm:^1.36.0"
-    hono: "npm:^4.13.9"
+    hono: "npm:^4.13.13"
     tsx: "npm:^4.19.0"
     typescript: "npm:^5.9.0"
     yaml: "npm:^2.9.1"
@@ -974,7 +974,7 @@ __metadata:
     dompurify: "npm:^3.2.0"
     highlight.js: "npm:^11.12.0"
     jsdom: "npm:^30.1.2"
-    lucide-react: "npm:^1.48.0"
+    lucide-react: "npm:^1.54.0"
     marked: "npm:^15.0.0"
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
@@ -2485,10 +2485,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"hono@npm:^4.13.9":
-  version: 4.13.9
-  resolution: "hono@npm:4.13.9"
-  checksum: 10c0/aa3b03f536082a7eba57b254a4d597ae0f7a033dcb8b7a2be30f73db37fcf72320079a8ae1452845b5ff4bb82b794dae3c983bd660506ae9852da1bcb619ca7a
+"hono@npm:^4.13.13":
+  version: 4.13.13
+  resolution: "hono@npm:4.13.13"
+  checksum: 10c0/c8524e685a59b4f23a9bea15385eeac5622218949db251cb871b20fd9ef673b751b44ccdee6c22b3df56e5ed4c1b1cebad17b518bdc1823039da39b53ef9c1cf
   languageName: node
   linkType: hard
 
@@ -2703,12 +2703,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^1.48.0":
-  version: 1.48.0
-  resolution: "lucide-react@npm:1.48.0"
+"lucide-react@npm:^1.54.0":
+  version: 1.54.0
+  resolution: "lucide-react@npm:1.54.0"
   peerDependencies:
+    "@types/react": "*"
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-  checksum: 10c0/62c6703cdd6ff0a85f02414242f480d93a2ebf55ef10e42fc46eb9ef0dcb3c13925a199847e31245dd90d837a791b8670f16a817d0fe0d04c725aeae64d70574
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/28c80675dfd7daf76cc50fd737245c108b1d65c56c065babc3fd23d8f626cbec76aff9115a5f83e5124f80c7342b2042c64160aea6e5cb63021906b643bb2e99
   languageName: node
   linkType: hard
 
