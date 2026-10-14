@@ -48,6 +48,10 @@ export interface Conversation {
     title: string | null
     session_id: string | null
     project: string | null
+    /** The provider the owner picked for this conversation (Chat selector, Telegram `/model provider:model`); null = the subscription. */
+    provider: string | null
+    /** The model on that provider (or a CLI alias for the subscription); null = the provider's default / the factory's alias. */
+    model: string | null
     created_at: string
     updated_at: string
     /** Set when the owner removed it from the Chat list; tasks and events remain. */
@@ -91,6 +95,10 @@ export interface Task {
     schedule: string | null
     /** CLI model alias the task was queued with (a schedule's `model:`); null = the factory's current model at start. */
     model: string | null
+    /** The provider the task runs on (data/config/providers.yaml); null = the subscription. */
+    provider: string | null
+    /** The agent file the task runs *as* in light mode (its body is the system prompt); null = the orchestrator. */
+    agent: string | null
     /** Files the owner sent with the message (data/inbox); their paths reach the agent after the prompt. */
     attachments: Attachment[] | null
     /** A queued task does not start before this time: it hit the subscription limit and waits for the window to reset. */
@@ -382,6 +390,8 @@ export class Store {
             title,
             session_id: null,
             project,
+            provider: null,
+            model: null,
             created_at: ts,
             updated_at: ts,
             deleted_at: null,
@@ -404,7 +414,10 @@ export class Store {
         this.db.prepare('UPDATE conversations SET read_at = ? WHERE id = ?').run(now(), id)
     }
 
-    updateConversation(id: string, patch: Partial<Pick<Conversation, 'title' | 'session_id' | 'project'>>): void {
+    updateConversation(
+        id: string,
+        patch: Partial<Pick<Conversation, 'title' | 'session_id' | 'project' | 'provider' | 'model'>>
+    ): void {
         const sets: string[] = ['updated_at = ?']
         const values: unknown[] = [now()]
         for (const [key, value] of Object.entries(patch)) {
@@ -444,7 +457,9 @@ export class Store {
         project: string | null = null,
         schedule: string | null = null,
         model: string | null = null,
-        attachments: Attachment[] | null = null
+        attachments: Attachment[] | null = null,
+        provider: string | null = null,
+        agent: string | null = null
     ): Task {
         const task: Task = {
             id: randomUUID(),
@@ -468,6 +483,8 @@ export class Store {
             ask: null,
             schedule,
             model,
+            provider,
+            agent,
             attachments: attachments?.length ? attachments : null,
             not_before: null,
             limit_waits: 0,
@@ -478,8 +495,8 @@ export class Store {
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, attachments, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, provider, agent, attachments, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
                 task.id,
@@ -489,6 +506,8 @@ export class Store {
                 project,
                 schedule,
                 model,
+                provider,
+                agent,
                 task.attachments ? JSON.stringify(task.attachments) : null,
                 task.created_at
             )

@@ -207,7 +207,17 @@ const MIGRATIONS: string[] = [
     // v14: what a task changed in its project's checkout (JSON: start head and
     // branch, at the end the branch, base..head, file and line counts, the PR),
     // for the task page's Changes panel and the line under a Telegram report.
-    `ALTER TABLE tasks ADD COLUMN git TEXT`
+    `ALTER TABLE tasks ADD COLUMN git TEXT`,
+    // v15: model providers besides the subscription (data/config/providers.yaml).
+    // A task records the provider it ran on (null = the subscription) and the
+    // agent it ran as in light mode; a conversation keeps the provider and model
+    // the owner picked for it (the chat selector, Telegram `/model provider:model`).
+    `
+    ALTER TABLE tasks ADD COLUMN provider TEXT;
+    ALTER TABLE tasks ADD COLUMN agent TEXT;
+    ALTER TABLE conversations ADD COLUMN provider TEXT;
+    ALTER TABLE conversations ADD COLUMN model TEXT;
+    `
 ]
 
 export function openDatabase(file: string): DatabaseSync {
