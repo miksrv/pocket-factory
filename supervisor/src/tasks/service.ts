@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -16,6 +17,7 @@ import {
 } from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
+import { type Provider, type Providers } from '../files/providers.js'
 import {
     type ChangedFile,
     createPullRequest,
@@ -57,6 +59,8 @@ export interface Workspace {
     agentMcp: () => string[]
     /** Claude Code's directory slug of the cwd a session was recorded under, or null when the transcript is unknown. */
     sessionWorkspace: (sessionId: string) => string | null
+    /** An agent file's body (its system prompt) and `tools:` list, for a task that runs *as* that agent in light mode; null when there is no such file. */
+    agentFile: (name: string) => { body: string; tools: string[] | null } | null
 }
 
 /** Claude Code names a session's directory after its cwd with every non-alphanumeric character as "-". */
@@ -94,6 +98,22 @@ const RESET_MARGIN_MS = 60_000
 
 /** Uploads older than this are removed at start. */
 const INBOX_KEEP_DAYS = 30
+
+/** The built-in tools a light-mode task gets when its agent file names none. */
+const LIGHT_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']
+
+/** The light-mode system prompt when `data/claude/light-system.md` (seeded from templates/claude) is missing. */
+const LIGHT_SYSTEM_PROMPT = `You are an autonomous agent working alone on a task nobody is watching. Every turn is a tool call: a reply without one ends the task. Save results to files with Write (the path the task names), never into the reply, and finish with a reply of three lines at most once the file is saved. State only what you read; never invent facts.`
+
+/** The liveness of a provider as the gateway last saw it. */
+export interface ProviderHealth {
+    name: string
+    /** Requests the gateway forwarded since start. */
+    requests: number
+    ok: boolean | null
+    error: string | null
+    at: string | null
+}
 
 /** How often the worker looks for queued tasks whose wait for a window reset is over. */
 const WAKE_INTERVAL_MS = 30_000
@@ -275,6 +295,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** The factory's Docker daemon (the dind sidecar, when the compose profile is on): a task's containers are stopped at its end. */
     docker = new DockerSidecar()
     private readonly running = new Map<string, RunHandle>()
+    /** The provider each running task is on (null = the subscription), for the per-provider limit. */
+    private readonly runningOn = new Map<string, string | null>()
+    /** The bearer the CLI presents to the gateway (`ANTHROPIC_AUTH_TOKEN`); the gateway swaps it for the provider's real key. New every start. */
+    readonly gatewayToken = randomBytes(24).toString('hex')
+    /** Where the CLI reaches the gateway: the configured port from the start (a task re-queued at boot runs before the server listens), confirmed by `setGatewayPort`. */
+    private gatewayBase: string
+    private readonly health = new Map<string, ProviderHealth>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
     /** Tasks found `running` at startup and failed by the store (restart limit reached); announced once a listener can deliver. */
@@ -298,9 +325,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     constructor(
         private readonly store: Store,
         private readonly config: Config,
-        private readonly workspace: Workspace
+        private readonly workspace: Workspace,
+        private readonly providers: Providers
     ) {
         super()
+        this.gatewayBase = `http://127.0.0.1:${config.web.port}/gateway`
         this.inbox = new Inbox(path.join(config.paths.dataRoot, 'inbox'))
         try {
             this.inbox.prune(INBOX_KEEP_DAYS)
@@ -375,6 +404,61 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (conversation.project !== project)
             this.store.updateConversation(conversationId, { project, session_id: null })
         return this.store.getConversation(conversationId)!
+    }
+
+    /**
+     * Pick the provider and model the conversation's next tasks run on (null, null =
+     * the subscription on the factory's alias). A session cannot move between
+     * providers (another backend rejects Claude's thinking blocks), so a change of
+     * provider forgets the session id; a model change within one stays.
+     */
+    setConversationModel(conversationId: string, provider: string | null, model: string | null): Conversation {
+        const conversation = this.store.getConversation(conversationId)
+        if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
+        if (provider) {
+            const known = this.providers.get(provider)
+            if (!known) throw new Error(`Unknown provider "${provider}" (Settings → Providers)`)
+            model = model?.trim() || null
+        } else {
+            model = model?.trim() || null
+            if (model && !isModelAlias(model) && !model.startsWith('claude-'))
+                throw new Error(`Unknown model "${model}": one of ${MODEL_ALIASES.join(', ')} or a full claude-… id`)
+        }
+        if (this.activeTask(conversationId) || this.queuedTask(conversationId))
+            throw new Error('a task is running or queued in this conversation; wait for it to finish')
+        if (conversation.provider === provider && conversation.model === model) return conversation
+        this.store.updateConversation(conversationId, {
+            provider,
+            model,
+            ...(conversation.provider !== provider ? { session_id: null } : {})
+        })
+        return this.store.getConversation(conversationId)!
+    }
+
+    /** What the gateway and the status know about each provider: tasks running on it now and its last answer. */
+    providerStatus(): Array<Provider & { running: number; health: ProviderHealth | null }> {
+        return this.providers.all().map((p) => ({
+            ...p,
+            running: this.runningCount(p.name),
+            health: this.health.get(p.name) ?? null
+        }))
+    }
+
+    /** The gateway reports every forwarded request's outcome here. */
+    noteProvider(name: string, ok: boolean, error: string | null = null): void {
+        const current = this.health.get(name) ?? { name, requests: 0, ok: null, error: null, at: null }
+        this.health.set(name, { name, requests: current.requests + 1, ok, error, at: new Date().toISOString() })
+    }
+
+    /** Where the web server listens, so the CLI's `ANTHROPIC_BASE_URL` can point at the gateway on it. */
+    setGatewayPort(port: number): void {
+        this.gatewayBase = `http://127.0.0.1:${port}/gateway`
+    }
+
+    private runningCount(provider: string | null): number {
+        let n = 0
+        for (const on of this.runningOn.values()) if (on === provider) n++
+        return n
     }
 
     /**
@@ -652,7 +736,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         conversationId: string,
         source: TaskSource,
         prompt: string,
-        options: { schedule?: string; model?: string; attachments?: Attachment[] } = {}
+        options: {
+            schedule?: string
+            model?: string
+            /** The provider to run on; undefined = the conversation's choice, null = the subscription whatever the conversation says. */
+            provider?: string | null
+            /** The agent the task runs as in light mode (a schedule's `agent:` on such a provider). */
+            agent?: string
+            attachments?: Attachment[]
+        } = {}
     ): Task {
         const conversation = this.store.getConversation(conversationId)
         if (!conversation) throw new Error(`Unknown conversation ${conversationId}`)
@@ -669,14 +761,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
+        // A schedule names its provider; the owner's own message runs on what the conversation was set to.
+        const provider = options.provider === undefined ? conversation.provider : options.provider
+        const model = options.model ?? (provider === conversation.provider ? conversation.model : null)
         const task = this.store.createTask(
             conversationId,
             source,
             prompt,
             conversation.project,
             options.schedule ?? null,
-            options.model ?? null,
-            attachments
+            model,
+            attachments,
+            provider,
+            options.agent ?? null
         )
         if (!conversation.title) {
             this.store.updateConversation(conversationId, { title: titleFrom(prompt) })
@@ -963,7 +1060,50 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             CLAUDE_CONFIG_DIR: this.config.claude.configDir
         }
         for (const name of PRIVATE_ENV) delete env[name]
+        // Provider keys stay with the gateway, which adds them to the forwarded request.
+        for (const name of this.providers.tokenVars()) delete env[name]
         return env
+    }
+
+    /**
+     * The CLI's environment for a task on another provider: the subscription's
+     * credentials gone (the OAuth token never leaves for a foreign endpoint),
+     * every model tier pointed at the task's model (`small` for the haiku tier)
+     * and the base URL at the factory's gateway, which holds the provider's key.
+     */
+    providerEnv(provider: Provider, model: string): NodeJS.ProcessEnv {
+        const env = this.agentEnv()
+        delete env.CLAUDE_CODE_OAUTH_TOKEN
+        delete env.ANTHROPIC_API_KEY
+        const small = provider.small ?? model
+        return {
+            ...env,
+            ANTHROPIC_BASE_URL: `${this.gatewayBase}/${encodeURIComponent(provider.name)}`,
+            ANTHROPIC_AUTH_TOKEN: this.gatewayToken,
+            ANTHROPIC_MODEL: model,
+            ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+            ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+            ANTHROPIC_DEFAULT_HAIKU_MODEL: small,
+            CLAUDE_CODE_SUBAGENT_MODEL: model,
+            // No telemetry, no update checks, no Anthropic calls besides the model: the endpoint is not Anthropic.
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+            DISABLE_AUTOUPDATER: '1'
+        }
+    }
+
+    /** The system prompt and tool set of a light-mode task: its agent file's, else the factory's generic one. */
+    private lightOptions(task: Task): { systemPrompt: string; tools: string[] } {
+        const agent = task.agent ? this.workspace.agentFile(task.agent) : null
+        if (agent?.body.trim()) return { systemPrompt: agent.body.trim(), tools: agent.tools ?? LIGHT_TOOLS }
+        const file = path.join(this.config.claude.configDir, 'light-system.md')
+        let systemPrompt = LIGHT_SYSTEM_PROMPT
+        try {
+            const text = fs.readFileSync(file, 'utf8').trim()
+            if (text) systemPrompt = text
+        } catch {
+            // not seeded (yarn dev): the built-in text
+        }
+        return { systemPrompt, tools: LIGHT_TOOLS }
     }
 
     /** Tool names the CLI announced at session start; the agent editor offers them as choices. */
@@ -1052,17 +1192,28 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 log.warn(`inbox prune failed: ${error instanceof Error ? error.message : String(error)}`)
             }
         }
-        if (Date.now() < this.pausedUntil) return
         this.ticking = true
         try {
             for (const task of this.store.nextQueuedTasks()) {
                 if (this.running.size >= this.config.maxConcurrentSessions) break
+                // The subscription refused a run: its tasks wait for the reset; other providers go on.
+                if (!task.provider && Date.now() < this.pausedUntil) continue
                 if (
                     [...this.running.keys()].some(
                         (id) => this.store.getTask(id)?.conversation_id === task.conversation_id
                     )
                 ) {
                     continue
+                }
+                // One GPU serves one task: a provider's `concurrency` holds the rest in the queue.
+                if (task.provider) {
+                    const provider = this.providers.get(task.provider)
+                    if (
+                        provider &&
+                        provider.concurrency > 0 &&
+                        this.runningCount(task.provider) >= provider.concurrency
+                    )
+                        continue
                 }
                 void this.run(task)
             }
@@ -1072,6 +1223,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     private async run(task: Task): Promise<void> {
+        this.runningOn.set(task.id, task.provider)
         const started = this.store.updateTask(task.id, { status: 'running', started_at: new Date().toISOString() })
         this.emit('task', started)
         this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running' }))
@@ -1079,6 +1231,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             await this.attempt(task, true)
         } finally {
             this.running.delete(task.id)
+            this.runningOn.delete(task.id)
             this.stopRequested.delete(task.id)
             queueMicrotask(() => this.tick())
         }
@@ -1147,6 +1300,26 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (project !== task.project) this.store.updateTask(task.id, { project })
         /** Orchestrator prose streamed: the web thread then shows the text events and hides `result`. */
         let sawText = false
+        // Another provider: its model instead of the alias, the gateway instead of Anthropic, light mode when the provider says so.
+        const provider = task.provider ? this.providers.get(task.provider) : undefined
+        if (task.provider && !provider) {
+            await end({
+                status: 'failed',
+                error: `provider "${task.provider}" is not in providers.yaml any more (Settings → Providers)`
+            })
+            return
+        }
+        const model = provider ? (task.model ?? provider.default ?? provider.models[0]) : (task.model ?? this.model())
+        const light = provider?.light ? this.lightOptions(task) : null
+        const env = provider ? this.providerEnv(provider, model) : this.agentEnv()
+        if (provider)
+            this.emit(
+                'event',
+                this.store.addEvent(task.id, 'status', {
+                    status: 'running',
+                    note: `on ${provider.name} · ${model}${light ? ` · light mode${task.agent ? ` as ${task.agent}` : ''}` : ''}`
+                })
+            )
         const resuming = Boolean(conversation.session_id)
         let sawOutput = false
         const startedAt = Date.now()
@@ -1165,10 +1338,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             mcpConfig: this.mcpConfigFile(),
             settings: this.sessionSettings(conversation.project),
             // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
-            model: task.model ?? this.model(),
+            model,
             maxTurns: this.config.claude.maxTurns,
             permissionMode: this.config.claude.permissionMode,
-            env: this.agentEnv(),
+            env,
+            systemPrompt: light?.systemPrompt,
+            tools: light?.tools,
+            // A small model gets the factory's own MCP servers (the search) and nothing else: no connectors, no plugins, no project servers.
+            strictMcp: Boolean(light),
             timeoutMs: this.config.claude.taskTimeoutMs,
             onEvent: (event) => {
                 sawOutput = true
@@ -1289,7 +1466,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 if (sawText) this.emit('event', this.store.addEvent(task.id, 'text', { text: cutOff }))
             }
             // Refused for the subscription limit: back to the queue until the window resets, the session kept.
-            const reset = this.stopRequested.has(task.id) ? null : limitReset(result)
+            // Another provider has no windows: its refusal is a plain failure.
+            const reset = this.stopRequested.has(task.id) || provider ? null : limitReset(result)
             const waits = reset ? this.waitForReset(task.id, reset) : null
             if (waits === true) return
             await end({

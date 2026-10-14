@@ -6,6 +6,7 @@ import { loadConfig } from './config.js'
 import { Catalog } from './files/catalog.js'
 import { Hosts } from './files/hosts.js'
 import { KnownHosts } from './files/knownHosts.js'
+import { Providers } from './files/providers.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
 import { Schedules } from './schedules/service.js'
@@ -44,6 +45,8 @@ async function main(): Promise<void> {
         path.join(config.paths.dataRoot, 'secrets', 'ssh', 'known_hosts')
     )
     const transcripts = new Transcripts(config.claude.configDir)
+    // Model providers besides the subscription (self-hosted and cloud), chosen per task.
+    const providers = new Providers(path.join(config.paths.configRoot, 'providers.yaml'))
     // What the session manager needs from the project files and the transcript index.
     // A project is named by its file, but tasks name it by the checkout directory
     // (detected from tool calls): resolve by file name first, then by the
@@ -100,9 +103,25 @@ async function main(): Promise<void> {
                           : []
                 )
             }),
-        sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null
+        sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null,
+        agentFile: (name) => {
+            if (!catalog.exists('agents', name)) return null
+            const entry = catalog.get('agents', name)
+            const tools = entry.frontmatter.tools
+            return {
+                body: entry.body,
+                tools: Array.isArray(tools)
+                    ? tools.map(String)
+                    : typeof tools === 'string' && tools.trim()
+                      ? tools
+                            .split(',')
+                            .map((t) => t.trim())
+                            .filter(Boolean)
+                      : null
+            }
+        }
     }
-    const tasks = new TaskService(store, config, workspace)
+    const tasks = new TaskService(store, config, workspace, providers)
     // Recurring tasks: files in data/config/schedules, fired by the scheduler through the same queue.
     const schedules = new Schedules(store, catalog, tasks, config, {
         projectExists: (slug) => workspace.projectPath(slug) !== null,
@@ -114,6 +133,17 @@ async function main(): Promise<void> {
         hostExists: (name) => hosts.get(name) !== undefined,
         skillExists: (name) => catalog.exists('skills', name),
         agentExists: (name) => catalog.exists('agents', name),
+        providerExists: (name) => providers.get(name) !== undefined,
+        providerLight: (name) => providers.get(name)?.light ?? false,
+        agentProvider: (name) => {
+            const fm = catalog.exists('agents', name) ? catalog.get('agents', name).frontmatter : {}
+            // `model:` stays the CLI's (an alias, read when the orchestrator spawns the agent); the provider's own id lives under `provider_model:`.
+            return {
+                provider: typeof fm.provider === 'string' && fm.provider.trim() ? fm.provider.trim() : null,
+                model:
+                    typeof fm.provider_model === 'string' && fm.provider_model.trim() ? fm.provider_model.trim() : null
+            }
+        },
         agentEnv: () => tasks.agentEnv()
     })
     // Telegram is optional: without a token the factory is web-only (also
@@ -138,6 +168,7 @@ async function main(): Promise<void> {
         catalog,
         hosts,
         knownHosts,
+        providers,
         transcripts,
         presets: new Presets(config.presetsDir),
         schedules,

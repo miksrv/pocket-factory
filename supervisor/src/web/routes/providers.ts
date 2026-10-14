@@ -1,0 +1,246 @@
+import { Hono } from 'hono'
+
+import { BadName, NotFound } from '../../files/catalog.js'
+import { CLAUDE_PROVIDER, type Provider, tokenVarProblem } from '../../files/providers.js'
+import { fromOpenAiResponse, type OpenAiResponse, toOpenAiRequest } from '../../gateway/translate.js'
+import type { Env } from '../context.js'
+
+/**
+ * Model providers besides the subscription (`data/config/providers.yaml`):
+ * the list with each key's presence (never its value) and the tasks running
+ * on it, create / edit / delete, a connection test (one tiny tool-calling
+ * request straight from the supervisor) and the provider's own model list
+ * when its endpoint has one.
+ */
+
+/** Who refers to a provider: schedules and agents with `provider: <name>`. */
+function usedBy(c: { get: (k: 'app') => Env['Variables']['app'] }, name: string): string[] {
+    const { catalog } = c.get('app')
+    return (['schedules', 'agents'] as const).flatMap((kind) =>
+        catalog
+            .list(kind)
+            .filter((e) => e.frontmatter.provider === name)
+            .map((e) => `${kind === 'schedules' ? '⏱ ' : ''}${e.name}`)
+    )
+}
+
+type Body = Partial<Omit<Provider, 'models'>> & { name?: unknown; models?: unknown; light?: unknown }
+
+/** A provider from a request body, or the saved one by `name` with the body's model; what the test and the model list work on. */
+function candidate(c: { get: (k: 'app') => Env['Variables']['app'] }, body: Body): Provider | { error: string } {
+    const { providers } = c.get('app')
+    if (typeof body.name === 'string' && !body.url) {
+        const saved = providers.get(body.name)
+        return saved ?? { error: `unknown provider "${body.name}"` }
+    }
+    if (typeof body.url !== 'string') return { error: 'url is required' }
+    // A draft names its key variable freely: only a provider-shaped one is ever read, never the factory's own secrets.
+    const token = typeof body.token === 'string' && body.token.trim() ? body.token.trim() : undefined
+    const problem = token ? tokenVarProblem(token) : null
+    if (problem) return { error: problem }
+    const models = Array.isArray(body.models)
+        ? body.models.filter((m): m is string => typeof m === 'string')
+        : typeof body.models === 'string'
+          ? body.models.split(/[,\n]/).map((m) => m.trim())
+          : []
+    return {
+        name: typeof body.name === 'string' && body.name ? body.name : 'test',
+        kind: body.kind === 'openai' ? 'openai' : 'anthropic',
+        url: body.url.trim().replace(/\/+$/, ''),
+        token,
+        models: models.filter(Boolean),
+        default: typeof body.default === 'string' ? body.default : undefined,
+        small: typeof body.small === 'string' ? body.small : undefined,
+        concurrency: typeof body.concurrency === 'number' ? body.concurrency : 1,
+        light: body.light !== false
+    }
+}
+
+export function providerRoutes(): Hono<Env> {
+    const app = new Hono<Env>()
+
+    app.get('/', (c) => {
+        const { providers, tasks } = c.get('app')
+        const status = tasks.providerStatus()
+        const overview = providers.list((name) => status.find((p) => p.name === name)?.running ?? 0)
+        return c.json({
+            ...overview,
+            providers: overview.providers.map((p) => ({
+                ...p,
+                health: status.find((s) => s.name === p.name)?.health ?? null,
+                used_by: usedBy(c, p.name)
+            })),
+            builtin: CLAUDE_PROVIDER
+        })
+    })
+
+    /** Create or update; `?create=1` refuses to replace an existing name. */
+    app.put('/:name', async (c) => {
+        const { providers } = c.get('app')
+        const body = (await c.req.json().catch(() => null)) as Body | null
+        if (!body || typeof body.url !== 'string') return c.json({ error: 'url is required' }, 400)
+        const before = providers.get(c.req.param('name'))
+        if (before && c.req.query('create'))
+            return c.json(
+                { error: `a provider named "${before.name}" already exists — open it from the list to edit it` },
+                409
+            )
+        try {
+            const draft = candidate(c, body)
+            if ('error' in draft) return c.json({ error: draft.error }, 400)
+            const saved = providers.save(c.req.param('name'), {
+                ...draft,
+                name: typeof body.name === 'string' ? body.name : undefined
+            })
+            return c.json(saved)
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, error instanceof BadName ? 400 : 409)
+        }
+    })
+
+    /** Remove; a provider that schedules or agents name answers 409 with their names unless `?force=1`. */
+    app.delete('/:name', (c) => {
+        const { providers } = c.get('app')
+        const name = c.req.param('name')
+        if (!providers.get(name)) return c.json({ error: `provider "${name}" not found` }, 404)
+        const used = usedBy(c, name)
+        if (used.length && c.req.query('force') !== '1')
+            return c.json({ error: `provider "${name}" is used by ${used.join(', ')}`, used }, 409)
+        try {
+            providers.remove(name)
+            return c.body(null, 204)
+        } catch (error) {
+            if (error instanceof NotFound) return c.json({ error: error.message }, 404)
+            return c.json({ error: (error as Error).message }, 409)
+        }
+    })
+
+    /**
+     * One request with a tool offered and asked for: the endpoint answers, the key
+     * is accepted, and the model calls tools (without that the agent cannot work).
+     * The body is a draft from the form, or `{ name }` for a saved provider; `model`
+     * picks the one to try (default: the provider's default).
+     */
+    app.post('/test', async (c) => {
+        const { providers } = c.get('app')
+        const body = (await c.req.json().catch(() => ({}))) as Body & { model?: unknown }
+        const provider = candidate(c, body)
+        if ('error' in provider) return c.json({ error: provider.error }, 400)
+        const model =
+            (typeof body.model === 'string' && body.model.trim()) || provider.default || provider.models[0] || ''
+        if (!model) return c.json({ error: 'name a model to test' }, 400)
+        const key = providers.key(provider)
+        if (provider.token && !key) return c.json({ ok: false, error: `${provider.token} is not set in .env`, model })
+        const started = Date.now()
+        // Room for a thinking model's reasoning before the call (gemma4 spent 64 tokens thinking and never called).
+        const probe = {
+            model,
+            max_tokens: 1024,
+            system: 'You are a tool-calling probe. Use the tool; do not answer in prose.',
+            messages: [{ role: 'user' as const, content: 'Call the tool `ping` with ok = true.' }],
+            tools: [
+                {
+                    name: 'ping',
+                    description: 'Report readiness',
+                    input_schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
+                }
+            ]
+        }
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 60_000)
+        try {
+            const response =
+                provider.kind === 'openai'
+                    ? await fetch(`${provider.url}/chat/completions`, {
+                          method: 'POST',
+                          headers: {
+                              'content-type': 'application/json',
+                              ...(key ? { authorization: `Bearer ${key}` } : {})
+                          },
+                          body: JSON.stringify(toOpenAiRequest(probe)),
+                          signal: controller.signal
+                      })
+                    : await fetch(`${provider.url}/v1/messages`, {
+                          method: 'POST',
+                          headers: {
+                              'content-type': 'application/json',
+                              'anthropic-version': '2023-06-01',
+                              ...(key ? { 'x-api-key': key, authorization: `Bearer ${key}` } : {})
+                          },
+                          body: JSON.stringify(probe),
+                          signal: controller.signal
+                      })
+            const text = await response.text()
+            if (!response.ok)
+                return c.json({
+                    ok: false,
+                    model,
+                    ms: Date.now() - started,
+                    error: `${response.status}: ${text.slice(0, 500)}`
+                })
+            let reply: { content?: Array<{ type: string; text?: string; name?: string }>; stop_reason?: string }
+            try {
+                const json = JSON.parse(text) as unknown
+                reply =
+                    provider.kind === 'openai'
+                        ? fromOpenAiResponse(json as OpenAiResponse, model)
+                        : (json as typeof reply)
+            } catch {
+                return c.json({ ok: false, model, ms: Date.now() - started, error: `not JSON: ${text.slice(0, 200)}` })
+            }
+            const content = reply.content ?? []
+            const toolCalling = content.some((b) => b.type === 'tool_use' && b.name === 'ping')
+            if (!toolCalling && reply.stop_reason === 'max_tokens')
+                return c.json({
+                    ok: true,
+                    model,
+                    ms: Date.now() - started,
+                    tool_calling: false,
+                    output: 'the reply was cut off before any tool call (the model thinks at length)'
+                })
+            const said = content
+                .filter((b) => b.type === 'text')
+                .map((b) => b.text ?? '')
+                .join(' ')
+                .slice(0, 200)
+            return c.json({ ok: true, model, ms: Date.now() - started, tool_calling: toolCalling, output: said })
+        } catch (error) {
+            return c.json({
+                ok: false,
+                model,
+                ms: Date.now() - started,
+                error: error instanceof Error ? error.message : String(error)
+            })
+        } finally {
+            clearTimeout(timer)
+        }
+    })
+
+    /** The model ids the endpoint lists (`/v1/models`, OpenAI shape, which Ollama, vLLM, OpenRouter and the cloud APIs share). */
+    app.post('/models', async (c) => {
+        const { providers } = c.get('app')
+        const body = (await c.req.json().catch(() => ({}))) as Body
+        const provider = candidate(c, body)
+        if ('error' in provider) return c.json({ error: provider.error }, 400)
+        const key = providers.key(provider)
+        const url = provider.kind === 'openai' ? `${provider.url}/models` : `${provider.url}/v1/models`
+        try {
+            const response = await fetch(url, {
+                headers: key ? { authorization: `Bearer ${key}`, 'x-api-key': key } : {},
+                signal: AbortSignal.timeout(20_000)
+            })
+            if (!response.ok)
+                return c.json({ error: `${response.status}: ${(await response.text()).slice(0, 300)}` }, 502)
+            const json = (await response.json()) as { data?: Array<{ id?: string; name?: string }>; models?: unknown }
+            const ids = (json.data ?? [])
+                .map((m) => m.id ?? m.name ?? '')
+                .filter(Boolean)
+                .sort()
+            return c.json({ models: ids })
+        } catch (error) {
+            return c.json({ error: error instanceof Error ? error.message : String(error) }, 502)
+        }
+    })
+
+    return app
+}

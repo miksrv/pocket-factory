@@ -2,6 +2,7 @@ import type { Config } from '../config.js'
 import type { Catalog } from '../files/catalog.js'
 import type { Hosts } from '../files/hosts.js'
 import type { KnownHosts } from '../files/knownHosts.js'
+import type { Providers } from '../files/providers.js'
 import type { Presets } from '../presets/index.js'
 import type { Schedules } from '../schedules/service.js'
 import type { Transcripts } from '../sessions/transcripts.js'
@@ -18,6 +19,7 @@ export interface AppContext {
     catalog: Catalog
     hosts: Hosts
     knownHosts: KnownHosts
+    providers: Providers
     transcripts: Transcripts
     presets: Presets
     schedules: Schedules

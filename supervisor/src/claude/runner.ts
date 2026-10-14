@@ -113,6 +113,15 @@ export interface RunOptions {
     settings?: Record<string, unknown>
     /** Directories outside the cwd the session may read without asking (`--add-dir`), e.g. the owner's uploads. */
     addDirs?: string[]
+    /**
+     * Light mode (a task on a provider whose models cannot carry Claude Code's own prompt):
+     * this text replaces the CLI's system prompt (`--system-prompt`), `tools` is the whole
+     * built-in tool set offered (`--tools`), and skills are off (`--disable-slash-commands`).
+     */
+    systemPrompt?: string
+    tools?: string[]
+    /** Only the servers of `mcpConfig` (`--strict-mcp-config`): no connectors, plugins or project servers. */
+    strictMcp?: boolean
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -293,6 +302,11 @@ export function runClaude(options: RunOptions): RunHandle {
     if (options.settings && Object.keys(options.settings).length)
         args.push('--settings', JSON.stringify(options.settings))
     for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)
+    if (options.systemPrompt !== undefined) {
+        args.push('--system-prompt', options.systemPrompt, '--disable-slash-commands')
+        if (options.tools) args.push('--tools', options.tools.join(','))
+    }
+    if (options.strictMcp) args.push('--strict-mcp-config')
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 

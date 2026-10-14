@@ -62,6 +62,23 @@ export function conversationRoutes(): Hono<Env> {
      * The conversation with its most recent tasks and their events, oldest
      * first. `has_more` says whether /history has earlier tasks.
      */
+    /** Pick the provider and model of the conversation's next tasks (`{ provider, model }`, both nullable); refused while a task runs. */
+    app.put('/:id/model', async (c) => {
+        const { tasks } = c.get('app')
+        const conversation = live(c)
+        if (!conversation) return c.json({ error: 'conversation not found' }, 404)
+        const body = (await c.req.json().catch(() => ({}))) as { provider?: unknown; model?: unknown }
+        if (!isOptionalString(body.provider) || !isOptionalString(body.model))
+            return c.json({ error: 'provider and model must be strings or null' }, 400)
+        try {
+            return c.json(
+                tasks.setConversationModel(conversation.id, body.provider?.trim() || null, body.model ?? null)
+            )
+        } catch (error) {
+            return c.json({ error: (error as Error).message }, 400)
+        }
+    })
+
     app.get('/:id', (c) => {
         const { store } = c.get('app')
         const conversation = live(c)

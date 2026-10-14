@@ -56,4 +56,27 @@ describe('MAX_CONCURRENT_SESSIONS', () => {
         }, 20_000)
         expect(peak).toBe(1)
     }, 30_000)
+
+    it('holds a provider at its own concurrency while a subscription task still starts', async () => {
+        t = createTestApp({ claude: SLOW_CLAUDE, config: (c) => (c.maxConcurrentSessions = 3) })
+        const { tasks, store, providers } = t.ctx
+        providers.save('gpu', { url: 'http://gpu.test', models: ['m'], concurrency: 1 })
+        const on = (provider: string | null) => {
+            const conversation = tasks.newConversation('web', null, null, null)
+            tasks.setConversationModel(conversation.id, provider, null)
+            return tasks.submit(conversation.id, 'web', 'go').id
+        }
+        const gpu = [on('gpu'), on('gpu')]
+        const sub = on(null)
+        let gpuPeak = 0
+        let overlap = false
+        await until(() => {
+            const running = (id: string) => store.getTask(id)?.status === 'running'
+            gpuPeak = Math.max(gpuPeak, gpu.filter(running).length)
+            if (running(sub) && gpu.some(running)) overlap = true
+            return [...gpu, sub].every((id) => store.getTask(id)?.status === 'done')
+        }, 20_000)
+        expect(gpuPeak).toBe(1)
+        expect(overlap).toBe(true)
+    }, 30_000)
 })
