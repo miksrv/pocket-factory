@@ -182,9 +182,11 @@ export function AssistantTurn({
                         <StatusBadge status={task.status} />
                         <span className='dim'>
                             {fmt.plural(task.num_turns, 'turn')} · {fmt.tokens(taskTokens(task))} tokens
-                            {fmt.windowDelta(task.window_5h_delta)
-                                ? ` · ${fmt.windowDelta(task.window_5h_delta)}`
-                                : ''}{' '}
+                            {task.provider
+                                ? ` · ${task.provider}${task.model ? `:${task.model}` : ''}`
+                                : fmt.windowDelta(task.window_5h_delta)
+                                  ? ` · ${fmt.windowDelta(task.window_5h_delta)}`
+                                  : ''}{' '}
                             · {fmt.duration(task.duration_ms)}
                         </span>
                         <span

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 import { AgentStatus, auditLink, rosterOf } from '../components/AgentsPanel'
 import { Editor, Field, str } from '../components/Editor'
+import { ModelPicker } from '../components/Providers'
 import { Tile } from '../components/Tile'
 import { Button, Empty, ErrorBox, GrowingTextarea, PageHead } from '../components/ui'
 import { api, fmt, type ToolList } from '../lib/api'
@@ -106,6 +107,9 @@ function AgentGrid() {
                     const tools = allowed.filter((t) => !t.startsWith('mcp__'))
                     const servers = mcpServersOf(allowed, known.data?.mcp ?? [])
                     const model = str(r.entry?.frontmatter.model)
+                    // A provider-bound role: shown as provider:model (what a schedule naming it runs on).
+                    const provider = str(r.entry?.frontmatter.provider)
+                    const providerModel = str(r.entry?.frontmatter.provider_model)
                     return (
                         <div
                             key={r.name}
@@ -120,7 +124,13 @@ function AgentGrid() {
                                 <div className='grow'>
                                     <div className='agent-name'>{r.name}</div>
                                     <div className='dim small'>
-                                        {r.builtin ? 'built-in' : model ? `model ${model}` : 'CLI default model'}
+                                        {r.builtin
+                                            ? 'built-in'
+                                            : provider
+                                              ? `${provider}${providerModel ? `:${providerModel}` : ''}`
+                                              : model
+                                                ? `model ${model}`
+                                                : 'CLI default model'}
                                     </div>
                                 </div>
                                 <AgentStatus activity={r.activity} />
@@ -382,6 +392,7 @@ function McpServerRow({
 
 function AgentEditor() {
     const tools = useAsync(() => api.tools(), [])
+    const providers = useAsync(() => api.providers(), [])
     return (
         <Editor
             kind='agents'
@@ -393,27 +404,32 @@ function AgentEditor() {
             backTo={{ to: '/agents', label: 'All agents' }}
             form={(fm, set) => {
                 const model = str(fm.model)
-                const known = ALIASES.some((a) => a.value === model)
+                const provider = str(fm.provider)
+                // The provider's model id lives under `provider_model:`; `model:` stays an alias the CLI reads when the orchestrator spawns the agent.
+                const providerModel = str(fm.provider_model)
                 return (
                     <>
                         <Field
                             label='Model'
-                            hint='An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file.'
+                            hint={
+                                provider
+                                    ? 'A task that runs as this agent (a schedule naming it) goes to this provider in light mode: the body below is its whole system prompt. Sub-agents of a Claude task stay on Claude.'
+                                    : 'An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file. A provider (Settings → Providers) takes the role off the subscription for schedules that name it.'
+                            }
+                            group
+                            wide
                         >
-                            <select
-                                value={model}
-                                onChange={(e) => set({ model: e.target.value })}
-                            >
-                                {ALIASES.map((a) => (
-                                    <option
-                                        key={a.value}
-                                        value={a.value}
-                                    >
-                                        {a.label}
-                                    </option>
-                                ))}
-                                {!known && model && <option value={model}>{model}</option>}
-                            </select>
+                            <ModelPicker
+                                provider={provider}
+                                model={provider ? providerModel : model}
+                                providers={providers.data?.providers}
+                                aliases={ALIASES}
+                                onChange={(p, m) =>
+                                    p
+                                        ? set({ provider: p, provider_model: m || undefined })
+                                        : set({ provider: undefined, provider_model: undefined, model: m })
+                                }
+                            />
                         </Field>
                         <Field
                             label='Description — when the dispatcher should use this agent'

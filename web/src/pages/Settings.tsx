@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { HostsSection } from '../components/Hosts'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
+import { ProvidersSection } from '../components/Providers'
 import { SecuritySection } from '../components/Security'
 import { ToolchainsSection } from '../components/Toolchains'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
@@ -177,6 +178,12 @@ export function SettingsPage() {
                             error={toolchains.error}
                             onChanged={toolchains.reload}
                         />
+                    </Section>
+                    <Section
+                        id='providers'
+                        title='Providers'
+                    >
+                        <ProvidersSection />
                     </Section>
                     <Section
                         id='hosts'

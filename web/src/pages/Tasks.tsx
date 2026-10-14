@@ -116,7 +116,11 @@ export function TasksPage() {
                                         </td>
                                         <td>{task.num_turns}</td>
                                         <td className='nowrap'>{fmt.tokens(taskTokens(task))}</td>
-                                        <td className='dim nowrap'>{fmt.windowDelta(task.window_5h_delta) ?? '—'}</td>
+                                        <td className='dim nowrap'>
+                                            {task.provider
+                                                ? `${task.provider}${task.model ? `:${task.model}` : ''}`
+                                                : (fmt.windowDelta(task.window_5h_delta) ?? '—')}
+                                        </td>
                                         <td className='nowrap'>{fmt.duration(taskDuration(task, now))}</td>
                                         <td className='dim nowrap'>{fmt.ago(task.created_at)}</td>
                                         <td>
@@ -211,16 +215,25 @@ export function TaskPage() {
                     value={fmt.tokens(taskTokens(t))}
                     sub={`${fmt.tokens(t.input_tokens)} in · ${fmt.tokens(t.output_tokens)} out · ${fmt.tokens(t.cache_read_tokens)} cache read · ${fmt.tokens(t.cache_creation_tokens)} cache write`}
                 />
-                <Stat
-                    card
-                    label='5-hour window'
-                    value={fmt.windowDelta(t.window_5h_delta) ?? '—'}
-                    sub={
-                        t.window_5h_delta === null
-                            ? 'not reported by the CLI'
-                            : 'share of the window this task consumed'
-                    }
-                />
+                {t.provider ? (
+                    <Stat
+                        card
+                        label='Provider'
+                        value={t.provider}
+                        sub={`${t.model ?? 'default model'}${t.agent ? ` · as ${t.agent}` : ''} · no subscription window`}
+                    />
+                ) : (
+                    <Stat
+                        card
+                        label='5-hour window'
+                        value={fmt.windowDelta(t.window_5h_delta) ?? '—'}
+                        sub={
+                            t.window_5h_delta === null
+                                ? 'not reported by the CLI'
+                                : 'share of the window this task consumed'
+                        }
+                    />
+                )}
             </div>
 
             <Changes
