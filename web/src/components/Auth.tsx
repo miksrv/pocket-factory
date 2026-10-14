@@ -158,12 +158,17 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
     const submit = async (e: FormEvent) => {
         e.preventDefault()
         if (busy || locked) return
+        // What the fields hold now: a password manager may have filled them without React hearing it.
+        const data = new FormData(e.currentTarget as HTMLFormElement)
+        const user = String(data.get('username') ?? username).trim()
+        const pass = String(data.get('password') ?? password)
+        if (!user || !pass) return
         setBusy(true)
         setError(null)
         try {
-            await api.auth.login(username, password)
+            await api.auth.login(user, pass)
             try {
-                localStorage.setItem(USER_KEY, username)
+                localStorage.setItem(USER_KEY, user)
             } catch {
                 // private mode etc.
             }
@@ -298,7 +303,7 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
                     type='submit'
                     variant='primary'
                     className='login-submit'
-                    disabled={busy || locked || !username || !password}
+                    disabled={busy || locked}
                 >
                     {busy ? 'Signing in…' : locked ? `Locked · ${countdown}` : 'Sign in'}
                 </Button>

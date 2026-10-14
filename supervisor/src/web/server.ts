@@ -10,6 +10,7 @@ import { secureHeaders } from 'hono/secure-headers'
 
 import { BadName, NotFound } from '../files/catalog.js'
 import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
+import { gatewayRoutes } from '../gateway/routes.js'
 import { createLogger } from '../logger.js'
 import { ACTIVE_HEADER, SESSION_COOKIE } from './auth.js'
 import type { AppContext, Env } from './context.js'
@@ -23,6 +24,7 @@ import { hostRoutes } from './routes/hosts.js'
 import { mcpRoutes } from './routes/mcp.js'
 import { toolRoutes } from './routes/models.js'
 import { presetRoutes } from './routes/presets.js'
+import { providerRoutes } from './routes/providers.js'
 import { scheduleRoutes } from './routes/schedules.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { settingsRoutes } from './routes/settings.js'
@@ -56,6 +58,11 @@ export function createApp(app: AppContext): Hono<Env> {
     // sign-in below is the floor; put Tailscale / Caddy / Cloudflare Access
     // in front when the port is reachable from outside.
     hono.use('*', secureHeaders({ xFrameOptions: 'DENY', referrerPolicy: 'same-origin' }))
+
+    // The model gateway for tasks on other providers: the CLI on this machine presents the
+    // per-start bearer, nothing else applies (no cookie, no Host guard, bodies as large as a
+    // conversation with images).
+    hono.route('/gateway', gatewayRoutes())
 
     // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
     // An uploaded file (a photo, a log) gets Telegram's own ceiling instead.
@@ -135,6 +142,7 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/activity', activityRoutes())
     api.route('/tools', toolRoutes())
     api.route('/hosts', hostRoutes())
+    api.route('/providers', providerRoutes())
     api.route('/mcp', mcpRoutes())
     api.route('/settings', settingsRoutes())
     api.route('/toolchains', toolchainRoutes())
@@ -165,6 +173,7 @@ export function startServer(app: AppContext): void {
     const { host, port, authPassword } = app.config.web
     const hono = createApp(app)
     serve({ fetch: hono.fetch, hostname: host, port }, (info) => {
+        app.tasks.setGatewayPort(info.port)
         log.info(
             `listening on http://${info.address}:${info.port}${authPassword ? ' (sign-in required)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`
         )

@@ -9,6 +9,29 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.3.0] - 2026-10-14
+
+### Added
+
+- **Model providers besides the subscription.** Settings → Providers connects self-hosted models
+  (Ollama, llama.cpp, vLLM on any machine) and cloud APIs (OpenRouter, Gemini, OpenAI, Groq …):
+  a name, the endpoint, the `.env` variable that holds the key (never the key), the models, how
+  many tasks at once. A schedule, an agent file (`provider:` + `model:`) or a chat (the selector
+  next to the project, Telegram `/model <provider>:<model>`, `/model claude` comes back) picks one,
+  and that task's `claude -p` talks to it instead of Anthropic — through the factory's own gateway
+  (`/gateway/<provider>`), which holds the key and translates for endpoints that speak only the
+  OpenAI chat API. Such tasks move no subscription window and the schedules' soft-stop does not
+  hold them; the footer and the task page name the provider and the model instead of the window
+  share. **Test** sends one tool-calling probe; **Fetch** reads the endpoint's model list.
+- **Light mode** for small models (the default on a new provider): the task runs with a short
+  system prompt — the agent file's body when a schedule names an agent, else
+  `data/claude/light-system.md` — and Read / Write / Edit / Bash / Glob / Grep, no skills, instead
+  of Claude Code's full prompt and tool set; measured on `lookatstars` (RTX 2080 Ti, 9–12B
+  models), the full prompt never reached the file, the short one did on the first try.
+- `tasks.provider` / `tasks.agent`, `conversations.provider` / `model` (migration v15);
+  `/api/providers` (list, save, delete, test, models), `PUT /api/conversations/:id/model`,
+  `providers` in `/api/status`.
+
 ## [1.2.1] - 2026-10-13
 
 ### Fixed

@@ -16,6 +16,7 @@ import { Channel } from '../components/Icon'
 import { STATUS_CHANGED } from '../components/Layout'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
 import { useConfirm } from '../components/Modal'
+import { ModelPicker } from '../components/Providers'
 import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
 import {
     api,
@@ -236,6 +237,7 @@ function Thread({
     projects: CatalogEntry[]
 }) {
     const [conversation, setConversation] = useState<Conversation | null>(null)
+    const providers = useAsync(() => api.providers(), [])
     const [tasks, setTasks] = useState<Map<string, Task>>(new Map())
     const [events, setEvents] = useState<TaskEvent[]>([])
     const [hasEarlier, setHasEarlier] = useState(false)
@@ -419,6 +421,16 @@ function Thread({
         }
     }
 
+    // The provider and model of the next tasks; a provider change forgets the session (it cannot move between backends).
+    const remodel = async (provider: string, model: string) => {
+        try {
+            setConversation(await api.setConversationModel(id, provider || null, model || null))
+            setError(null)
+        } catch (e) {
+            setError((e as Error).message)
+        }
+    }
+
     const remove = () =>
         void confirm({
             title: 'Delete this conversation?',
@@ -477,8 +489,8 @@ function Thread({
                             {conversation ? (conversation.title ?? 'New conversation') : '…'}
                         </strong>
                         <div
-                            className='dim small row'
-                            style={{ gap: 6 }}
+                            className='dim small row wrap'
+                            style={{ gap: 6, rowGap: 4 }}
                         >
                             {conversation && (
                                 <Channel
@@ -493,7 +505,17 @@ function Thread({
                                 projects={projects}
                                 disabled={!conversation || active}
                             />
-                            <span>
+                            <span>·</span>
+                            <ModelPicker
+                                provider={conversation?.provider ?? ''}
+                                model={conversation?.model ?? ''}
+                                providers={providers.data?.providers}
+                                onChange={(p, m) => void remodel(p, m)}
+                                disabled={!conversation || active}
+                                inherit='factory model'
+                                compact
+                            />
+                            <span className='nowrap'>
                                 · session{' '}
                                 {conversation?.session_id ? (
                                     <Link to={`/sessions/${conversation.session_id}`}>

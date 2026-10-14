@@ -35,6 +35,8 @@ export interface ScheduleView {
     notify: 'telegram' | 'none' | null
     session: 'fresh' | 'continue' | null
     once: boolean
+    /** The provider the runs go to; null = the subscription. */
+    provider: string | null
     /** Pinned model alias for the runs; null = the factory's current one. */
     model: string | null
     next_run: string | null
@@ -64,6 +66,8 @@ export interface ScheduleRefs extends Refs {
     projectPath: (slug: string) => string | null
     projectRepo: (slug: string) => string | null
     agentEnv: () => NodeJS.ProcessEnv
+    /** Whether tasks on that provider run in light mode (the run then *is* the agent, with no sub-agents). */
+    providerLight: (name: string) => boolean
 }
 
 /**
@@ -180,6 +184,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
             notify: s?.notify ?? null,
             session: s?.session ?? null,
             once: s?.once ?? false,
+            provider: s?.provider ?? null,
             model: s?.model ?? null,
             next_run: s?.enabled ? (nextRun(s.cron, s.window, s.tz)?.toISOString() ?? null) : null,
             last_run: last,
@@ -300,7 +305,8 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
             const active = this.store.activeScheduleTask(name)
             if (active)
                 return record('skipped', `the previous run is still ${active.status} (task ${active.id.slice(0, 8)})`)
-            if (trigger === 'cron') {
+            // Cron firings yield to the owner's subscription windows; a run on another provider touches none.
+            if (trigger === 'cron' && !spec.provider) {
                 const stop = this.softStop()
                 if (stop) return record('skipped', stop)
             }
@@ -460,11 +466,25 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         // Memory between runs is the file, not the transcript: each run starts clean unless asked otherwise.
         if (spec.session === 'fresh' && conversation.session_id)
             this.store.updateConversation(conversation.id, { session_id: null })
+        // On a light-mode provider the run embodies the agent (its file is the system prompt) instead of delegating to it.
+        const light = Boolean(spec.provider && this.refs.providerLight(spec.provider))
         return this.tasks.submit(
             conversation.id,
             'cron',
-            buildPrompt(spec, body, items, trigger, { file, configRoot: this.config.paths.configRoot }, current),
-            { schedule: spec.name, model: spec.model ?? undefined }
+            buildPrompt(
+                spec,
+                body,
+                items,
+                trigger,
+                { file, configRoot: this.config.paths.configRoot, embodied: light },
+                current
+            ),
+            {
+                schedule: spec.name,
+                model: spec.model ?? undefined,
+                provider: spec.provider,
+                agent: light && spec.agent ? spec.agent : undefined
+            }
         )
     }
 }
@@ -487,7 +507,7 @@ export function buildPrompt(
     body: string,
     items: Item[],
     trigger: 'cron' | 'manual',
-    paths: { file: string; configRoot: string },
+    paths: { file: string; configRoot: string; embodied?: boolean },
     current: Item[] = items
 ): string {
     const lines: string[] = []
@@ -514,8 +534,8 @@ export function buildPrompt(
             if (h.notes) facts.push(`    ${h.notes.trim().replace(/\n/g, '\n    ')}`)
         }
     }
-    if (spec.skill) facts.push(`Skill to apply: ${spec.skill}`)
-    if (spec.agent) facts.push(`Delegate the work to the sub-agent: ${spec.agent}`)
+    if (spec.skill && !paths.embodied) facts.push(`Skill to apply: ${spec.skill}`)
+    if (spec.agent && !paths.embodied) facts.push(`Delegate the work to the sub-agent: ${spec.agent}`)
     if (spec.action)
         facts.push(
             `Mode: ${spec.action}${spec.action === 'report' ? ' (look and report; change nothing, post nothing)' : ''}`

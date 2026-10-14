@@ -16,6 +16,7 @@ const spec = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({
     hosts: [],
     skill: null,
     agent: null,
+    provider: null,
     model: null,
     action: null,
     prefilter: null,

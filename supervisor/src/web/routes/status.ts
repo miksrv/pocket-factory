@@ -68,7 +68,7 @@ export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
     app.get('/', async (c) => {
-        const { config, store, tasks, toolchains } = c.get('app')
+        const { config, store, tasks, toolchains, providers } = c.get('app')
         const workspaces = fs.existsSync(config.paths.workspacesRoot)
             ? fs
                   .readdirSync(config.paths.workspacesRoot, { withFileTypes: true })
@@ -138,7 +138,18 @@ export function statusRoutes(): Hono<Env> {
             max_concurrent_sessions: config.maxConcurrentSessions,
             workspaces,
             toolchains: toolchainHealth,
-            mcp
+            mcp,
+            // Other model providers: what runs on each now and whether the gateway's last request got through.
+            providers: tasks.providerStatus().map((p) => ({
+                name: p.name,
+                kind: p.kind,
+                running: p.running,
+                concurrency: p.concurrency,
+                light: p.light,
+                token_set: !p.token || providers.key(p) !== null,
+                ok: p.health?.ok ?? null,
+                error: p.health?.error ?? null
+            }))
         })
     })
 

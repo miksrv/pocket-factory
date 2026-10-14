@@ -61,7 +61,9 @@ export interface ScheduleSpec {
     hosts: ScheduleHost[]
     skill: string | null
     agent: string | null
-    /** CLI alias the run's orchestrator uses; null (`inherit`) = the factory's current model. */
+    /** The provider the runs go to (providers.yaml); null = the subscription. The agent file's `provider:` applies when the schedule names none. */
+    provider: string | null
+    /** CLI alias the run's orchestrator uses; null (`inherit`) = the factory's current model. On another provider: that provider's model id, null = its default. */
     model: string | null
     /** Free text handed to the agent as the mode of the run: `report`, `fix`, `comment`, … */
     action: string | null
@@ -82,6 +84,9 @@ export interface Refs {
     hostExists: (name: string) => boolean
     skillExists: (name: string) => boolean
     agentExists: (name: string) => boolean
+    providerExists: (name: string) => boolean
+    /** The `provider:` / `provider_model:` an agent file carries, for a run that embodies that agent (`model:` stays the CLI's alias). */
+    agentProvider: (name: string) => { provider: string | null; model: string | null }
 }
 
 export interface ParsedSchedule {
@@ -200,9 +205,15 @@ export function parseSchedule(entry: CatalogEntry, defaults: { tz: string }, ref
     if (skill && !refs.skillExists(skill)) warnings.push(`skill "${skill}" is not installed`)
     const agent = str(fm.agent) ?? null
     if (agent && !refs.agentExists(agent)) warnings.push(`agent "${agent}" does not exist`)
-    const modelRaw = str(fm.model)
+    // `provider:` in the file, else the agent's own; `model:` is validated only for the subscription (other providers name their own ids).
+    const own = str(fm.provider) ?? null
+    const fromAgent = agent && !own ? refs.agentProvider(agent) : null
+    const provider = own ?? fromAgent?.provider ?? null
+    if (provider && !refs.providerExists(provider))
+        errors.push(`provider "${provider}" is not in providers.yaml (Settings → Providers)`)
+    const modelRaw = str(fm.model) ?? (fromAgent?.provider ? (fromAgent.model ?? undefined) : undefined)
     const model = !modelRaw || modelRaw === 'inherit' ? null : modelRaw
-    if (model && !isModelAlias(model))
+    if (model && !provider && !isModelAlias(model))
         errors.push(`model must be inherit or one of ${MODEL_ALIASES.join(', ')} (got "${model}")`)
 
     const prefilter = parsePrefilter(fm.prefilter, errors)
@@ -234,6 +245,7 @@ export function parseSchedule(entry: CatalogEntry, defaults: { tz: string }, ref
             hosts,
             skill,
             agent,
+            provider,
             model,
             action: str(fm.action) ?? null,
             prefilter,

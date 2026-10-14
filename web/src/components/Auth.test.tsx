@@ -84,8 +84,10 @@ describe('AuthProvider', () => {
         const user = renderApp()
         expect(await screen.findByRole('heading', { name: 'Pocket Factory' })).toBeInTheDocument()
         expect(screen.queryByRole('heading', { name: 'Overview' })).not.toBeInTheDocument()
+        // Enabled while the fields are empty: Enter in a field submits only through an enabled default
+        // button, and a password manager may fill the fields without React noticing (the handler reads the form).
         const submit = screen.getByRole('button', { name: 'Sign in' })
-        expect(submit).toBeDisabled()
+        expect(submit).toBeEnabled()
         await signIn(user, 'owner', 'secret')
         expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
         expect(screen.getByText('Signed in as owner')).toBeInTheDocument()

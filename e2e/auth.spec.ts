@@ -11,14 +11,25 @@ test.describe('sign-in', () => {
         await expect(page.getByRole('navigation')).toBeHidden()
     })
 
-    test('keeps the button disabled until both fields are filled', async ({ page }) => {
+    // The button stays enabled with empty fields (a password manager may fill them without
+    // React noticing; Enter submits only through an enabled button); an empty submit sends nothing.
+    test('an empty or half-filled form does not submit', async ({ page }) => {
         await page.goto('/')
+        const logins: string[] = []
+        page.on('request', (r) => {
+            if (r.url().endsWith('/api/auth/login')) logins.push(r.method())
+        })
         const submit = page.getByRole('button', { name: 'Sign in' })
-        await expect(submit).toBeDisabled()
-        await page.getByRole('textbox', { name: 'Username' }).fill(OWNER.user)
-        await expect(submit).toBeDisabled()
-        await page.locator('input[name="password"]').fill('x')
         await expect(submit).toBeEnabled()
+        await submit.click()
+        await page.getByRole('textbox', { name: 'Username' }).fill(OWNER.user)
+        await submit.click()
+        await expect(page.getByText('Sign in to your factory.')).toBeVisible()
+        expect(logins).toEqual([])
+        await page.locator('input[name="password"]').fill(OWNER.password)
+        await submit.click()
+        await expect(page.getByRole('navigation')).toBeVisible()
+        expect(logins).toEqual(['POST'])
     })
 
     test('refuses a wrong password', async ({ page }) => {

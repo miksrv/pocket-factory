@@ -9,6 +9,7 @@ import type { Config } from '../config.js'
 import { Catalog } from '../files/catalog.js'
 import { Hosts } from '../files/hosts.js'
 import { KnownHosts } from '../files/knownHosts.js'
+import { Providers } from '../files/providers.js'
 import { Presets } from '../presets/index.js'
 import { Schedules } from '../schedules/service.js'
 import { Transcripts } from '../sessions/transcripts.js'
@@ -135,9 +136,14 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         projectPath,
         projectMcp: () => ({ declared: [], allowed: null }),
         agentMcp: () => [],
-        sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null
+        sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null,
+        agentFile: (name) =>
+            catalog.exists('agents', name) ? { body: catalog.get('agents', name).body, tools: null } : null
     }
-    const tasks = new TaskService(store, config, workspace)
+    const providers = new Providers(path.join(config.paths.configRoot, 'providers.yaml'))
+    const tasks = new TaskService(store, config, workspace, providers)
+    // The gateway's address for tasks on other providers; tests never listen, so any port.
+    tasks.setGatewayPort(8080)
     const schedules = new Schedules(store, catalog, tasks, config, {
         projectExists: (slug) => projectPath(slug) !== null,
         projectPath,
@@ -145,6 +151,9 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         hostExists: (name) => hosts.get(name) !== undefined,
         skillExists: (name) => catalog.exists('skills', name),
         agentExists: (name) => catalog.exists('agents', name),
+        providerExists: (name) => providers.get(name) !== undefined,
+        providerLight: (name) => providers.get(name)?.light ?? false,
+        agentProvider: () => ({ provider: null, model: null }),
         agentEnv: () => tasks.agentEnv()
     })
     const auth = new WebAuth(store, config.web)
@@ -161,6 +170,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         catalog,
         hosts,
         knownHosts,
+        providers,
         transcripts,
         presets: new Presets(config.presetsDir),
         schedules,

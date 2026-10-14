@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
 import { useConfirm } from '../components/Modal'
+import { ModelPicker } from '../components/Providers'
 import { Button, ErrorBox, StatusBadge, useToast } from '../components/ui'
 import {
     api,
@@ -73,6 +74,7 @@ export function SchedulesPage() {
     const projects = useAsync(() => api.list('projects'), [])
     const skills = useAsync(() => api.list('skills'), [])
     const agents = useAsync(() => api.list('agents'), [])
+    const providers = useAsync(() => api.providers(), [])
     const hosts = useAsync(() => api.hosts(), [])
     const keys = useAsync(() => api.sshKeys(), [])
     const viewOf = (name: string) => status.data?.find((s) => s.name === name)
@@ -214,18 +216,20 @@ export function SchedulesPage() {
                         </Field>
                         <Field
                             label='Model'
-                            hint="The orchestrator's model for these runs; inherit = whatever the factory runs on now (Settings, /model)."
+                            hint={
+                                str(fm.provider)
+                                    ? 'The runs go to this provider, off the subscription; in light mode the agent above is the run itself (its file is the system prompt), with no sub-agents.'
+                                    : "The orchestrator's model for these runs; inherit = whatever the factory runs on now (Settings, /model). A provider (Settings → Providers) takes the runs off the subscription."
+                            }
+                            group
+                            wide
                         >
-                            <select
-                                value={str(fm.model)}
-                                onChange={(e) => set({ model: e.target.value || undefined })}
-                            >
-                                <option value=''>inherit — the factory's current model</option>
-                                <option value='haiku'>haiku — cheapest, mechanical checks</option>
-                                <option value='sonnet'>sonnet — current Sonnet</option>
-                                <option value='opus'>opus — current Opus</option>
-                                <option value='fable'>fable — current Fable (Max plans)</option>
-                            </select>
+                            <ModelPicker
+                                provider={str(fm.provider)}
+                                model={str(fm.model)}
+                                providers={providers.data?.providers}
+                                onChange={(p, m) => set({ provider: p || undefined, model: m || undefined })}
+                            />
                         </Field>
                         <Field
                             label='Mode'
@@ -671,7 +675,11 @@ function Status({
                     >
                         {view.cron_text ?? view.cron ?? '—'}
                         {view.once ? ' · once' : ''}
-                        {view.model ? ` · ${view.model}` : ''}
+                        {view.provider
+                            ? ` · ${view.provider}${view.model ? `:${view.model}` : ''}`
+                            : view.model
+                              ? ` · ${view.model}`
+                              : ''}
                     </span>
                     <span className='small dim'>
                         {view.tz}

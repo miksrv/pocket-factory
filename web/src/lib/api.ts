@@ -55,6 +55,12 @@ export interface Task {
     ask: Ask | null
     /** The schedule that queued the task; null for the owner's own tasks. */
     schedule: string | null
+    /** CLI alias (subscription) or the provider's model id the task was queued with; null = the default at start. */
+    model: string | null
+    /** The provider the task runs on (Settings → Providers); null = the subscription. */
+    provider: string | null
+    /** The agent the task runs *as* in light mode; null = the orchestrator. */
+    agent: string | null
     /** Files the owner sent with the message; their paths reached the agent after the prompt. */
     attachments: Attachment[] | null
     /** A queued task waits for the subscription window to reset and starts after this time. */
@@ -176,6 +182,10 @@ export interface Conversation {
     title: string | null
     session_id: string | null
     project: string | null
+    /** The provider the owner picked for this conversation; null = the subscription. */
+    provider: string | null
+    /** The model on that provider (an alias for the subscription); null = the default. */
+    model: string | null
     created_at: string
     updated_at: string
     deleted_at: string | null
@@ -272,6 +282,63 @@ export interface Status {
     toolchains: ToolchainsHealth | null
     /** The MCP registry in numbers: Overview → Health. */
     mcp: { total: number; connected: number; needs_auth: string[]; failed: string[] }
+    /** Other model providers: what runs on each and whether the gateway's last request got through. */
+    providers: ProviderStatus[]
+}
+
+export interface ProviderStatus {
+    name: string
+    kind: 'anthropic' | 'openai'
+    running: number
+    concurrency: number
+    light: boolean
+    token_set: boolean
+    /** null = no request yet. */
+    ok: boolean | null
+    error: string | null
+}
+
+/** A model provider besides the subscription (`data/config/providers.yaml`): a self-hosted model or a cloud API. */
+export interface Provider {
+    name: string
+    /** `anthropic`: speaks /v1/messages itself (Ollama, vLLM, OpenRouter); `openai`: chat completions, translated by the factory. */
+    kind: 'anthropic' | 'openai'
+    url: string
+    /** Name of the .env variable with the key; empty for a local server. */
+    token?: string
+    models: string[]
+    default?: string
+    /** Where the CLI's small (haiku-tier) calls go; empty = the task's model. */
+    small?: string
+    /** Tasks at once; 0 = no limit. */
+    concurrency: number
+    /** Short system prompt and few tools instead of Claude Code's own (small models need it). */
+    light: boolean
+}
+
+export interface ProviderView extends Provider {
+    token_set: boolean
+    running: number
+    health: { requests: number; ok: boolean | null; error: string | null; at: string | null } | null
+    /** Schedules (⏱) and agents whose file names this provider. */
+    used_by: string[]
+}
+
+export interface ProvidersOverview {
+    file: string
+    providers: ProviderView[]
+    error: string | null
+    builtin: string
+}
+
+export interface ProviderTest {
+    ok: boolean
+    model: string
+    ms?: number
+    /** The model answered the probe with the tool call it was asked for; without that an agent cannot work there. */
+    tool_calling?: boolean
+    output?: string
+    error?: string
 }
 
 export interface ToolchainsHealth {
@@ -580,6 +647,8 @@ export interface ScheduleView {
     session: 'fresh' | 'continue' | null
     /** Switches itself off after queueing one task. */
     once: boolean
+    /** The provider the runs go to; null = the subscription. */
+    provider: string | null
     /** Pinned model alias for the runs; null = the factory's current one. */
     model: string | null
     next_run: string | null
@@ -866,6 +935,29 @@ export const api = {
     /** Remove a shared host; `detach` also drops it from the projects that use it (refused otherwise). */
     deleteHost: (name: string, detach = false) =>
         request<void>(`/hosts/${encodeURIComponent(name)}${detach ? '?detach=1' : ''}`, { method: 'DELETE' }),
+
+    /** Model providers besides the subscription, with each key's presence (never its value) and who uses it. */
+    providers: () => request<ProvidersOverview>('/providers'),
+    saveProvider: (name: string, provider: Omit<Provider, 'name'> & { name?: string }, create = false) =>
+        request<Provider>(`/providers/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
+            method: 'PUT',
+            body: JSON.stringify(provider)
+        }),
+    /** Refused (409) while a schedule or agent names it, unless `force`. */
+    deleteProvider: (name: string, force = false) =>
+        request<void>(`/providers/${encodeURIComponent(name)}${force ? '?force=1' : ''}`, { method: 'DELETE' }),
+    /** One tool-calling request to the endpoint: a draft from the form, or a saved provider by `{ name }`. */
+    testProvider: (provider: Partial<Provider> & { model?: string }) =>
+        request<ProviderTest>('/providers/test', { method: 'POST', body: JSON.stringify(provider) }),
+    /** The model ids the endpoint lists (`/v1/models`). */
+    providerModels: (provider: Partial<Provider>) =>
+        request<{ models: string[] }>('/providers/models', { method: 'POST', body: JSON.stringify(provider) }),
+    /** The provider and model of a conversation's next tasks (null, null = the subscription on the factory's alias). */
+    setConversationModel: (id: string, provider: string | null, model: string | null) =>
+        request<Conversation>(`/conversations/${id}/model`, {
+            method: 'PUT',
+            body: JSON.stringify({ provider, model })
+        }),
 
     schedules: () => request<ScheduleView[]>('/schedules/status'),
     /** A cron expression read back: valid or not, in words, next firing in the factory's zone. */
