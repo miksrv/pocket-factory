@@ -5,6 +5,7 @@ import { Bot, type Context, InlineKeyboard } from 'grammy'
 import { MODEL_ALIASES } from './claude/models.js'
 import type { Config } from './config.js'
 import { type Attachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './files/inbox.js'
+import { modelRef, parseModelRef } from './files/providers.js'
 import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
 import type { Schedules } from './schedules/service.js'
@@ -202,7 +203,11 @@ function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
 function footer(task: Task, limits: RateLimitSnapshot | undefined, publicUrl: string | null): string {
     const delta = task.window_5h_delta
     const share = delta === null ? null : delta < 0.01 ? 'this task <1%' : `this task +${Math.round(delta * 100)}%`
-    const windows = [limitsLine(limits), share].filter(Boolean).join(' · ')
+    // A task on another provider touches no subscription window: name the provider and the tokens instead.
+    const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
+    const windows = task.provider
+        ? `${task.provider}${task.model ? ` · ${task.model}` : ''} · ${tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : tokens} tokens, no subscription window`
+        : [limitsLine(limits), share].filter(Boolean).join(' · ')
     // What the task changed, so the phone decides from the summary; the task page has the files and the diff.
     const changed = changesLine(task.git)
     const pr = task.git?.pr
@@ -370,6 +375,7 @@ export function createBot(
                 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
                 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, and this chat switches to its thread.',
                 "/model [sonnet|opus|haiku|fable] — the orchestrator's model for every next task, in every chat",
+                '/model <provider>:<model> — this chat on another provider (Settings → Providers); /model claude comes back',
                 '/stop — cancel the running task',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)',
@@ -431,10 +437,26 @@ export function createBot(
     // One model for the whole factory, applied to the next task everywhere; sub-agents keep the `model:` of their files.
     bot.command('model', async (ctx) => {
         const alias = ctx.match.trim().toLowerCase()
+        const conversation = conversationFor(ctx)
         if (!alias) {
             await ctx.reply(
-                `Model: ${tasks.model()}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; sub-agents keep their own.`
+                `Model: ${tasks.model()}${conversation.provider ? ` · this chat: ${modelRef(conversation.provider, conversation.model)}` : ''}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; /model <provider>:<model> puts this chat on another provider; sub-agents keep their own.`
             )
+            return
+        }
+        // `provider:model` (or `claude`) is about this chat only: the factory's alias stays.
+        if (alias.includes(':') || alias === 'claude' || tasks.providerStatus().some((p) => p.name === alias)) {
+            const ref = parseModelRef(ctx.match.trim())
+            try {
+                const updated = tasks.setConversationModel(conversation.id, ref.provider, ref.model)
+                await ctx.reply(
+                    updated.provider
+                        ? `This chat runs on ${modelRef(updated.provider, updated.model)} from the next task on (fresh session there). /model claude comes back to the subscription.`
+                        : `This chat is back on the subscription (${tasks.model()}).`
+                )
+            } catch (error) {
+                await ctx.reply(`❌ ${error instanceof Error ? error.message : String(error)}`)
+            }
             return
         }
         try {
@@ -483,7 +505,9 @@ export function createBot(
                     : null,
                 `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
                 `Running: ${running}`,
-                `Model: ${tasks.model()} (/model to switch)`,
+                conversation.provider
+                    ? `Model: ${modelRef(conversation.provider, conversation.model)} for this chat (/model claude comes back; factory: ${tasks.model()})`
+                    : `Model: ${tasks.model()} (/model to switch)`,
                 `Limits: ${windows ?? 'unknown (see /usage)'}`
             ]
                 .filter(Boolean)
