@@ -12,7 +12,10 @@ const refs: Refs = {
     projectExists: known('shop'),
     hostExists: known('prod'),
     skillExists: known('pr-review'),
-    agentExists: known('reviewer')
+    agentExists: known('reviewer'),
+    providerExists: known('lookatstars'),
+    agentProvider: (name) =>
+        name === 'writer' ? { provider: 'lookatstars', model: 'gemma4:12b' } : { provider: null, model: null }
 }
 const defaults = { tz: 'Europe/Warsaw' }
 
@@ -35,6 +38,7 @@ describe('parseSchedule', () => {
             hosts: [],
             skill: null,
             agent: null,
+            provider: null,
             model: null,
             action: null,
             prefilter: null,
