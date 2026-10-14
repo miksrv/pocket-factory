@@ -157,7 +157,34 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     `.env`), TLS certs through the `docker-certs` volume, workspaces mounted at the same path,
     `DOCKER_MEMORY` (8g). On macOS Docker Desktop dind's `/var/lib/docker` must be a named volume
     (the local `docker-compose.override.yml`, untracked), on Linux the bind mount is fine
-  - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
+  - `files/providers.ts` + `gateway/` + `web/routes/providers.ts` — **Model providers** (1.3.0,
+    2026-10-14, plan and test results in `docs/plans/providers.md`): `data/config/providers.yaml`
+    lists endpoints besides the subscription (`kind: anthropic` speaks `/v1/messages` itself —
+    Ollama, vLLM, OpenRouter; `kind: openai` speaks chat completions — OpenAI, Gemini, Groq — and
+    `gateway/translate.ts` converts both ways, streaming included), each with `token` = the name
+    of the `.env` variable holding its key, `models`, `default`, `small` (the haiku tier),
+    `concurrency` (1 for one GPU, 0 = no limit) and `light`. A task's provider comes from its
+    schedule (`provider:` + `model:`), the agent it runs as (an agent file's `provider:`), or the
+    conversation (`conversations.provider` / `model`, the Chat selector or Telegram `/model
+    provider:model`; a provider change forgets the session); `tasks.provider` / `agent` record
+    it (migration v15). `TaskService.providerEnv` points the CLI at
+    `http://127.0.0.1:<port>/gateway/<name>` with a per-start bearer (`gatewayToken`) and strips
+    `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`; the gateway (mounted outside `/api`, only
+    the bearer) adds the provider's real key, so keys never reach an agent's environment
+    (`agentEnv` strips every provider's `token` variable too). **Light mode** (default for a
+    provider): `--system-prompt` = the agent file's body, else `data/claude/light-system.md`
+    (seeded from `templates/claude`), `--tools Read,Write,Edit,Bash,Glob,Grep`,
+    `--disable-slash-commands`; a schedule on such a provider *embodies* its `agent:` instead of
+    delegating (`tasks.agent`). The worker holds a queued task whose provider is at its
+    `concurrency`; `pausedUntil` (a subscription refusal) holds subscription tasks only;
+    `limitReset` / auto-continue apply to subscription tasks only; provider tasks have no window
+    share (`window_5h_delta` null) and the footer / task page name the provider and model.
+    Settings → Providers (`components/Providers.tsx`: list, dialog, **Test** = one tool-calling
+    probe straight from the supervisor, **Fetch** = `/v1/models`); `ModelPicker` is the shared
+    provider + model pair on the agent form, the schedule form and the chat head.
+    `/api/status.providers` (running, last gateway outcome). Not done: delegation from a Claude
+    orchestrator to a role on another provider (plan §4), `$` for cloud providers (owner's call)
+- `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`
     (sub-agent started / completed, from the CLI's `task_started` / `task_notification` system
     events) and `limits` events besides text / tool calls. A task's project is its conversation's
