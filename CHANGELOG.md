@@ -26,6 +26,10 @@ section (`node scripts/release.mjs tag`).
 - Each provider has its own gateway bearer: a task on one provider can no longer use another
   provider's key.
 - The gateway reports why an upstream request failed instead of a bare "fetch failed".
+- Dependencies: Vite 8 with `@vitejs/plugin-react` 6, marked 18, hono 4.13.13 and
+  `@hono/node-server` 2.1.4 (fixes a `serveStatic` path-decoding bypass, GHSA-rmxm-3fg6-px4f),
+  lucide-react 1.54; CI actions `upload-artifact` 7.0.2 and `codeql-action` 4.38.3. Dependabot no
+  longer offers `@types/node` majors: the types follow the Node the image runs (22).
 
 ### Fixed
 
