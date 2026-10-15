@@ -7,10 +7,11 @@ per-provider gateway bearer. How it works today is in `CLAUDE.md` (Model provide
 forker's guide to a GPU box is `docs/SELF_HOSTED_LLM.md`. Delegation from a Claude orchestrator
 shipped in 1.4.0 too (below). Open: the follow-ups, the owner's questions.
 
-## Small models in the CLI (tests 2026-10-14, `lookatstars`: RTX 2080 Ti 11 GB, Ollama 0.40)
+## Small models in the CLI (tests 2026-10-14)
 
-Task: keywords → sources → an SEO page for geometki.com, written to a file; search through
-SearXNG over MCP.
+Box: RTX 2080 Ti 11 GB, 14 GB RAM, Ollama 0.40 (context 65536, flash attention, KV cache q8_0).
+Task: keywords → sources → an SEO page in Russian for a travel site, written to a file; search
+through SearXNG over MCP.
 
 | Model | Fits VRAM | Default CLI prompt | Short system prompt |
 |---|---|---|---|
@@ -28,7 +29,8 @@ SearXNG over MCP.
 5. **One task at a time per GPU** (one model in VRAM, ~5 min research + ~5 min edit) →
    `concurrency: 1`.
 6. ~25 tok/s generation, 1–2k tok/s prompt processing: the cost is re-reading the growing
-   context every turn. GPU 84 °C average, 88 °C peak, 275 W.
+   context every turn. A cold first call (model load) ~2.5 min. GPU 84 °C average, 88 °C peak,
+   275 W.
 
 ## The constraint
 
@@ -59,34 +61,21 @@ per-call and idle limits (CLI 2.1.283: `timeout` per server, idle = max(default,
   the error text) runs once more on the subscription. A project without the provider in its
   `providers:` list also falls back. The fallback run gets the role's body through
   `--append-system-prompt` with "use WebSearch / WebFetch" instead of the box's search.
-- Measured 2026-10-15 (local container, haiku orchestrator, gemma4:12b role): research + 180-word
-  note on lookatstars in 29 s, 0 subscription tokens for the role; the orchestrator's brief,
-  waiting, reading and checking the file: 4 turns, ~124k tokens (mostly cache reads of its own
-  system prompt).
+- Measured 2026-10-15 (haiku orchestrator, gemma4:12b role on the box above): research + a
+  180-word note in 29 s, an article in 169 s (~391k input tokens on the box), 0 subscription
+  tokens for the role; the orchestrator's brief, waiting, reading and checking the file: 4 turns,
+  ~124k tokens (mostly cache reads of its own system prompt). A call queued behind another GPU
+  task took 12 min.
 
 Not built: an Overview figure for tokens moved off the subscription, the delegation line in the
 Telegram footer, nested children in the Audit log (the child is its own task there), parallel
 calls sharing one lent slot (a second concurrent child takes a slot of its own).
 
-## Network (owner, 2026-10-15)
+## Network
 
-No VPN and no standing tunnel to the box (a persistent link from the office network to a RU
-address is a security problem in itself). The box is reached like a cloud API: HTTPS on one
-port with a bearer, requests only while a task runs; TLS from Caddy's own CA (`tls internal`,
-no third-party DNS, no Let's Encrypt), the CA pasted into the provider form. Work-project code
-never goes to this provider; a **per-project provider allowlist** is wanted (not built).
-
-## After the 1.4.0 merge, on mikserver
-
-1. `git pull && docker compose up -d --build`.
-2. Settings → Providers → `lookatstars` → Edit: paste `/srv/llm/caddy-root.crt` as the TLS
-   certificate (fingerprint starts `C7:EA:89:7D`); MCP servers → `search`,
-   `https://<box IP>:<router port>/mcp`, `LOOKATSTARS_MCP_TOKEN`.
-3. Test: "tool calling ok" and "MCP search ok".
-4. Drop `NODE_EXTRA_CA_CERTS` from `docker-compose.override.yml` (backup first), delete
-   `data/config/certs/lookatstars-ca.crt` and `data/config/mcp.json.pending`; `docker compose up -d`.
-5. A search task in a chat on `lookatstars`; then a subscription task, and the box's Caddy log
-   (`docker compose logs --since 5m caddy` in `/srv/llm`) shows no request from it.
+No VPN and no standing tunnel to a box: it is reached like a cloud API, HTTPS on one port with a
+bearer, requests only while a task runs; TLS from the box's own CA (e.g. Caddy's `tls internal`),
+pasted into the provider form. A project delegates only to providers its file lists.
 
 ## Follow-ups
 
@@ -106,4 +95,3 @@ never goes to this provider; a **per-project provider allowlist** is wanted (not
 
 1. Money for cloud providers: `$` next to tokens, or tokens only (the "no money" rule was about
    the subscription).
-2. `nvidia-smi -pl 200` on `lookatstars`.

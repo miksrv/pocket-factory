@@ -55,10 +55,12 @@ lists what is taken from each.
 ## What it does today
 
 - **Telegram** — text and voice (Whisper on Groq) → `claude -p` in your workspaces → the reply,
-  plus the task's project and how full the 5-hour and weekly windows are. Replies continue the
-  same Claude Code session; reply to any message of the bot to switch to that conversation (a
-  schedule's report, a question); `/new [project]`, `/stop`, `/status`, `/usage`, `/model`,
-  `/schedules`, `/run <name>`. Telegram is optional: leave the token empty for a web-only factory.
+  plus the task's project and how full the 5-hour and weekly windows are. Every message starts a
+  new chat, so the last task's context costs nothing; reply to any message (a report, a question,
+  your own earlier task) to continue that chat, or `/mode thread` for one session until `/new`.
+  `/new [project]`, `/stop`, `/status`, `/usage`, `/model`, `/schedules`, `/run <name>`. New chats
+  get a short title by meaning (one Haiku call). Telegram is optional: leave the token empty for a
+  web-only factory.
 - **Photos and files** — send a screenshot, a log or a PDF with the task, from Telegram (with a
   caption, or first and then the text) or the web (paperclip, paste, drop). The agent gets the
   file's path and opens it with the Read tool, which shows images and PDFs to the model.
@@ -138,7 +140,7 @@ Then:
    Tailscale, or set `WEB_BIND=0.0.0.0` together with `WEB_AUTH_PASSWORD` behind an https proxy).
 2. **Projects → New**, or tell the bot *"connect project X"* and let the `onboard-project` skill
    write the file after inspecting the checkout.
-3. Send the bot a task: *"In astronomy-portal change photo URLs from ids to SEO slugs"*.
+3. Send the bot a task: *"In shop change product URLs from ids to SEO slugs"*.
 4. **Schedules → New** for anything recurring: a nightly PR review, a tracker poll, an inbox
    summary. Start with `action: report` and graduate it once you trust the runs.
 

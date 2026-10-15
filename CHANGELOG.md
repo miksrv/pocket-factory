@@ -40,6 +40,16 @@ section (`node scripts/release.mjs tag`).
   once, no `NODE_EXTRA_CA_CERTS`, no restart.
 - Test checks the provider's MCP servers too; a certificate failure says what to paste.
 - `docs/SELF_HOSTED_LLM.md`: the guide to a GPU box with Ollama, Caddy and a search MCP.
+- **Telegram: a new chat per message.** A message without a reply starts a fresh chat, so a
+  self-contained skill no longer drags the last task's context (and its tokens) along; a reply to
+  any message, the bot's or your own, continues that message's chat, and a reply whose chat was
+  deleted starts a new one with the replied message quoted. An open question still takes the next
+  message as its answer. `/new <project>` sets the project of the next chats, `/model
+  <provider>:<model>` their provider, `/stop` as a reply stops that chat's task. `/mode thread`
+  brings back one session until `/new`.
+- **Chat titles by meaning.** A new web or Telegram chat is named after what its first message
+  is about by one Haiku call without tools (about a thousand tokens, under a second), like Claude
+  Desktop does; `CHAT_TITLES=off` keeps the first line.
 
 ### Changed
 
@@ -78,7 +88,7 @@ section (`node scripts/release.mjs tag`).
 - **Light mode** for small models (the default on a new provider): the task runs with a short
   system prompt — the agent file's body when a schedule names an agent, else
   `data/claude/light-system.md` — and Read / Write / Edit / Bash / Glob / Grep, no skills, instead
-  of Claude Code's full prompt and tool set; measured on `lookatstars` (RTX 2080 Ti, 9–12B
+  of Claude Code's full prompt and tool set; measured on a self-hosted RTX 2080 Ti (9–12B
   models), the full prompt never reached the file, the short one did on the first try.
 - `tasks.provider` / `tasks.agent`, `conversations.provider` / `model` (migration v15);
   `/api/providers` (list, save, delete, test, models), `PUT /api/conversations/:id/model`,
@@ -250,7 +260,7 @@ Fixes from the owner's first day of real use from Telegram.
   the session) and were confused with each other; `/status` still names the current project.
 - **The footer under every Telegram reply** names the project the agent worked in instead of
   `N turns · tokens · +x% of 5h · Ns`, and the windows line carries this task's share of the
-  5-hour window: `— project: geometki` / `— windows: 5h 27% · week 50% · this task +4%`. Turns,
+  5-hour window: `— project: shop` / `— windows: 5h 27% · week 50% · this task +4%`. Turns,
   tokens and duration stay on the task page.
 - **`/status` is shorter.** Session id and the workspaces path are gone; the running task is shown
   by its first line and how long it has run (or that it is queued, or waits for an answer); the

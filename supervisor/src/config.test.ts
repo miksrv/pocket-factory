@@ -13,6 +13,7 @@ const VARS = [
     'CLAUDE_PERMISSION_MODE',
     'CLAUDE_TASK_TIMEOUT_MIN',
     'CLAUDE_AUTO_CONTINUE_HOURS',
+    'CHAT_TITLES',
     'WORKSPACES_ROOT',
     'WORKSPACES_DIR',
     'GROQ_API_KEY',
@@ -54,7 +55,8 @@ describe('loadConfig', () => {
                 maxTurns: 50,
                 permissionMode: 'acceptEdits',
                 taskTimeoutMs: 0,
-                autoContinueMs: 6 * 3_600_000
+                autoContinueMs: 6 * 3_600_000,
+                chatTitles: true
             },
             paths: {
                 dataRoot: data,

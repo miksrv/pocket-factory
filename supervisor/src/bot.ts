@@ -288,6 +288,54 @@ function askMessage(
     return { key: `${ask.request_id}:${index}`, text: lines.join('\n'), keyboard }
 }
 
+/**
+ * How a Telegram chat talks to the agent. `fresh` (default): every message
+ * without a reply starts a new chat, so a self-contained skill does not drag
+ * the last task's context along; a reply continues the chat of the message it
+ * answers. `thread`: one conversation until `/new`, a reply switches to its
+ * conversation and stays there.
+ */
+export type ChatMode = 'fresh' | 'thread'
+
+/**
+ * Where a message goes: the conversation of the message it replies to (when
+ * the bot still knows it), the chat's topic, or a new chat. A question the
+ * topic's agent waits on takes a plain message as its answer in both modes,
+ * and a topic with no task yet (right after `/new`) takes the message instead
+ * of a second empty chat.
+ */
+export function routeMessage(input: {
+    mode: ChatMode
+    replied: boolean
+    topicAsks: boolean
+    topicEmpty: boolean
+}): 'replied' | 'topic' | 'fresh' {
+    if (input.replied) return 'replied'
+    if (input.mode === 'thread' || input.topicAsks || input.topicEmpty) return 'topic'
+    return 'fresh'
+}
+
+const QUOTE_MAX = 3000
+
+/** The message a reply answers, quoted for a new chat when its own conversation is gone; null for nothing to quote. */
+export function quoteReply(text: string | undefined): string | null {
+    const body = text?.trim()
+    if (!body) return null
+    const cut = body.length > QUOTE_MAX ? `${body.slice(0, QUOTE_MAX)}…` : body
+    return ['In reply to this earlier message (its chat is gone):', ...cut.split('\n').map((line) => `> ${line}`)].join(
+        '\n'
+    )
+}
+
+const MODE_META = 'telegram.mode'
+
+/** What a new chat of a Telegram chat starts with in `fresh` mode: `/new <project>`, `/model <provider>:<model>`. */
+interface ChatDefaults {
+    project: string | null
+    provider: string | null
+    model: string | null
+}
+
 export function createBot(
     config: Config,
     tasks: TaskService,
@@ -349,8 +397,45 @@ export function createBot(
     const switchTo = (chatId: number, conversation: Conversation) => {
         if (!isTopic(chatId, conversation.id)) store.setTelegramTopic(chatId, conversation.id)
     }
+    const mode = (): ChatMode => (store.getMeta<ChatMode>(MODE_META) === 'thread' ? 'thread' : 'fresh')
     const fromWeb = (conversation: Conversation) =>
-        `💻 **${topicName(conversation)}** — from the web. This chat now continues that thread; /new comes back.`
+        mode() === 'fresh'
+            ? `💻 **${topicName(conversation)}** — from the web. Reply to this message to continue it.`
+            : `💻 **${topicName(conversation)}** — from the web. This chat now continues that thread; /new comes back.`
+    const defaultsKey = (chatId: number) => `telegram.chat.${chatId}`
+    const defaultsFor = (chatId: number): ChatDefaults => ({
+        project: null,
+        provider: null,
+        model: null,
+        ...store.getMeta<Partial<ChatDefaults>>(defaultsKey(chatId))
+    })
+    const setDefaults = (chatId: number, patch: Partial<ChatDefaults>) =>
+        store.setMeta(defaultsKey(chatId), { ...defaultsFor(chatId), ...patch })
+    /** A new conversation of the chat, made its topic: in the chat's project and on its provider, if it has them. */
+    const freshConversation = (chatId: number): Conversation => {
+        const defaults = defaultsFor(chatId)
+        const project = defaults.project && tasks.hasProject(defaults.project) ? defaults.project : null
+        let conversation = tasks.newConversation('telegram', String(chatId), null, project)
+        if (defaults.provider) {
+            try {
+                conversation = tasks.setConversationModel(conversation.id, defaults.provider, defaults.model)
+            } catch (error) {
+                log.warn(
+                    `chat ${chatId}: provider ${defaults.provider} left out: ${error instanceof Error ? error.message : String(error)}`
+                )
+            }
+        }
+        store.setTelegramTopic(chatId, conversation.id)
+        return conversation
+    }
+    /** The live conversation of the message a reply answers: a message of the bot or of the owner, while remembered. */
+    const repliedConversation = (chatId: number, replyTo: { message_id: number } | undefined): Conversation | null => {
+        const target = replyTo ? store.telegramMessage(chatId, replyTo.message_id) : undefined
+        const found = target ? store.getConversation(target.conversation_id) : undefined
+        return found && !found.deleted_at ? found : null
+    }
+    const isEmpty = (conversation: Conversation) =>
+        !store.listTasks({ conversationId: conversation.id, limit: 1 }).length
 
     // Whitelist: the bot fronts an agent with repository access, so it must
     // ignore everyone who is not the owner.
@@ -364,19 +449,29 @@ export function createBot(
     })
 
     bot.command('start', async (ctx) => {
+        const fresh = mode() === 'fresh'
         await ctx.reply(
             [
                 'Pocket Factory is online.',
                 '',
-                'Send a task as text or voice. Replies continue the same Claude Code session.',
+                fresh
+                    ? 'Send a task as text or voice. Every message starts a new chat; reply to a message (mine or yours) to continue its chat.'
+                    : 'Send a task as text or voice. Replies continue the same Claude Code session.',
                 'Photos and files go with the task: send them with a caption, or first and then the text.',
-                '/new [project] — start a fresh session; with a project name, inside its checkout',
+                fresh
+                    ? '/new [project] — new chats run inside that checkout from now on; /new alone: no project'
+                    : '/new [project] — start a fresh session; with a project name, inside its checkout',
                 "    (the repository's MCP servers, agents and rules apply then)",
-                'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
-                'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, and this chat switches to its thread.',
+                fresh
+                    ? 'A question of the agent takes your next message as the answer.'
+                    : 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
+                fresh
+                    ? 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here; reply to it to continue.'
+                    : 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, and this chat switches to its thread.',
+                `/mode ${fresh ? 'thread — one session until /new instead' : 'fresh — a new chat per message instead'}`,
                 "/model [sonnet|opus|haiku|fable] — the orchestrator's model for every next task, in every chat",
                 '/model <provider>:<model> — this chat on another provider (Settings → Providers); /model claude comes back',
-                '/stop — cancel the running task',
+                '/stop — cancel the running task (as a reply: the task of that chat)',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)',
                 '/schedules — recurring tasks and their last runs',
@@ -424,29 +519,51 @@ export function createBot(
             )
             return
         }
-        const fresh = tasks.newConversation('telegram', String(ctx.chat.id), null, project)
-        store.setTelegramTopic(ctx.chat.id, fresh.id)
+        // The project stays for the chat's next new chats too (`fresh` mode).
+        setDefaults(ctx.chat.id, { project })
+        const fresh = freshConversation(ctx.chat.id)
         pending.delete(ctx.chat.id)
-        await ctx.reply(
-            project
-                ? `Fresh session in ${project}. Next message runs from its checkout.`
-                : 'Fresh session. Next message starts from scratch.'
+        const sent = await ctx.reply(
+            mode() === 'fresh'
+                ? project
+                    ? `New chats run in ${project} from now on, from its checkout. /new alone drops the project.`
+                    : 'New chats run without a project from now on.'
+                : project
+                  ? `Fresh session in ${project}. Next message runs from its checkout.`
+                  : 'Fresh session. Next message starts from scratch.'
         )
+        remember(ctx.chat.id, sent.message_id, fresh.id)
     })
 
     // One model for the whole factory, applied to the next task everywhere; sub-agents keep the `model:` of their files.
     bot.command('model', async (ctx) => {
         const alias = ctx.match.trim().toLowerCase()
         const conversation = conversationFor(ctx)
+        const fresh = mode() === 'fresh'
+        const defaults = defaultsFor(ctx.chat.id)
+        const chatProvider = fresh ? defaults.provider : conversation.provider
+        const chatModel = fresh ? defaults.model : conversation.model
         if (!alias) {
             await ctx.reply(
-                `Model: ${tasks.model()}${conversation.provider ? ` · this chat: ${modelRef(conversation.provider, conversation.model)}` : ''}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; /model <provider>:<model> puts this chat on another provider; sub-agents keep their own.`
+                `Model: ${tasks.model()}${chatProvider ? ` · this chat: ${modelRef(chatProvider, chatModel)}` : ''}. /model <${MODEL_ALIASES.join('|')}> switches it for every next task in every chat; /model <provider>:<model> puts this chat on another provider; sub-agents keep their own.`
             )
             return
         }
         // `provider:model` (or `claude`) is about this chat only: the factory's alias stays.
         if (alias.includes(':') || alias === 'claude' || tasks.providerStatus().some((p) => p.name === alias)) {
             const ref = parseModelRef(ctx.match.trim())
+            if (fresh) {
+                // Every message is a new chat: the choice goes to the chat's new chats, the running ones keep theirs.
+                if (ref.provider && !tasks.providerStatus().some((p) => p.name === ref.provider))
+                    return void (await ctx.reply(`❌ Unknown provider "${ref.provider}" (Settings → Providers)`))
+                setDefaults(ctx.chat.id, { provider: ref.provider, model: ref.provider ? ref.model : null })
+                await ctx.reply(
+                    ref.provider
+                        ? `New chats here run on ${modelRef(ref.provider, ref.model)}. /model claude comes back to the subscription.`
+                        : `New chats here run on the subscription (${tasks.model()}).`
+                )
+                return
+            }
             try {
                 const updated = tasks.setConversationModel(conversation.id, ref.provider, ref.model)
                 await ctx.reply(
@@ -469,8 +586,21 @@ export function createBot(
         }
     })
 
+    // How messages map to chats (`ChatMode`); one setting for every chat of the bot, kept in meta.
+    bot.command('mode', async (ctx) => {
+        const wanted = ctx.match.trim().toLowerCase()
+        if (wanted === 'fresh' || wanted === 'thread') store.setMeta(MODE_META, wanted)
+        else if (wanted) return void (await ctx.reply('Usage: /mode fresh | /mode thread'))
+        await ctx.reply(
+            mode() === 'fresh'
+                ? 'Mode: fresh. Every message starts a new chat (no context of the last task); reply to a message to continue its chat. /mode thread keeps one session until /new.'
+                : 'Mode: thread. Messages continue one session until /new; a reply switches to its conversation. /mode fresh starts a new chat per message.'
+        )
+    })
+
     bot.command('stop', async (ctx) => {
-        const conversation = conversationFor(ctx)
+        // As a reply: the task of that message's chat (several chats run side by side in `fresh` mode).
+        const conversation = repliedConversation(ctx.chat.id, ctx.message?.reply_to_message) ?? conversationFor(ctx)
         // A task waiting in the queue (for a window reset, or behind a running one) is cancelled too.
         const active = tasks.activeTask(conversation.id) ?? tasks.queuedTask(conversation.id)
         if (!active) {
@@ -486,9 +616,13 @@ export function createBot(
     // conversation line is shown only when the chat was switched to another thread by a reply).
     bot.command('status', async (ctx) => {
         const conversation = conversationFor(ctx)
+        const fresh = mode() === 'fresh'
+        const defaults = defaultsFor(ctx.chat.id)
         // A topic is an override: after `/new` the chat's own (newest) conversation is the topic too.
         const switched =
-            conversation.id !== tasks.conversationFor('telegram', String(ctx.chat.id)).id ? conversation : null
+            !fresh && conversation.id !== tasks.conversationFor('telegram', String(ctx.chat.id)).id
+                ? conversation
+                : null
         const active = tasks.activeTask(conversation.id)
         const queued = active ? undefined : tasks.queuedTask(conversation.id)
         const windows = limitsLine(tasks.limits())
@@ -500,14 +634,22 @@ export function createBot(
         await ctx.reply(
             [
                 `Pocket Factory v${VERSION}`,
+                fresh
+                    ? 'Mode: a new chat per message; reply to a message to continue its chat (/mode thread: one session)'
+                    : 'Mode: one thread until /new (/mode fresh: a new chat per message)',
                 switched
                     ? `Thread: ${topicName(switched)} (switched by your reply; /new comes back to this chat)`
                     : null,
-                `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
+                fresh
+                    ? `Project of new chats: ${defaults.project ?? 'none (workspaces root)'} (/new <project> to set)`
+                    : `Project: ${conversation.project ?? 'none (workspaces root)'} (/new <project> starts a fresh one there)`,
+                fresh ? `Last chat: ${topicName(conversation)}` : null,
                 `Running: ${running}`,
-                conversation.provider
-                    ? `Model: ${modelRef(conversation.provider, conversation.model)} for this chat (/model claude comes back; factory: ${tasks.model()})`
-                    : `Model: ${tasks.model()} (/model to switch)`,
+                fresh && defaults.provider
+                    ? `Model: ${modelRef(defaults.provider, defaults.model)} for new chats (/model claude comes back; factory: ${tasks.model()})`
+                    : !fresh && conversation.provider
+                      ? `Model: ${modelRef(conversation.provider, conversation.model)} for this chat (/model claude comes back; factory: ${tasks.model()})`
+                      : `Model: ${tasks.model()} (/model to switch)`,
                 `Limits: ${windows ?? 'unknown (see /usage)'}`
             ]
                 .filter(Boolean)
@@ -549,35 +691,53 @@ export function createBot(
         await ctx.reply(`Unknown command ${ctx.message.text.split(/\s/)[0]}. See /start.`)
     })
 
-    // A reply to a message of the bot switches the chat to that message's
-    // conversation (a schedule's thread, an older session) and stays there;
-    // then, while the agent waits for an answer, the message is the answer
-    // (see TaskService.submit), otherwise it is the next task.
+    // A reply to a message (the bot's or the owner's own) goes to that message's conversation
+    // (a schedule's thread, an older chat) and makes it the chat's topic. Otherwise the mode
+    // decides (`routeMessage`): `fresh` starts a new chat, `thread` stays in the topic. While
+    // the agent waits for an answer, the message is the answer (see TaskService.submit).
     const submit = async (ctx: Context, prompt: string, attachments: Attachment[] = []) => {
         const chatId = ctx.chat!.id
         // Files sent a moment ago without a caption go with this message.
         attachments = [...takePending(chatId), ...attachments]
-        let conversation = conversationFor(ctx)
-        let switched: Conversation | null = null
+        const topic = conversationFor(ctx)
         const replyTo = ctx.message?.reply_to_message
-        const target = replyTo?.from?.id === ctx.me.id ? store.telegramMessage(chatId, replyTo.message_id) : undefined
-        if (target && target.conversation_id !== conversation.id) {
-            const found = store.getConversation(target.conversation_id)
-            if (found && !found.deleted_at) {
-                store.setTelegramTopic(chatId, found.id)
-                conversation = found
-                switched = found
-            }
+        const replied = repliedConversation(chatId, replyTo)
+        const route = routeMessage({
+            mode: mode(),
+            replied: Boolean(replied),
+            topicAsks: Boolean(tasks.pendingAsk(topic.id)),
+            topicEmpty: isEmpty(topic)
+        })
+        let conversation = topic
+        if (replied) {
+            if (replied.id !== topic.id) store.setTelegramTopic(chatId, replied.id)
+            conversation = replied
+        } else if (route === 'fresh') {
+            conversation = freshConversation(chatId)
+            // A reply whose chat is gone (deleted, or older than the bot remembers) brings the message it answers.
+            const quoted = replyTo ? quoteReply(replyTo.text ?? replyTo.caption) : null
+            if (quoted) prompt = `${quoted}\n\n${prompt}`
         }
+        const switched = replied && replied.id !== topic.id ? replied : null
+        const first = isEmpty(conversation)
         const answering = Boolean(tasks.pendingAsk(conversation.id))
         const waits = !answering && tasks.willWait(conversation.id)
         const task = tasks.submit(conversation.id, 'telegram', prompt, { attachments })
         const head = switched ? `↪️ ${topicName(switched)} · ` : ''
         const files = attachments.length ? ` 📎 ${attachments.length}` : ''
-        const sent = await ctx.reply(
-            `${head}${answering ? '↩️ Passed on, continuing…' : waits ? '⏳ Queued…' : conversation.session_id ? '▶️ Continuing…' : '▶️ Working…'}${files}`
-        )
+        const state = answering
+            ? '↩️ Passed on, continuing…'
+            : waits
+              ? '⏳ Queued…'
+              : first && mode() === 'fresh'
+                ? `▶️ New chat${conversation.project ? ` in ${conversation.project}` : ''}…`
+                : conversation.session_id
+                  ? '▶️ Continuing…'
+                  : '▶️ Working…'
+        const sent = await ctx.reply(`${head}${state}${files}`)
         remember(chatId, sent.message_id, conversation.id, task.id)
+        // The owner's own message too: a reply to it later continues this chat.
+        if (ctx.message) remember(chatId, ctx.message.message_id, conversation.id, task.id)
     }
 
     // Buttons under a question or a permission request. The data names the

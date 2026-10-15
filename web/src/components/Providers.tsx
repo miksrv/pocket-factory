@@ -397,7 +397,7 @@ export function ProviderDialog({
                         <input
                             value={p.name}
                             autoFocus
-                            placeholder='lookatstars'
+                            placeholder='gpu-box'
                             onChange={(e) => set({ name: e.target.value })}
                         />
                         <span className='dim'>used in files as provider: name, and as provider:model</span>

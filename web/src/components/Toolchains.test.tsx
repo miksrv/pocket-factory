@@ -27,11 +27,11 @@ const OVERVIEW: ToolchainsOverview = {
                 tool: 'node',
                 version: '20.11.0',
                 install_path: '/data/tools/mise/installs/node/20.11.0',
-                source: '/data/workspaces/geometki/client/.nvmrc',
+                source: '/data/workspaces/shop/client/.nvmrc',
                 active: false,
                 size_kb: 60_000,
                 used_by: [],
-                asked_by: 'geometki/client/.nvmrc'
+                asked_by: 'shop/client/.nvmrc'
             }
         ],
         error: null
@@ -46,14 +46,14 @@ const OVERVIEW: ToolchainsOverview = {
         containers: [
             {
                 id: 'abc',
-                name: 'geometki-db-1',
+                name: 'shop-db-1',
                 image: 'mysql:8',
                 state: 'running',
                 status: 'Up 3 minutes',
                 ports: '3306/tcp',
                 created: '',
-                compose: { working_dir: '/data/workspaces/geometki', project: 'geometki', service: 'db' },
-                project: 'geometki'
+                compose: { working_dir: '/data/workspaces/shop', project: 'shop', service: 'db' },
+                project: 'shop'
             }
         ],
         disk: [{ type: 'Images', total: 3, active: 1, size: '1.2GB', reclaimable: '800MB (66%)' }]
@@ -61,8 +61,8 @@ const OVERVIEW: ToolchainsOverview = {
 }
 
 const PROJECT: ProjectToolchain = {
-    slug: 'geometki',
-    path: '/data/workspaces/geometki',
+    slug: 'shop',
+    path: '/data/workspaces/shop',
     tools: [
         {
             tool: 'php',
@@ -98,11 +98,11 @@ describe('ToolchainsSection', () => {
         expect(screen.getByText(/mise 2026\.10\.6 · 2 versions in/)).toBeInTheDocument()
         expect(screen.getByText('go 1.25.1')).toBeInTheDocument()
         expect(screen.getByText(/244\.1 MB · user-management, tenant-management/)).toBeInTheDocument()
-        expect(screen.getByText(/asked by geometki\/client\/\.nvmrc/)).toBeInTheDocument()
-        expect(screen.getByText(/mysql:8 · Up 3 minutes · geometki/)).toBeInTheDocument()
+        expect(screen.getByText(/asked by shop\/client\/\.nvmrc/)).toBeInTheDocument()
+        expect(screen.getByText(/mysql:8 · Up 3 minutes · shop/)).toBeInTheDocument()
         expect(screen.getByText(/PHP 8\.2\.34/)).toBeInTheDocument()
         expect(screen.getByText(/dind 29\.9\.0 at/)).toBeInTheDocument()
-        expect(screen.getByText('geometki-db-1')).toBeInTheDocument()
+        expect(screen.getByText('shop-db-1')).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
     })
 
@@ -154,10 +154,10 @@ describe('ProjectToolchainField', () => {
 
     it('shows the needs with a badge each and installs a missing one', async () => {
         const fetch = mockFetch({
-            'GET /api/toolchains/projects/geometki': PROJECT,
+            'GET /api/toolchains/projects/shop': PROJECT,
             'POST /api/toolchains/install': { installed: 'node@20.11.0' }
         })
-        renderWithProviders(<ProjectToolchainField slug='geometki' />)
+        renderWithProviders(<ProjectToolchainField slug='shop' />)
         expect(await screen.findByText('php')).toBeInTheDocument()
         expect(screen.getByText('in the image (8.2.34)')).toBeInTheDocument()
         expect(screen.getByText('missing')).toBeInTheDocument()

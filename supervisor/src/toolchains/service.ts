@@ -16,7 +16,7 @@ export interface ToolVersion extends MiseInstall {
     size_kb: number | null
     /** Project slugs whose checkout resolves to this version. */
     used_by: string[]
-    /** `source` relative to the workspaces root when it lies there ("geometki/client/.nvmrc"). */
+    /** `source` relative to the workspaces root when it lies there ("shop/client/.nvmrc"). */
     asked_by: string | null
 }
 

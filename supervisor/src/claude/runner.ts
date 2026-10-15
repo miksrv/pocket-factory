@@ -124,6 +124,8 @@ export interface RunOptions {
     appendSystemPrompt?: string
     /** Only the servers of `mcpConfig` (`--strict-mcp-config`): no connectors, plugins or project servers. */
     strictMcp?: boolean
+    /** Nothing written to disk (`--no-session-persistence`): a side call (a chat's title) leaves no session behind. */
+    noSessionPersistence?: boolean
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -310,6 +312,7 @@ export function runClaude(options: RunOptions): RunHandle {
     }
     if (options.appendSystemPrompt) args.push('--append-system-prompt', options.appendSystemPrompt)
     if (options.strictMcp) args.push('--strict-mcp-config')
+    if (options.noSessionPersistence) args.push('--no-session-persistence')
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 

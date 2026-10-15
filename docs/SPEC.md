@@ -33,7 +33,7 @@ A thin **supervisor** turns messages from Telegram (text, voice, files), the web
 - Telegram as the primary human channel (text, voice, files in; questions and reports out, only the essentials); a web UI for chat, observability and administration.
 - Tasks from Telegram, the web and cron schedules with deterministic prefilters.
 - Human-in-the-loop inside the same run; corrections persisted by the agent into its own files.
-- A one-shot run per task, resumed by the next message; `/new` starts fresh, `/stop` cancels.
+- A one-shot run per task. In Telegram every message starts a new chat and a reply resumes the chat it answers (`/mode thread`: the next message resumes, `/new` starts fresh); in the web the next message in a thread resumes it; `/stop` cancels.
 
 ### Non-Goals
 
@@ -48,7 +48,7 @@ Multi-tenant or team use (single owner, whitelisted Telegram ids); enterprise RB
 - **UC-3 — GitHub review request.** A `github-prs` schedule polls without a public endpoint; a new PR or push runs `pr-review` with read-only tools.
 - **UC-4 — Trac defect monitor.** A `trac` prefilter finds new or changed tickets (zero tokens otherwise); reproduce read-only over SSH or from code, fix, review, PR.
 - **UC-5 / UC-6 / UC-7 — The factory edits itself.** "Create an agent that triages my inbox", `onboard-project` writing a project file after an interview, "remember: always update CHANGELOG" — the agent writes the files, the owner reviews them in the UI and the Audit log.
-- **UC-8 — Ending a session.** Nothing to end: a run exits with its report, the next message resumes it, `/new` starts fresh.
+- **UC-8 — Ending a session.** Nothing to end: a run exits with its report; a reply (or the next message in a web thread) resumes it, a plain Telegram message starts fresh.
 - **UC-9 — Bulk work off the subscription.** Keyword research or an SEO article runs on a self-hosted or cloud provider, so the windows stay for coding.
 
 ---
@@ -105,13 +105,13 @@ A schedule is a Markdown file, `data/config/schedules/<name>.md`, not a table ro
 ---
 cron: "0 9-18 * * 1-5"             # five fields, read in TIMEZONE from .env
 enabled: true
-project: GlobalNavigation          # or hosts: [{ host, path, notes }]
+project: billing          # or hosts: [{ host, path, notes }]
 skill: tracker-defect-fix          # optional; agent: hands the work to a sub-agent
 model: inherit                     # or a CLI alias; provider: for another backend
 action: report                     # the mode the agent gets: report | fix | comment …
 prefilter:                         # optional, runs without the model
   kind: trac                       # command | github-prs | trac
-  query: "status=new&component=GlobalNavigation"
+  query: "status=new&component=billing"
 notify: telegram                   # or none
 session: fresh                     # or continue
 first_run: skip                    # a poller starts from now

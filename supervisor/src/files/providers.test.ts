@@ -18,16 +18,16 @@ describe('parseModelRef', () => {
         ['claude-opus-5-5', null, 'claude-opus-5-5'],
         ['claude:opus', null, 'opus'],
         ['claude', null, null],
-        ['lookatstars', null, 'lookatstars'],
-        ['lookatstars:gemma4:12b', 'lookatstars', 'gemma4:12b'],
+        ['gpu-box', null, 'gpu-box'],
+        ['gpu-box:gemma4:12b', 'gpu-box', 'gemma4:12b'],
         [' gemini : gemini-2.5-pro ', 'gemini', 'gemini-2.5-pro']
     ])('%j → provider %j, model %j', (ref, provider, model) => {
         expect(parseModelRef(ref)).toEqual({ provider, model })
     })
 
     it('round-trips through modelRef', () => {
-        expect(modelRef('lookatstars', 'gemma4:12b')).toBe('lookatstars:gemma4:12b')
-        expect(modelRef('lookatstars', null)).toBe('lookatstars')
+        expect(modelRef('gpu-box', 'gemma4:12b')).toBe('gpu-box:gemma4:12b')
+        expect(modelRef('gpu-box', null)).toBe('gpu-box')
         expect(modelRef(null, 'opus')).toBe('opus')
         expect(modelRef(null, null)).toBeNull()
     })
@@ -45,13 +45,13 @@ describe('Providers', () => {
 
     it('starts empty and saves a provider with defaults filled in', () => {
         expect(providers.all()).toEqual([])
-        const saved = providers.save('lookatstars', {
+        const saved = providers.save('gpu-box', {
             url: 'http://10.77.0.1:11434/',
             models: ['gemma4:12b', 'qwen3.5:9b'],
             concurrency: 1
         })
         expect(saved).toEqual({
-            name: 'lookatstars',
+            name: 'gpu-box',
             kind: 'anthropic',
             url: 'http://10.77.0.1:11434',
             models: ['gemma4:12b', 'qwen3.5:9b'],
@@ -62,7 +62,7 @@ describe('Providers', () => {
             providers: unknown[]
         }
         expect(onDisk.providers).toHaveLength(1)
-        expect(providers.get('lookatstars')?.models).toEqual(['gemma4:12b', 'qwen3.5:9b'])
+        expect(providers.get('gpu-box')?.models).toEqual(['gemma4:12b', 'qwen3.5:9b'])
     })
 
     it('keeps the key out of the file and reads it from the environment', () => {

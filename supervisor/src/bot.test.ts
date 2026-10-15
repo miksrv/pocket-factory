@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunk, scheduleNotice } from './bot.js'
+import { chunk, quoteReply, routeMessage, scheduleNotice } from './bot.js'
 import type { ScheduleSpec } from './schedules/spec.js'
 import type { ScheduleRun } from './store/index.js'
 
@@ -107,5 +107,47 @@ describe('scheduleNotice', () => {
         expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toBeNull()
         expect(scheduleNotice(run('queued', null), spec(), seen, 'UTC')).toBeNull()
         expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
+    })
+})
+
+describe('routeMessage', () => {
+    const plain = { replied: false, topicAsks: false, topicEmpty: false }
+
+    it('starts a new chat for every plain message in fresh mode', () => {
+        expect(routeMessage({ mode: 'fresh', ...plain })).toBe('fresh')
+    })
+
+    it('stays in the topic in thread mode', () => {
+        expect(routeMessage({ mode: 'thread', ...plain })).toBe('topic')
+    })
+
+    it('continues the chat a reply answers, in both modes', () => {
+        expect(routeMessage({ mode: 'fresh', ...plain, replied: true })).toBe('replied')
+        expect(routeMessage({ mode: 'thread', ...plain, replied: true })).toBe('replied')
+    })
+
+    it('hands a plain message to the question the topic waits on', () => {
+        expect(routeMessage({ mode: 'fresh', ...plain, topicAsks: true })).toBe('topic')
+    })
+
+    it('fills the empty chat /new made instead of opening another one', () => {
+        expect(routeMessage({ mode: 'fresh', ...plain, topicEmpty: true })).toBe('topic')
+    })
+})
+
+describe('quoteReply', () => {
+    it('quotes every line of the message replied to', () => {
+        expect(quoteReply('Article ready\nhttps://geometki.com/places/1')).toBe(
+            'In reply to this earlier message (its chat is gone):\n> Article ready\n> https://geometki.com/places/1'
+        )
+    })
+
+    it('has nothing to quote for a message without text', () => {
+        expect(quoteReply(undefined)).toBeNull()
+        expect(quoteReply('  ')).toBeNull()
+    })
+
+    it('cuts a long message', () => {
+        expect(quoteReply('x'.repeat(5000))!.length).toBeLessThan(3100)
     })
 })

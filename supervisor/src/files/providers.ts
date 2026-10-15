@@ -115,7 +115,7 @@ const HEADER = `# Model providers besides the Claude subscription (edited in Set
 /**
  * `provider:model` → both parts; a bare alias or model id is the subscription's.
  * Ollama model ids carry a colon themselves (`qwen3.5:9b`), so the split is at the
- * first one: `lookatstars:qwen3.5:9b`.
+ * first one: `gpu-box:qwen3.5:9b`.
  */
 export function parseModelRef(ref: string | null | undefined): { provider: string | null; model: string | null } {
     const text = (ref ?? '').trim()

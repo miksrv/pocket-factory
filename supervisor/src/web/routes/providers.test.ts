@@ -25,7 +25,7 @@ describe('providers', () => {
 
         vi.stubEnv('LOOK_TOKEN', '')
         const saved = await put(
-            'lookatstars',
+            'gpu-box',
             { url: 'http://10.77.0.1:11434', models: ['gemma4:12b'], token: 'LOOK_TOKEN', concurrency: 1 },
             true
         )
@@ -34,14 +34,14 @@ describe('providers', () => {
             providers: Array<{ name: string; token_set: boolean; running: number; used_by: string[]; light: boolean }>
         }
         expect(list.providers).toEqual([
-            expect.objectContaining({ name: 'lookatstars', token_set: false, running: 0, used_by: [], light: true })
+            expect.objectContaining({ name: 'gpu-box', token_set: false, running: 0, used_by: [], light: true })
         ])
         // A second create under the same name is refused; an edit is not.
-        expect((await put('lookatstars', { url: 'http://x', models: ['m'] }, true)).status).toBe(409)
-        expect((await put('lookatstars', { url: 'http://x', models: ['m'] })).status).toBe(200)
+        expect((await put('gpu-box', { url: 'http://x', models: ['m'] }, true)).status).toBe(409)
+        expect((await put('gpu-box', { url: 'http://x', models: ['m'] })).status).toBe(200)
         // The status route carries the provider for the Overview.
         const status = (await (await t.request('/api/status')).json()) as { providers: Array<{ name: string }> }
-        expect(status.providers.map((p) => p.name)).toEqual(['lookatstars'])
+        expect(status.providers.map((p) => p.name)).toEqual(['gpu-box'])
     })
 
     it('refuses bad input with 400 and a reason', async () => {

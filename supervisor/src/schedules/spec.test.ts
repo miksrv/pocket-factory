@@ -13,9 +13,9 @@ const refs: Refs = {
     hostExists: known('prod'),
     skillExists: known('pr-review'),
     agentExists: known('reviewer'),
-    providerExists: known('lookatstars'),
+    providerExists: known('gpu-box'),
     agentProvider: (name) =>
-        name === 'writer' ? { provider: 'lookatstars', model: 'gemma4:12b' } : { provider: null, model: null }
+        name === 'writer' ? { provider: 'gpu-box', model: 'gemma4:12b' } : { provider: null, model: null }
 }
 const defaults = { tz: 'Europe/Warsaw' }
 

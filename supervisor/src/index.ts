@@ -206,7 +206,8 @@ async function main(): Promise<void> {
         // Registers the command menu in Telegram, so the client autocompletes them.
         await bot.api.setMyCommands([
             { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
-            { command: 'stop', description: 'Cancel the running task' },
+            { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
+            { command: 'mode', description: 'A new chat per message, or one thread: /mode fresh|thread' },
             { command: 'status', description: 'What is going on' },
             { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },
             { command: 'schedules', description: 'Recurring tasks and their last runs' },

@@ -59,7 +59,7 @@ describe('DockerSidecar', () => {
     })
 
     it('reads the daemon version, the containers with their compose labels and the disk usage', async () => {
-        ps(line('aaa', 'db', 'running', '/data/workspaces/geometki'), line('bbb', 'scratch', 'exited'))
+        ps(line('aaa', 'db', 'running', '/data/workspaces/shop'), line('bbb', 'scratch', 'exited'))
         const info = await docker.info()
         expect(info).toMatchObject({ enabled: true, reachable: true, version: '29.9.0', error: null })
         expect(info.containers).toEqual([
@@ -67,7 +67,7 @@ describe('DockerSidecar', () => {
                 id: 'aaa',
                 name: 'db',
                 state: 'running',
-                compose: { working_dir: '/data/workspaces/geometki', project: 'geometki', service: 'db' }
+                compose: { working_dir: '/data/workspaces/shop', project: 'shop', service: 'db' }
             }),
             expect.objectContaining({ id: 'bbb', compose: { working_dir: null, project: null, service: null } })
         ])
@@ -83,7 +83,7 @@ describe('DockerSidecar', () => {
         expect(before).toEqual(new Set(['old']))
         ps(
             line('old', 'mosquitto', 'running'),
-            line('new1', 'db', 'running', '/data/workspaces/geometki'),
+            line('new1', 'db', 'running', '/data/workspaces/shop'),
             line('new2', 'redis', 'running', '/data/workspaces/other'),
             line('new3', 'gone', 'exited')
         )

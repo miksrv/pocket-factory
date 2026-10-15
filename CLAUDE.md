@@ -157,7 +157,9 @@ version, `node scripts/release.mjs bump <x.y.z>`, fill the new section, and the 
 existing tag or an empty section). Never tag a branch; never tag before the merge.
 
 Commits: the owner decides when to commit — never commit unprompted. No `Co-Authored-By` lines,
-no "Generated with" in PR bodies.
+no "Generated with" in PR bodies. A commit subject starts with what changed, capitalised, never with
+the branch or release (`Delegation in CLAUDE.md, the README and the providers plan`, not
+`release 1.4.0: delegation in …`).
 
 ## Decisions already made (don't re-open)
 
@@ -168,8 +170,8 @@ no "Generated with" in PR bodies.
 - Auth = a full claude.ai login **inside the container**:
   `docker compose run --rm -it -e CLAUDE_CODE_OAUTH_TOKEN= supervisor claude auth login` prints a
   URL, the code is pasted back, `data/claude/.credentials.json` gets the `user:mcp_servers` /
-  `user:profile` / `user:plugins` scopes. That brings the **claude.ai connectors** (Gmail, ClickUp,
-  ferret with Trac, Drive, …) and synced plugins into every `-p` session, deferred behind
+  `user:profile` / `user:plugins` scopes. That brings the **claude.ai connectors** (Gmail, Drive,
+  ClickUp, …) and synced plugins into every `-p` session, deferred behind
   ToolSearch. `CLAUDE_CODE_OAUTH_TOKEN` in `.env` must stay empty: a setup-token takes precedence
   and cannot fetch connectors; it stays only as a fallback for CI-like runs. On a macOS host the
   CLI uses the Keychain, not `CLAUDE_CONFIG_DIR`, so connectors and MCP sign-ins must be tested
@@ -258,9 +260,9 @@ no "Generated with" in PR bodies.
   mid-run, or is not in the project file's `providers:` list → the role runs on the subscription
   with the orchestrator's model (`fallback:` alias, or `none` to report instead). Owner's rule:
   a dead box must never break the task.
-- No money for providers yet (owner's open call). Work-project code never goes to the self-hosted
-  box in Russia (`lookatstars`): a project delegates only to providers its file lists;
-  `docs/SELF_HOSTED_LLM.md` is the forker's guide to such a box.
+- No money for providers yet (owner's open call). A project delegates only to providers its file
+  lists, so code that must not leave for a given box never does; `docs/SELF_HOSTED_LLM.md` is the
+  forker's guide to such a box.
 
 ### MCP
 
@@ -291,11 +293,22 @@ no "Generated with" in PR bodies.
 ### Telegram
 
 - Optional (`TELEGRAM_BOT_TOKEN` empty = web-only). Unknown `/commands` never reach the agent.
-- **Topics**: a chat talks to one conversation at a time (`telegram_chats`): its own by default,
-  or any conversation the owner switched to by replying to a bot message (`telegram_messages`
-  remembers which conversation and task each sent message belongs to, 180 days). The switch
-  sticks until the next reply elsewhere or `/new [project]`; `/status` names it. A question from
-  a task that is not the chat's topic says "reply to this message".
+- **A new chat per message** (`/mode fresh`, the default since 1.4.0, `meta` `telegram.mode`):
+  a message without a reply starts a new conversation, because the owner's skills are
+  self-contained and an old session only costs tokens. A reply to any remembered message (the
+  bot's or the owner's own; `telegram_messages`, 180 days) continues that conversation; a reply
+  whose conversation is gone starts a new one with the replied text quoted. The chat's **topic**
+  (`telegram_chats`) is the last conversation touched: an open question there takes a plain
+  message as its answer, a topic with no task yet (after `/new`) takes the next message, `/stop`
+  and `/status` act on it (`/stop` as a reply: that chat). `/new <project>` and `/model
+  <provider>:<model>` set the chat's defaults for new chats (`meta` `telegram.chat.<id>`).
+  `/mode thread` is the old behaviour: one conversation until `/new`, a reply switches and sticks.
+  A question from a task that is not the topic says "reply to this message".
+- **Chat titles**: a new web / Telegram chat on the subscription is named by one Haiku call
+  (`TaskService.nameConversation`: `--system-prompt`, `--tools ""`, `--strict-mcp-config`,
+  `--no-session-persistence`, ~1k tokens), one at a time; the first line stays as the title until
+  then, on failure, or when the owner renamed it. `CHAT_TITLES=off` turns it off; tests and e2e
+  run with it off.
 - The footer names the task's project and the windows with the task's share, not turns / tokens
   (those stay on the task page). The bot marks a conversation read only once delivery succeeded.
 
@@ -371,16 +384,12 @@ no "Generated with" in PR bodies.
 
 ## Next
 
-1. Onboard the remaining work repositories (MCP sign-ins through Settings → MCP).
-2. Email assistant: first real draft from Telegram on the Gmail connector.
-3. Schedules: Trac credentials in `.env` (whether `/login` is needed is unverified), the owner's
-   answers on PR scope and mail cadence; an IMAP prefilter.
-4. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
+1. Schedules: an IMAP prefilter; whether the Trac prefilter needs `/login` is unverified.
+2. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
    `POST /api/tasks/fire`, "continue in chat" for a laptop session, Merge from the UI, files back
    to the chat, budgets per agent / project, audit export.
-5. Providers: put the geometki article writer on `lookatstars` (a `geometki-writer` role + the
-   skill's "delegate, then check and publish" step); tokens moved off the subscription on the
-   Overview, the delegation line in Telegram, the 1.3.0 review follow-ups (`docs/plans/providers.md`).
-6. Toolchains: a weekly prune schedule, `data/docker` size in Health, toolchains in `/status`.
-7. Hardening: backups of `data/`, README for forkers, `useBlocker` for browser back, one shared
+3. Providers: tokens moved off the subscription on the Overview, the delegation line in Telegram,
+   the 1.3.0 review follow-ups (`docs/plans/providers.md`).
+4. Toolchains: a weekly prune schedule, `data/docker` size in Health, toolchains in `/status`.
+5. Hardening: backups of `data/`, README for forkers, `useBlocker` for browser back, one shared
    status poll, CodeMirror.

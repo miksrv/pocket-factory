@@ -57,7 +57,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"OK","sessi
 exit 0
 `
 
-/** The defaults of `loadConfig()` on an empty environment, rooted in `dataRoot`. */
+/** The defaults of `loadConfig()` on an empty environment, rooted in `dataRoot`; chat titles stay the first line (no side call to the fake CLI). */
 export function testConfig(dataRoot: string): Config {
     return {
         telegram: { botToken: undefined, allowedUserIds: new Set(), webNotifyAfterMs: 2 * 60_000 },
@@ -66,7 +66,8 @@ export function testConfig(dataRoot: string): Config {
             maxTurns: 50,
             permissionMode: 'acceptEdits',
             taskTimeoutMs: 0,
-            autoContinueMs: 6 * 3_600_000
+            autoContinueMs: 6 * 3_600_000,
+            chatTitles: false
         },
         paths: {
             dataRoot,

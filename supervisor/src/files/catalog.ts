@@ -68,7 +68,7 @@ export class Catalog {
                 return entry.isFile() && entry.name.endsWith('.md') ? [entry.name.slice(0, -3)] : []
             })
             .filter((name) => NAME.test(name))
-            // Alphabetical regardless of case: "developer" next to "Explore", "miksoft.pro" before "TenantManagement".
+            // Alphabetical regardless of case: "developer" next to "Explore", "my.site" before "Shop".
             .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
         return names.flatMap((name) => {
             try {
