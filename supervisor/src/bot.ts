@@ -204,7 +204,7 @@ function footer(task: Task, limits: RateLimitSnapshot | undefined, publicUrl: st
     const delta = task.window_5h_delta
     const share = delta === null ? null : delta < 0.01 ? 'this task <1%' : `this task +${Math.round(delta * 100)}%`
     // A task on another provider touches no subscription window: name the provider and the tokens instead.
-    const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
+    const tokens = task.input_tokens + task.output_tokens + task.cache_creation_tokens
     const windows = task.provider
         ? `${task.provider}${task.model ? ` · ${task.model}` : ''} · ${tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : tokens} tokens, no subscription window`
         : [limitsLine(limits), share].filter(Boolean).join(' · ')

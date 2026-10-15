@@ -31,7 +31,7 @@ export interface Ask {
 export interface Task {
     id: string
     conversation_id: string
-    source: 'telegram' | 'web' | 'cron' | 'webhook'
+    source: 'telegram' | 'web' | 'cron' | 'webhook' | 'delegate'
     prompt: string
     status: TaskStatus
     session_id: string | null
@@ -63,6 +63,8 @@ export interface Task {
     agent: string | null
     /** Files the owner sent with the message; their paths reached the agent after the prompt. */
     attachments: Attachment[] | null
+    /** The task whose orchestrator delegated this one to a role on another model; null otherwise. */
+    parent_id: string | null
     /** A queued task waits for the subscription window to reset and starts after this time. */
     not_before: string | null
     /** How many times the task went back to the queue to wait for a window reset. */
@@ -253,11 +255,44 @@ export interface RateLimits {
     seven_day: RateLimitWindow | null
 }
 
+/** Tokens of one backend (the subscription or a provider), today and ever. */
+export interface BackendUsage {
+    tasks_today: number
+    tokens_today: number
+    tokens_total: number
+    /** Roles an orchestrator delegated to it. */
+    delegated_total: number
+    last_task_at: string | null
+}
+
+export interface ProviderOverview extends BackendUsage {
+    name: string
+    kind: 'anthropic' | 'openai'
+    url: string
+    /** The model its tasks get by default. */
+    model: string | null
+    concurrency: number
+    running: number
+    /** The last reachability check (refreshed in the background about once a minute); null before the first. */
+    reach: { at: string; error: string | null } | null
+    /** The last model call the gateway forwarded to it since the factory started. */
+    last_request: { at: string; ok: boolean | null; error: string | null } | null
+}
+
+/** Every backend the tasks run on, for the Overview. */
+export interface ModelsOverview {
+    subscription: BackendUsage & { model: string }
+    providers: ProviderOverview[]
+    /** Providers no longer in providers.yaml whose tasks still count. */
+    removed: Array<{ name: string; tokens_today: number; tokens_total: number }>
+}
+
 export interface Status {
     /** The factory's own version (root `package.json`, see CHANGELOG.md). */
     version: string
     stats: Stats
     running: string[]
+    models: ModelsOverview
     limits: RateLimits | null
     claude: {
         version: string | null
@@ -806,7 +841,8 @@ export const api = {
         return request<Task[]>(`/tasks${qs ? `?${qs}` : ''}`)
     },
     taskProjects: () => request<string[]>('/tasks/projects'),
-    task: (id: string) => request<Task & { events: TaskEvent[]; conversation: Conversation }>(`/tasks/${id}`),
+    task: (id: string) =>
+        request<Task & { events: TaskEvent[]; conversation: Conversation; children: Task[] }>(`/tasks/${id}`),
     stopTask: (id: string) => request<{ stopped: boolean }>(`/tasks/${id}/stop`, { method: 'POST' }),
     taskChanges: (id: string) =>
         request<{ git: TaskGit; files: ChangedFile[]; pr: PullRequest | null }>(`/tasks/${id}/changes`),
@@ -1045,10 +1081,17 @@ export function streamConversation(
     }
 }
 
-/** Every token the task sent or received, cache included — what the subscription meters. */
-export const taskTokens = (
-    t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'>
-) => t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens
+/**
+ * The tokens the task sent, wrote to the cache and generated. Cache reads are recorded (the task
+ * page lists them) but left out: every model call re-reads the whole context, so they would be
+ * ~95 % of the figure. The store's `FRESH_TOKENS` counts the same way.
+ */
+export const taskTokens = (t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_creation_tokens'>) =>
+    t.input_tokens + t.output_tokens + t.cache_creation_tokens
+
+/** The same for an event's payload (`llm`: `tokens` + `cacheReadTokens`, a finished `status`: `tokens` + `cache_read_tokens`). */
+export const eventTokens = (p: Record<string, unknown>) =>
+    Number(p.tokens ?? 0) - Number(p.cacheReadTokens ?? p.cache_read_tokens ?? 0)
 
 /** A finished task's recorded wall-clock; a running one is timed from its start, so the figure moves between polls. */
 export const taskDuration = (t: Pick<Task, 'status' | 'started_at' | 'duration_ms'>, now = Date.now()) =>

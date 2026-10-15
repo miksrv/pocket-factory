@@ -25,6 +25,16 @@ const ALIASES: Array<{ value: string; label: string }> = [
     { value: 'fable', label: 'fable — current Fable (Max plans)' }
 ]
 
+/** What runs a provider-bound role when its provider cannot (`fallback:`). */
+const FALLBACKS: Array<{ value: string; label: string }> = [
+    { value: 'inherit', label: "the orchestrator's model" },
+    { value: 'sonnet', label: 'sonnet' },
+    { value: 'opus', label: 'opus' },
+    { value: 'haiku', label: 'haiku' },
+    { value: 'fable', label: 'fable' },
+    { value: 'none', label: 'nothing — report that it did not run' }
+]
+
 const splitTools = (value: string) =>
     value
         .split(',')
@@ -413,7 +423,7 @@ function AgentEditor() {
                             label='Model'
                             hint={
                                 provider
-                                    ? 'A task that runs as this agent (a schedule naming it) goes to this provider in light mode: the body below is its whole system prompt. Sub-agents of a Claude task stay on Claude.'
+                                    ? 'A role on another model: a Claude orchestrator hands it work with the delegate tool (never as its own sub-agent), and a schedule naming it runs on this provider. In light mode the body below is its whole system prompt.'
                                     : 'An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file. A provider (Settings → Providers) takes the role off the subscription for schedules that name it.'
                             }
                             group
@@ -431,6 +441,28 @@ function AgentEditor() {
                                 }
                             />
                         </Field>
+                        {provider && (
+                            <Field
+                                label='When the provider is unavailable'
+                                hint="The box does not answer, fails mid-run, or the task's project does not allow it: the role runs on the subscription instead, or the orchestrator hears that it did not run."
+                            >
+                                <select
+                                    value={str(fm.fallback) || 'inherit'}
+                                    onChange={(e) =>
+                                        set({ fallback: e.target.value === 'inherit' ? undefined : e.target.value })
+                                    }
+                                >
+                                    {FALLBACKS.map((f) => (
+                                        <option
+                                            key={f.value}
+                                            value={f.value}
+                                        >
+                                            {f.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
+                        )}
                         <Field
                             label='Description — when the dispatcher should use this agent'
                             hint='Claude Code matches tasks to agents by this text. Be specific.'

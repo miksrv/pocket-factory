@@ -10,6 +10,7 @@ import { secureHeaders } from 'hono/secure-headers'
 
 import { BadName, NotFound } from '../files/catalog.js'
 import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
+import { factoryRoutes } from '../gateway/factory.js'
 import { gatewayRoutes } from '../gateway/routes.js'
 import { createLogger } from '../logger.js'
 import { ACTIVE_HEADER, SESSION_COOKIE } from './auth.js'
@@ -63,6 +64,8 @@ export function createApp(app: AppContext): Hono<Env> {
     // per-start bearer, nothing else applies (no cookie, no Host guard, bodies as large as a
     // conversation with images).
     hono.route('/gateway', gatewayRoutes())
+    // The factory's MCP server for orchestrators (`delegate`): per-task bearer, same reasoning.
+    hono.route('/factory', factoryRoutes())
 
     // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
     // An uploaded file (a photo, a log) gets Telegram's own ceiling instead.

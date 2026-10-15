@@ -13,6 +13,26 @@ section (`node scripts/release.mjs tag`).
 
 ### Added
 
+- **Delegation to other models.** An agent file with a `provider:` is now a role a Claude
+  orchestrator hands work to: the factory's own MCP tool `delegate` runs the role as a task of its
+  own on that provider (light mode, its search included), in a work directory under the chat, and
+  answers the orchestrator with the role's report and files. The orchestrator waits without
+  spending tokens and lends the role its session slot; the CLI's Agent tool refuses such roles so
+  they never run on Claude by mistake. A role has nobody to ask: its question is answered at once
+  ("decide by the brief"). A role queued behind other work still gets its parent's slot, the same
+  brief after the role's own failure runs again, and deleting a chat takes its roles' hidden
+  conversations with it. The chat shows a "Delegated to …" card, the task page lists
+  the delegated tasks, the Tasks list marks them.
+- When a role's provider does not answer, fails mid-run, or the task's project does not allow it,
+  the role runs on the orchestrator's model instead (or the alias in `fallback:`; `fallback: none`
+  reports that it did not run). Agents → the form's "When the provider is unavailable".
+- Overview → **Providers** (shown once a provider is added): the subscription and every provider
+  in one card, each with whether it answers now (a cheap check about once a minute, never a model
+  call), its load and its tokens today and in all; the foot says how much work the providers took
+  off the subscription and how many roles were delegated. Control plane counts the tokens of every
+  model.
+- Projects → "Providers this project may delegate to" (`providers:` in the project file): a
+  project's work reaches a provider only when it is ticked there.
 - A provider's own MCP servers (Settings → Providers → MCP servers: name, URL, key variable): only
   the tasks on that provider get them, through the factory's gateway, which adds the key; a
   subscription task never connects to the provider's box.
@@ -23,6 +43,9 @@ section (`node scripts/release.mjs tag`).
 
 ### Changed
 
+- Token figures (Overview, task pages, Agents, Audit, Telegram) leave out cache reads: every model
+  call re-reads the whole context, so they were ~95 % of the number. They are still recorded and
+  listed on the task page; old tasks show the new figure at once.
 - Each provider has its own gateway bearer: a task on one provider can no longer use another
   provider's key.
 - The gateway reports why an upstream request failed instead of a bare "fetch failed".
@@ -33,6 +56,8 @@ section (`node scripts/release.mjs tag`).
 
 ### Fixed
 
+- Stopping the supervisor waits for each run to write its end (changes, result) before the
+  database closes, instead of only for the CLI processes.
 - Enter on the sign-in page signs in from either field (or moves to the empty one), and the
   provider dialog's TLS certificate and MCP server rows no longer overlap.
 

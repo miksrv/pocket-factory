@@ -651,6 +651,15 @@ a.stat:hover .value {
 }
 /* One line of a card: a health check, a connected server. Rows draw their own bottom border, so the
    last one, and the one a .card-foot (which draws its top border) follows, must not: the line would double. */
+/* The Overview's Models card: a fixed name column so the states line up. */
+.models-card .card-row {
+    flex-wrap: wrap;
+}
+.models-card .model-name {
+    width: 170px;
+    flex: none;
+    font-weight: 600;
+}
 .card-row {
     display: flex;
     align-items: center;
@@ -2543,6 +2552,17 @@ dialog.modal[open]::backdrop {
     }
 }
 /* Tool calls of a turn fold into one block. */
+/* A role handed to another model: one line in the thread, its own task one click away. */
+.delegate-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    font-size: 12.5px;
+}
 .steps {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);

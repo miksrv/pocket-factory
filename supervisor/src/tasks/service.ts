@@ -17,7 +17,7 @@ import {
 } from '../claude/runner.js'
 import type { Config } from '../config.js'
 import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
-import { type Provider, type Providers } from '../files/providers.js'
+import { fetchError, type Provider, type Providers } from '../files/providers.js'
 import {
     type ChangedFile,
     createPullRequest,
@@ -61,6 +61,21 @@ export interface Workspace {
     sessionWorkspace: (sessionId: string) => string | null
     /** An agent file's body (its system prompt) and `tools:` list, for a task that runs *as* that agent in light mode; null when there is no such file. */
     agentFile: (name: string) => { body: string; tools: string[] | null } | null
+    /** Agent files with `provider:`: the roles an orchestrator hands work to through `delegate`. */
+    delegates: () => DelegateAgent[]
+    /** The providers a project's file allows its tasks to delegate to (`providers:`); null = none named. */
+    projectProviders: (slug: string) => string[] | null
+}
+
+/** A role that runs on another provider, as its agent file describes it. */
+export interface DelegateAgent {
+    name: string
+    description: string
+    provider: string
+    /** The provider's model id (`provider_model:`); null = the provider's default. */
+    model: string | null
+    /** What runs the role when its provider cannot: `inherit` (the orchestrator's model), a CLI alias, or `none` (report the failure). */
+    fallback: string
 }
 
 /** Claude Code names a session's directory after its cwd with every non-alphanumeric character as "-". */
@@ -104,6 +119,28 @@ const LIGHT_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']
 
 /** The light-mode system prompt when `data/claude/light-system.md` (seeded from templates/claude) is missing. */
 const LIGHT_SYSTEM_PROMPT = `You are an autonomous agent working alone on a task nobody is watching. Every turn is a tool call: a reply without one ends the task. Save results to files with Write (the path the task names), never into the reply, and finish with a reply of three lines at most once the file is saved. State only what you read; never invent facts.`
+
+/** The factory's own MCP server in a session (`mcp__factory__delegate`). */
+export const FACTORY_MCP = 'factory'
+
+/** The CLI's limit on one `delegate` call (per-server `timeout`, which lifts its idle limit too). */
+const DELEGATE_CALL_TIMEOUT_MS = 3 * 60 * 60_000
+
+/** How often a waiting `delegate` call tells the CLI how the role goes (MCP progress), which also keeps the stream busy. */
+const DELEGATE_PROGRESS_MS = 30_000
+
+/** How long a provider's reachability answer holds, and how long the check may take. */
+const REACH_CACHE_MS = 60_000
+const REACH_TIMEOUT_MS = 10_000
+
+/** What a `delegate` call ends with. */
+export interface DelegateOutcome {
+    ok: boolean
+    /** The tool's answer to the orchestrator. */
+    text: string
+    /** The task that ran the role; absent when nothing ran. */
+    task?: Task
+}
 
 /** The liveness of a provider as the gateway last saw it. */
 export interface ProviderHealth {
@@ -295,6 +332,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** The factory's Docker daemon (the dind sidecar, when the compose profile is on): a task's containers are stopped at its end. */
     docker = new DockerSidecar()
     private readonly running = new Map<string, RunHandle>()
+    /** Every `run` in flight, to its end: the CLI exits before the run has measured the changes and written the result. */
+    private readonly runs = new Set<Promise<void>>()
     /** The provider each running task is on (null = the subscription), for the per-provider limit. */
     private readonly runningOn = new Map<string, string | null>()
     /** What the gateway bearers derive from; new every start. */
@@ -302,6 +341,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** Where the CLI reaches the gateway: the configured port from the start (a task re-queued at boot runs before the server listens), confirmed by `setGatewayPort`. */
     private gatewayBase: string
     private readonly health = new Map<string, ProviderHealth>()
+    /** The last reachability check per provider (`reachable`): when, and what was wrong (null = it answered). */
+    private readonly reach = new Map<string, { at: number; error: string | null }>()
+    private readonly reaching = new Map<string, Promise<string | null>>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
     /** Tasks found `running` at startup and failed by the store (restart limit reached); announced once a listener can deliver. */
@@ -444,6 +486,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }))
     }
 
+    /**
+     * Whether a provider answered the last reachability check (`reachable`), for the Overview: the
+     * answer on hand at once, a fresh check in the background when it is older than a minute, so a
+     * dead box never stalls the status poll. Null until the first check comes back.
+     */
+    providerReach(provider: Provider): { at: string; error: string | null } | null {
+        const known = this.reach.get(provider.name)
+        if (!known || Date.now() - known.at >= REACH_CACHE_MS) void this.reachable(provider)
+        return known ? { at: new Date(known.at).toISOString(), error: known.error } : null
+    }
+
     /** The gateway reports every forwarded request's outcome here. */
     noteProvider(name: string, ok: boolean, error: string | null = null): void {
         const current = this.health.get(name) ?? { name, requests: 0, ok: null, error: null, at: null }
@@ -453,6 +506,24 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** Where the web server listens, so the CLI's `ANTHROPIC_BASE_URL` can point at the gateway on it. */
     setGatewayPort(port: number): void {
         this.gatewayBase = `http://127.0.0.1:${port}/gateway`
+    }
+
+    /** Session slots in use: every running task, but a parent and the one role it waits for share a slot. */
+    private slotsTaken(): number {
+        let n = 0
+        const parents = new Set<string>()
+        for (const id of this.running.keys()) {
+            const parent = this.store.getTask(id)?.parent_id
+            if (parent && this.running.has(parent) && !parents.has(parent)) parents.add(parent)
+            else n++
+        }
+        return n
+    }
+
+    /** Whether a running role of this parent already holds its lent slot. */
+    private borrowing(parentId: string): boolean {
+        for (const id of this.running.keys()) if (this.store.getTask(id)?.parent_id === parentId) return true
+        return false
     }
 
     private runningCount(provider: string | null): number {
@@ -875,23 +946,28 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * session slot for days because nobody answered: after
      * `SCHEDULES_ASK_TIMEOUT_MIN` a permission is denied and a question gets
      * "no answer", and the agent decides by the file's instructions.
+     * A delegated role (`role`) has nobody to ask at all (its conversation is hidden, Telegram
+     * never hears of it, and its parent waits): its question is answered at once.
      */
-    private answerLater(taskId: string, ask: Ask): void {
-        const ms = this.config.schedules.askTimeoutMs
-        if (ms <= 0) return
+    private answerLater(taskId: string, ask: Ask, role = false): void {
+        const ms = role ? 0 : this.config.schedules.askTimeoutMs
+        if (!role && ms <= 0) return
         const minutes = Math.round(ms / 60_000)
         const timer = setTimeout(() => {
             const task = this.store.getTask(taskId)
             if (!task || task.status !== 'running' || task.ask?.request_id !== ask.request_id) return
-            const reason = `no answer from the owner within ${minutes} min`
+            const reason = role
+                ? 'a delegated role has nobody to ask'
+                : `no answer from the owner within ${minutes} min`
+            const guide = role ? "the orchestrator's brief" : "the schedule's instructions"
             try {
                 if (ask.kind === 'permission')
                     this.answer(taskId, {
                         behavior: 'deny',
-                        message: `${reason}; the scheduled run goes on without it, or reports what it needed and stops`
+                        message: `${reason}; the ${role ? 'role' : 'scheduled run'} goes on without it, or reports what it needed and stops`
                     })
                 else {
-                    const text = `(${reason}: decide by the schedule's instructions, or report what you needed and stop)`
+                    const text = `(${reason}: decide by ${guide}, or report what you needed and stop)`
                     this.answer(taskId, {
                         answers: Object.fromEntries(openQuestions(task.ask).map((q) => [q.question, text]))
                     })
@@ -903,7 +979,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                         note: `${ask.kind} answered for the owner: ${reason}`
                     })
                 )
-                log.warn(`${taskId}: ${ask.kind} ${ask.tool_name} answered by the timeout (${minutes} min)`)
+                log.warn(`${taskId}: ${ask.kind} ${ask.tool_name} answered for the owner: ${reason}`)
             } catch (error) {
                 log.warn(
                     `${taskId}: could not settle the ${ask.kind} by the timeout: ${error instanceof Error ? error.message : String(error)}`
@@ -915,7 +991,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     /** Whether a task submitted now waits: this conversation is busy or queued, or every session slot is taken. */
     willWait(conversationId: string): boolean {
-        if (this.running.size >= this.config.maxConcurrentSessions) return true
+        if (this.slotsTaken() >= this.config.maxConcurrentSessions) return true
         return (
             this.store.listTasks({ conversationId, status: 'running', limit: 1 }).length > 0 ||
             this.store.listTasks({ conversationId, status: 'queued', limit: 1 }).length > 0
@@ -927,6 +1003,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     stop(taskId: string): boolean {
+        this.stopChildren(taskId)
         const handle = this.running.get(taskId)
         if (handle) {
             this.stopRequested.add(taskId)
@@ -952,6 +1029,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.logins.close()
         for (const handle of this.running.values()) handle.kill()
         await Promise.allSettled([...this.running.values()].map((handle) => handle.result))
+        // And what the runs do after their CLI is gone (a stopped task's changes and result), before the store closes.
+        await Promise.allSettled([...this.runs])
     }
 
     /** Directory names under the workspaces root, refreshed at most once a minute. */
@@ -1118,6 +1197,298 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         })
     }
 
+    // ---- delegation --------------------------------------------------------
+
+    /** The roles an orchestrator may delegate: agent files with `provider:`. */
+    delegates(): DelegateAgent[] {
+        return this.workspace.delegates()
+    }
+
+    /**
+     * The bearer of a task's own MCP endpoint (`/factory/<task>/mcp`, the `delegate` tool): it opens
+     * that task's endpoint only, so an agent cannot delegate in another task's name.
+     */
+    factoryToken(taskId: string): string {
+        return createHmac('sha256', this.gatewaySecret).update(`factory:${taskId}`).digest('hex')
+    }
+
+    /** `--mcp-config` (a JSON string) for the factory's own server, pointed at the task's endpoint. */
+    private factoryMcpConfig(taskId: string): string {
+        return JSON.stringify({
+            mcpServers: {
+                [FACTORY_MCP]: {
+                    type: 'http',
+                    url: `${this.gatewayBase.replace(/\/gateway$/, '/factory')}/${taskId}/mcp`,
+                    headers: { Authorization: `Bearer ${this.factoryToken(taskId)}` },
+                    // A delegated role may read pages for a quarter of an hour on a slow GPU; the CLI's
+                    // default per-call limit (and its idle limit) would give up on it long before.
+                    timeout: DELEGATE_CALL_TIMEOUT_MS
+                }
+            }
+        })
+    }
+
+    /** What the orchestrator is told about its delegated roles (`--append-system-prompt`). */
+    private delegationPrompt(agents: DelegateAgent[]): string {
+        return [
+            `# Roles on other models`,
+            `These agents run on other models, outside this session. Call them only with the \`mcp__${FACTORY_MCP}__delegate\` tool (load it with ToolSearch if it is deferred), never with the Agent tool, which refuses them:`,
+            ...agents.map((a) => `- ${a.name}${a.description ? `: ${a.description}` : ''}`),
+            `Give the role a self-contained brief and the paths of the files it needs, not their contents. It saves its results in the work directory the tool returns; read them from there. Its facts are less reliable than yours: check what matters before it goes anywhere.`
+        ].join('\n')
+    }
+
+    /** The work directory of a delegated task: under its parent conversation's inbox, so it goes with that chat. */
+    delegateDir(child: Task): string {
+        const parent = child.parent_id ? this.store.getTask(child.parent_id) : undefined
+        return path.join(this.inbox.root, parent?.conversation_id ?? child.conversation_id, 'delegate', child.id)
+    }
+
+    /**
+     * Whether a provider answers at all: any HTTP status below 500 on its models route within ten
+     * seconds. Cheap on purpose: it must not load a model into a GPU (a cold start takes minutes).
+     * A failure is remembered for a minute so a burst of delegations does not wait ten seconds each.
+     */
+    async reachable(provider: Provider): Promise<string | null> {
+        const known = this.reach.get(provider.name)
+        if (known && Date.now() - known.at < REACH_CACHE_MS) return known.error
+        // One check at a time per provider: the Overview polls every few seconds while a dead box takes ten.
+        const pending = this.reaching.get(provider.name)
+        if (pending) return pending
+        const check = this.checkReach(provider).finally(() => this.reaching.delete(provider.name))
+        this.reaching.set(provider.name, check)
+        return check
+    }
+
+    private async checkReach(provider: Provider): Promise<string | null> {
+        const key = this.providers.key(provider)
+        let error: string | null = null
+        try {
+            const response = await fetch(`${provider.url}${provider.kind === 'openai' ? '/models' : '/v1/models'}`, {
+                headers: key ? { authorization: `Bearer ${key}`, 'x-api-key': key } : {},
+                signal: AbortSignal.timeout(REACH_TIMEOUT_MS)
+            })
+            await response.body?.cancel()
+            if (response.status >= 500) error = `${provider.name} answered ${response.status}`
+        } catch (e) {
+            error = `${provider.name} unreachable: ${fetchError(e)}`
+        }
+        this.reach.set(provider.name, { at: Date.now(), error })
+        if (error) this.noteProvider(provider.name, false, error)
+        return error
+    }
+
+    /**
+     * Why a delegated task cannot run on its role's provider, or null when it can: the provider is
+     * gone from providers.yaml, the parent's project does not allow it, or it does not answer.
+     */
+    private async unavailable(agent: DelegateAgent, project: string | null): Promise<string | null> {
+        const provider = this.providers.get(agent.provider)
+        if (!provider) return `provider "${agent.provider}" is not in providers.yaml`
+        if (project) {
+            const allowed = this.workspace.projectProviders(project) ?? []
+            if (!allowed.includes(provider.name))
+                return `project ${project} does not allow provider ${provider.name} (\`providers:\` in its project file)`
+        }
+        return this.reachable(provider)
+    }
+
+    /**
+     * A failed run on a provider that failed because the provider did (connection, TLS, a 5xx from
+     * the box, the gateway's own report since the run started), not because of what the model did.
+     */
+    private providerFailed(task: Task): boolean {
+        if (!task.provider || task.status !== 'failed') return false
+        const health = this.health.get(task.provider)
+        if (health?.ok === false && health.at && task.started_at && health.at >= task.started_at) return true
+        return /unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|fetch failed|certificate|socket hang up|API Error: 5\d\d|overloaded/i.test(
+            task.error ?? ''
+        )
+    }
+
+    /**
+     * The orchestrator of a running task hands `prompt` to the role `agent` (the `delegate` tool).
+     * The role runs as a task of its own on its provider, in a hidden conversation, from a work
+     * directory under the parent's chat; it borrows the parent's session slot. When the provider
+     * cannot take it (gone, not allowed for the project, not answering, or failing mid-run), the role
+     * runs on the subscription with the orchestrator's model instead, unless its file says
+     * `fallback: none`. A call repeated with the same role and prompt (the parent resumed after a
+     * restart) joins the task already made. Resolves when the role is done; `progress` hears how it goes.
+     */
+    async delegate(
+        parentId: string,
+        request: { agent: string; prompt: string; files?: string[] },
+        progress?: (note: string) => void
+    ): Promise<DelegateOutcome> {
+        const parent = this.store.getTask(parentId)
+        if (!parent || parent.status !== 'running') throw new Error('the delegating task is not running')
+        if (parent.provider || parent.parent_id) throw new Error('only an orchestrator on the subscription delegates')
+        const agent = this.delegates().find((a) => a.name === request.agent)
+        if (!agent)
+            throw new Error(
+                `no role "${request.agent}" to delegate to; the roles are: ${
+                    this.delegates()
+                        .map((a) => a.name)
+                        .join(', ') || 'none (an agent file with `provider:` makes one)'
+                }`
+            )
+        const files = (request.files ?? []).map((f) => f.trim()).filter(Boolean)
+        const prompt = files.length
+            ? `${request.prompt.trim()}\n\n[Files from the orchestrator; open them with Read:]\n${files.map((f) => `- ${f}`).join('\n')}`
+            : request.prompt.trim()
+        if (!prompt) throw new Error('the brief is empty')
+
+        // The same brief again (the parent's session resumed after a restart): join what is there. A
+        // role that failed by itself is not joined: the orchestrator asking again means "try again".
+        let child =
+            this.store
+                .childTasks(parentId)
+                .reverse()
+                .find(
+                    (c) =>
+                        c.agent === agent.name &&
+                        c.prompt === prompt &&
+                        c.status !== 'cancelled' &&
+                        (c.status !== 'failed' || this.providerFailed(c))
+                ) ?? null
+        let fellBack: string | null = null
+        if (!child || (child.status === 'failed' && this.providerFailed(child))) {
+            const reason = child
+                ? `${child.provider} failed: ${child.error ?? 'no result'}`
+                : await this.unavailable(agent, parent.project)
+            // The reachability check may take seconds: the parent may have been stopped meanwhile.
+            if (this.store.getTask(parentId)?.status !== 'running')
+                throw new Error('the delegating task is not running')
+            if (reason && agent.fallback === 'none')
+                return { ok: false, text: `${agent.name} did not run: ${reason} (its file says \`fallback: none\`).` }
+            fellBack = reason
+            child = this.queueDelegated(parent, agent, prompt, reason)
+        }
+        child = await this.settled(child.id, progress)
+        // The provider failed under the role: once more on the subscription.
+        if (!fellBack && agent.fallback !== 'none' && this.providerFailed(child) && !this.stopRequested.has(parentId)) {
+            fellBack = `${child.provider} failed mid-run: ${child.error ?? 'no result'}`
+            progress?.(`${agent.name}: ${fellBack}; running on the orchestrator's model instead`)
+            child = await this.settled(this.queueDelegated(parent, agent, prompt, fellBack).id, progress)
+        }
+        return this.outcome(child, agent, fellBack)
+    }
+
+    /** Queue the role's task: on its provider, or (with the reason it cannot) on the subscription. */
+    private queueDelegated(parent: Task, agent: DelegateAgent, prompt: string, fallback: string | null): Task {
+        const conversation = this.store.createConversation(
+            'delegate',
+            parent.id,
+            `${agent.name}: ${titleFrom(prompt)}`,
+            parent.project
+        )
+        const model = fallback
+            ? isModelAlias(agent.fallback)
+                ? agent.fallback
+                : (parent.model ?? this.model())
+            : agent.model
+        const task = this.store.createTask(
+            conversation.id,
+            'delegate',
+            prompt,
+            parent.project,
+            null,
+            model,
+            null,
+            fallback ? null : agent.provider,
+            agent.name,
+            parent.id
+        )
+        const on = fallback ? `the subscription · ${model} (${fallback})` : `${agent.provider} · ${model ?? 'default'}`
+        this.emit(
+            'event',
+            this.store.addEvent(parent.id, 'status', {
+                status: 'running',
+                note: `delegated to ${agent.name} on ${on}`,
+                delegate: { task_id: task.id, agent: agent.name, provider: task.provider, model, fallback }
+            })
+        )
+        log.info(`${parent.id} delegated ${task.id} to ${agent.name} on ${on}`)
+        this.emit('task', task)
+        queueMicrotask(() => this.tick())
+        return task
+    }
+
+    /** Resolves with the task once it is done, failed or cancelled; `progress` hears about it every half minute meanwhile. */
+    private settled(taskId: string, progress?: (note: string) => void): Promise<Task> {
+        return new Promise((resolve) => {
+            const done = (task: Task) =>
+                task.status === 'done' || task.status === 'failed' || task.status === 'cancelled'
+            const current = this.store.getTask(taskId)
+            if (!current || done(current)) return resolve(current!)
+            const startedAt = Date.now()
+            const timer = setInterval(() => {
+                const task = this.store.getTask(taskId)
+                if (!task) return
+                const minutes = Math.round((Date.now() - startedAt) / 60_000)
+                progress?.(
+                    `${task.agent}: ${task.status}${task.provider ? ` on ${task.provider}` : ''}, ${task.num_turns} turns, ${minutes} min`
+                )
+            }, DELEGATE_PROGRESS_MS)
+            const onTask = (task: Task) => {
+                if (task.id !== taskId || !done(task)) return
+                clearInterval(timer)
+                this.off('task', onTask)
+                resolve(task)
+            }
+            this.on('task', onTask)
+        })
+    }
+
+    /** What the `delegate` tool answers: how the role ended, where it ran, its files and its report. */
+    private outcome(child: Task, agent: DelegateAgent, fellBack: string | null): DelegateOutcome {
+        const dir = this.delegateDir(child)
+        let files: string[] = []
+        try {
+            files = fs
+                .readdirSync(dir, { withFileTypes: true })
+                .filter((e) => e.isFile())
+                .map((e) => `${e.name} (${fs.statSync(path.join(dir, e.name)).size} bytes)`)
+        } catch {
+            // the role saved nothing
+        }
+        const where = child.provider
+            ? `${child.provider} · ${child.model ?? 'default'}`
+            : `the subscription · ${child.model ?? this.model()}`
+        // A role behind other work on a one-GPU box waits in the queue first: say so, the run time alone misleads.
+        const queued = child.started_at ? (Date.parse(child.started_at) - Date.parse(child.created_at)) / 1000 : 0
+        const lines = [
+            `${agent.name} ${child.status === 'done' ? 'finished' : child.status} on ${where} in ${Math.round(child.duration_ms / 1000)} s${queued >= 5 ? `, after ${Math.round(queued)} s in the queue` : ''} (task ${child.id}).`,
+            ...(fellBack ? [`Not on ${agent.provider}: ${fellBack}.`] : []),
+            `Work directory: ${dir}`,
+            files.length ? `Files: ${files.join(', ')}` : 'Files: none',
+            '',
+            child.status === 'done'
+                ? (child.result ?? '').trim() || '(no report)'
+                : `Error: ${child.error ?? 'no result'}`
+        ]
+        return { ok: child.status === 'done', text: lines.join('\n'), task: child }
+    }
+
+    /**
+     * A delegated role outside light mode (a provider with `light: false`, or the subscription when its
+     * provider could not take it): the role's agent file on top of the CLI's own prompt.
+     */
+    private roleBrief(task: Task, onProvider: boolean): string | undefined {
+        const body = task.agent ? this.workspace.agentFile(task.agent)?.body.trim() : ''
+        if (!body) return undefined
+        return [
+            `# Your role: ${task.agent}`,
+            ...(onProvider
+                ? []
+                : [
+                      `This role normally runs on another model, which could not take the task, so you run it. Where its instructions name tools you do not have (a search server), use WebSearch and WebFetch instead.`
+                  ]),
+            '',
+            body
+        ].join('\n')
+    }
+
     /** The system prompt and tool set of a light-mode task: its agent file's, else the factory's generic one. */
     private lightOptions(task: Task): { systemPrompt: string; tools: string[] } {
         const agent = task.agent ? this.workspace.agentFile(task.agent) : null
@@ -1222,7 +1593,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.ticking = true
         try {
             for (const task of this.store.nextQueuedTasks()) {
-                if (this.running.size >= this.config.maxConcurrentSessions) break
+                // A task waiting for the role it delegated lends that role its slot.
+                const lent = task.parent_id && this.running.has(task.parent_id) && !this.borrowing(task.parent_id)
+                // Not `break`: a role queued behind a full house must still reach its parent's slot,
+                // or parents that hold every slot wait for roles that never start.
+                if (!lent && this.slotsTaken() >= this.config.maxConcurrentSessions) continue
                 // The subscription refused a run: its tasks wait for the reset; other providers go on.
                 if (!task.provider && Date.now() < this.pausedUntil) continue
                 if (
@@ -1242,7 +1617,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     )
                         continue
                 }
-                void this.run(task)
+                const run = this.run(task).finally(() => this.runs.delete(run))
+                this.runs.add(run)
             }
         } finally {
             this.ticking = false
@@ -1275,13 +1651,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const conversation = this.store.getConversation(task.conversation_id)!
         let cwd: string
         try {
-            cwd = this.cwdFor(conversation)
+            // A delegated role works in a directory of its own; the orchestrator reads its files there.
+            if (task.parent_id) {
+                cwd = this.delegateDir(task)
+                fs.mkdirSync(cwd, { recursive: true })
+            } else cwd = this.cwdFor(conversation)
         } catch (error) {
             this.finish(task.id, { status: 'failed', error: error instanceof Error ? error.message : String(error) })
             return
         }
         // Where a project's task starts in its checkout, once (a resume after a restart or a window reset keeps the first).
-        if (conversation.project && !this.store.getTask(task.id)?.git) {
+        if (conversation.project && !task.parent_id && !this.store.getTask(task.id)?.git) {
             const start = snapshotSync(cwd)
             if (start) this.store.updateTask(task.id, { git: { start_head: start.head, start_branch: start.branch } })
         }
@@ -1339,6 +1719,24 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const model = provider ? (task.model ?? provider.default ?? provider.models[0]) : (task.model ?? this.model())
         const light = provider?.light ? this.lightOptions(task) : null
         const env = provider ? this.providerEnv(provider, model) : this.agentEnv()
+        // An orchestrator on the subscription may hand roles to other providers (`delegate`); the
+        // roles themselves never reach the CLI's Agent tool, which would run them on Claude.
+        const delegates = this.delegates()
+        const offersDelegate = !provider && !task.parent_id && delegates.length > 0
+        const settings = this.sessionSettings(conversation.project)
+        if (delegates.length && !light) {
+            const permissions = (settings.permissions ?? {}) as { allow?: string[]; deny?: string[] }
+            settings.permissions = {
+                ...permissions,
+                ...(offersDelegate ? { allow: [...(permissions.allow ?? []), `mcp__${FACTORY_MCP}`] } : {}),
+                deny: [...(permissions.deny ?? []), ...delegates.map((a) => `Agent(${a.name})`)]
+            }
+        }
+        const appendSystemPrompt = offersDelegate
+            ? this.delegationPrompt(delegates)
+            : task.parent_id && !light
+              ? this.roleBrief(task, Boolean(provider))
+              : undefined
         if (provider)
             this.emit(
                 'event',
@@ -1357,16 +1755,24 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
         const handle = runClaude({
             // The paths of the files sent with the message follow the owner's text; the task row keeps the text alone.
-            prompt: task.prompt + attachmentNote(task.attachments ?? []),
+            prompt:
+                task.prompt +
+                attachmentNote(task.attachments ?? []) +
+                (task.parent_id
+                    ? `\n\n[Work directory: ${cwd}. Save every result file here with Write; your final reply is a short report naming the files.]`
+                    : ''),
             cwd,
             // Uploads live outside every checkout: readable without a prompt, in this task and in later ones of the session.
             addDirs: fs.existsSync(this.inbox.root) ? [this.inbox.root] : [],
             resumeSessionId: conversation.session_id ?? undefined,
             // The factory's own servers, plus the provider's (its search) for a task on that provider only.
-            mcpConfig: [this.mcpConfigFile(), provider && this.providerMcpConfig(provider)].filter((c): c is string =>
-                Boolean(c)
-            ),
-            settings: this.sessionSettings(conversation.project),
+            mcpConfig: [
+                this.mcpConfigFile(),
+                provider && this.providerMcpConfig(provider),
+                offersDelegate && this.factoryMcpConfig(task.id)
+            ].filter((c): c is string => Boolean(c)),
+            settings,
+            appendSystemPrompt,
             // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
             model,
             maxTurns: this.config.claude.maxTurns,
@@ -1425,7 +1831,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     )
                     this.emit('task', this.store.updateTask(task.id, { ask }))
                     log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name}`)
-                    if (task.schedule) this.answerLater(task.id, ask)
+                    if (task.parent_id) this.answerLater(task.id, ask, true)
+                    else if (task.schedule) this.answerLater(task.id, ask)
                     return
                 }
                 if (event.type === 'ask_cancelled') {
@@ -1461,7 +1868,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 // used to follow any mention of another checkout, so one `git status` across the
                 // fence moved the thread, dropped its session and the next reply was about the
                 // other repository). Later tasks of a bound conversation never leave it.
-                if (event.type === 'tool_use' && !project) {
+                if (event.type === 'tool_use' && !project && !task.parent_id) {
                     project = detectProject(
                         event.input,
                         this.workspaces(),
@@ -1630,8 +2037,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
     }
 
+    /** The roles a task delegated end with it: nobody would read what they bring. */
+    private stopChildren(taskId: string): void {
+        for (const child of this.store.childTasks(taskId))
+            if (child.status === 'queued' || child.status === 'running') this.stop(child.id)
+    }
+
     private finish(taskId: string, patch: Partial<Task>): void {
+        this.stopChildren(taskId)
         const task = this.store.updateTask(taskId, { ...patch, ask: null, finished_at: new Date().toISOString() })
+        // Cache reads stay in the payload, apart: the UI shows the rest (see FRESH_TOKENS in the store).
         const tokens = task.input_tokens + task.output_tokens + task.cache_read_tokens + task.cache_creation_tokens
         this.emit(
             'event',
@@ -1640,12 +2055,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 error: task.error ?? undefined,
                 num_turns: task.num_turns,
                 tokens,
+                cache_read_tokens: task.cache_read_tokens,
                 window_5h_delta: task.window_5h_delta,
                 duration_ms: task.duration_ms
             })
         )
         log.info(
-            `${task.status} ${task.id}: ${task.num_turns} turns · ${fmtTokens(tokens)} tokens · ${Math.round(task.duration_ms / 1000)}s`
+            `${task.status} ${task.id}: ${task.num_turns} turns · ${fmtTokens(tokens - task.cache_read_tokens)} tokens · ${Math.round(task.duration_ms / 1000)}s`
         )
         this.emit('task', task)
     }

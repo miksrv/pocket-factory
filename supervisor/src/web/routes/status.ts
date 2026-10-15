@@ -7,7 +7,7 @@ import { Hono } from 'hono'
 
 import { startOfDay } from '../../schedules/cron.js'
 import { VERSION } from '../../version.js'
-import type { Env } from '../context.js'
+import type { AppContext, Env } from '../context.js'
 
 const run = promisify(execFile)
 
@@ -64,6 +64,35 @@ function loginOf(configDir: string): 'none' | `claude.ai (${string})` {
     }
 }
 
+/** The Overview's Models card: tokens per backend and each provider's state. */
+function modelsOverview({ store, tasks }: AppContext, dayStart: string) {
+    const usage = store.usageByProvider(dayStart)
+    const empty = { tasks_today: 0, tokens_today: 0, tokens_total: 0, delegated_total: 0, last_task_at: null }
+    const of = (provider: string | null) => {
+        const { provider: _p, ...rest } = usage.find((u) => u.provider === provider) ?? { provider, ...empty }
+        return rest
+    }
+    const providers = tasks.providerStatus().map((p) => ({
+        name: p.name,
+        kind: p.kind,
+        url: p.url,
+        model: p.default ?? p.models[0] ?? null,
+        concurrency: p.concurrency,
+        running: p.running,
+        reach: tasks.providerReach(p),
+        // What the gateway saw on the last forwarded request (a model call), if any since start.
+        last_request: p.health?.at ? { at: p.health.at, ok: p.health.ok, error: p.health.error } : null,
+        ...of(p.name)
+    }))
+    // Providers removed from providers.yaml still carry their tokens.
+    const gone = usage.filter((u) => u.provider && !providers.some((p) => p.name === u.provider))
+    return {
+        subscription: { model: tasks.model(), ...of(null) },
+        providers,
+        removed: gone.map((u) => ({ name: u.provider!, tokens_today: u.tokens_today, tokens_total: u.tokens_total }))
+    }
+}
+
 export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
@@ -108,6 +137,9 @@ export function statusRoutes(): Hono<Env> {
                 }
             },
             running: tasks.runningTaskIds(),
+            // Every backend the tasks run on: the subscription first, then each provider with whether
+            // it answers now (a cheap check, refreshed in the background), its load and its tokens.
+            models: modelsOverview(c.get('app'), startOfDay(new Date(), config.timezone).toISOString()),
             limits: tasks.limits() ?? null,
             claude: {
                 version: claude,

@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { summarizeInput } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
 import { Empty, ErrorBox, FilterSelect, PageHead, Stat, Tabs } from '../components/ui'
-import { api, type Audit, type AuditEvent, type AuditKind, type AuditPeriod, fmt } from '../lib/api'
+import { api, type Audit, type AuditEvent, type AuditKind, type AuditPeriod, eventTokens, fmt } from '../lib/api'
 import { usePaged } from '../lib/usePaged'
 
 const PERIODS: Array<{ value: AuditPeriod; label: string }> = [
@@ -36,7 +36,7 @@ function describe(e: AuditEvent): { badge: string; tone: string; text: string } 
             return {
                 badge: 'LLM',
                 tone: 'amber',
-                text: `${String(p.model ?? 'model')} (${fmt.tokens(Number(p.tokens ?? 0))} tokens)`
+                text: `${String(p.model ?? 'model')} (${fmt.tokens(eventTokens(p))} tokens)`
             }
         case 'tool_use': {
             const name = String(p.name ?? 'tool')
@@ -87,7 +87,7 @@ function describe(e: AuditEvent): { badge: string; tone: string; text: string } 
                 }
             const stats = [
                 `${Number(p.num_turns ?? 0)} turns`,
-                `${fmt.tokens(Number(p.tokens ?? 0))} tokens`,
+                `${fmt.tokens(eventTokens(p))} tokens`,
                 fmt.duration(Number(p.duration_ms ?? 0))
             ].join(' · ')
             return {

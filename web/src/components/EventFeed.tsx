@@ -1,4 +1,4 @@
-import { fmt, type TaskEvent } from '../lib/api'
+import { eventTokens, fmt, type TaskEvent } from '../lib/api'
 import { diffOf, highlight, languageOf } from '../lib/highlight'
 import { Markdown } from './ui'
 
@@ -195,8 +195,8 @@ export function Event({ event }: { event: TaskEvent }) {
                 return p.note ? <div className='dim small'>{String(p.note)}</div> : null
             return (
                 <div className='dim small'>
-                    {String(p.status)} · {fmt.plural(Number(p.num_turns ?? 0), 'turn')} ·{' '}
-                    {fmt.tokens(Number(p.tokens ?? 0))} tokens
+                    {String(p.status)} · {fmt.plural(Number(p.num_turns ?? 0), 'turn')} · {fmt.tokens(eventTokens(p))}{' '}
+                    tokens
                     {typeof p.window_5h_delta === 'number' && ` · ${fmt.windowDelta(p.window_5h_delta)}`} ·{' '}
                     {fmt.duration(Number(p.duration_ms ?? 0))}
                 </div>

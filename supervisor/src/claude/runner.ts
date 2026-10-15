@@ -120,6 +120,8 @@ export interface RunOptions {
      */
     systemPrompt?: string
     tools?: string[]
+    /** Text added to the CLI's own system prompt (`--append-system-prompt`): the roles an orchestrator delegates, a fallback run's role. */
+    appendSystemPrompt?: string
     /** Only the servers of `mcpConfig` (`--strict-mcp-config`): no connectors, plugins or project servers. */
     strictMcp?: boolean
     /** Called for each assistant text block / tool call as it streams in. */
@@ -306,6 +308,7 @@ export function runClaude(options: RunOptions): RunHandle {
         args.push('--system-prompt', options.systemPrompt, '--disable-slash-commands')
         if (options.tools) args.push('--tools', options.tools.join(','))
     }
+    if (options.appendSystemPrompt) args.push('--append-system-prompt', options.appendSystemPrompt)
     if (options.strictMcp) args.push('--strict-mcp-config')
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
