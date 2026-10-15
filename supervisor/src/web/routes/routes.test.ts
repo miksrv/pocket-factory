@@ -71,6 +71,23 @@ describe('API routes (open mode)', () => {
             })
         })
 
+        it('lists every backend with its tokens, a removed provider included', async () => {
+            t.ctx.providers.save('gpu', { url: 'http://127.0.0.1:1', models: ['small'], concurrency: 1 })
+            const conversation = t.ctx.tasks.newConversation('web', null, null, null)
+            for (const provider of ['gpu', 'gone']) {
+                const task = t.ctx.store.createTask(conversation.id, 'web', 'x', null, null, null, null, provider)
+                t.ctx.store.updateTask(task.id, { status: 'done', input_tokens: 10 })
+            }
+            const body = (await (await t.request('/api/status')).json()) as {
+                models: { subscription: object; providers: object[]; removed: object[] }
+            }
+            expect(body.models.subscription).toMatchObject({ model: 'sonnet', tokens_total: 0 })
+            expect(body.models.providers).toEqual([
+                expect.objectContaining({ name: 'gpu', model: 'small', concurrency: 1, running: 0, tokens_total: 10 })
+            ])
+            expect(body.models.removed).toEqual([{ name: 'gone', tokens_today: 10, tokens_total: 10 }])
+        })
+
         it('counts schedule files and names the next firing', async () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))

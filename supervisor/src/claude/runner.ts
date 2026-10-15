@@ -107,8 +107,8 @@ export interface RunOptions {
     env?: NodeJS.ProcessEnv
     /** Wall-clock limit for the run; 0 = none. A hung tool otherwise holds a session slot forever. Paused while an `ask` waits for the owner, then restarted. */
     timeoutMs?: number
-    /** Extra MCP servers for this run (`--mcp-config`), as a path to a JSON file. */
-    mcpConfig?: string
+    /** Extra MCP servers for this run (`--mcp-config`): paths to JSON files or JSON strings. */
+    mcpConfig?: string[]
     /** Settings for this run (`--settings`), e.g. `disabledMcpjsonServers`. */
     settings?: Record<string, unknown>
     /** Directories outside the cwd the session may read without asking (`--add-dir`), e.g. the owner's uploads. */
@@ -120,8 +120,12 @@ export interface RunOptions {
      */
     systemPrompt?: string
     tools?: string[]
+    /** Text added to the CLI's own system prompt (`--append-system-prompt`): the roles an orchestrator delegates, a fallback run's role. */
+    appendSystemPrompt?: string
     /** Only the servers of `mcpConfig` (`--strict-mcp-config`): no connectors, plugins or project servers. */
     strictMcp?: boolean
+    /** Nothing written to disk (`--no-session-persistence`): a side call (a chat's title) leaves no session behind. */
+    noSessionPersistence?: boolean
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -298,7 +302,7 @@ export function runClaude(options: RunOptions): RunHandle {
     ]
     if (options.model) args.push('--model', options.model)
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
-    if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig)
+    if (options.mcpConfig?.length) args.push('--mcp-config', ...options.mcpConfig)
     if (options.settings && Object.keys(options.settings).length)
         args.push('--settings', JSON.stringify(options.settings))
     for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)
@@ -306,7 +310,9 @@ export function runClaude(options: RunOptions): RunHandle {
         args.push('--system-prompt', options.systemPrompt, '--disable-slash-commands')
         if (options.tools) args.push('--tools', options.tools.join(','))
     }
+    if (options.appendSystemPrompt) args.push('--append-system-prompt', options.appendSystemPrompt)
     if (options.strictMcp) args.push('--strict-mcp-config')
+    if (options.noSessionPersistence) args.push('--no-session-persistence')
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 

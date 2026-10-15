@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
 import { ProjectToolchainField } from '../components/Toolchains'
+import { Button } from '../components/ui'
 import { api, type CatalogEntry, type McpEntry, type ProjectHost } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
@@ -41,6 +42,7 @@ export function ProjectsPage() {
     const keys = useAsync(() => api.sshKeys(), [])
     const sharedHosts = useAsync(() => api.hosts(), [])
     const mcp = useAsync(() => api.mcp(), [])
+    const providers = useAsync(() => api.providers(), [])
     const workspaces = status.data?.workspaces ?? []
 
     return (
@@ -188,6 +190,38 @@ export function ProjectsPage() {
                             registry={mcp.data?.servers ?? []}
                             onChange={(next) => set({ mcp: next })}
                         />
+                        {(providers.data?.providers.length ?? 0) > 0 && (
+                            <Field
+                                label='Providers this project may delegate to'
+                                hint="A role on another provider (an agent file with a provider) gets this project's work only when its provider is ticked here; otherwise the orchestrator's own model runs the role. Keep work code off a box you would not give it to."
+                                wide
+                            >
+                                <div
+                                    className='row wrap'
+                                    style={{ gap: 6 }}
+                                >
+                                    {providers.data!.providers.map((p) => {
+                                        const allowed = Array.isArray(fm.providers) ? (fm.providers as string[]) : []
+                                        const on = allowed.includes(p.name)
+                                        return (
+                                            <Button
+                                                key={p.name}
+                                                className={`chip${on ? ' on' : ''}`}
+                                                aria-pressed={on}
+                                                onClick={() => {
+                                                    const next = on
+                                                        ? allowed.filter((n) => n !== p.name)
+                                                        : [...allowed, p.name]
+                                                    set({ providers: next.length ? next : undefined })
+                                                }}
+                                            >
+                                                {p.name}
+                                            </Button>
+                                        )
+                                    })}
+                                </div>
+                            </Field>
+                        )}
                         <ProjectToolchainField slug={str(fm.slug)} />
                         <Field
                             label='Checks (one per line)'

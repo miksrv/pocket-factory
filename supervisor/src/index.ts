@@ -4,6 +4,7 @@ import path from 'node:path'
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
 import { Catalog } from './files/catalog.js'
+import { delegateAgents, projectProviders } from './files/delegates.js'
 import { Hosts } from './files/hosts.js'
 import { KnownHosts } from './files/knownHosts.js'
 import { Providers } from './files/providers.js'
@@ -62,6 +63,16 @@ async function main(): Promise<void> {
             return entry.name.toLowerCase() === wanted || path.basename(dir).toLowerCase() === wanted
         })
     }
+    /** `tools:` of an agent file: a YAML list or the CLI's comma-separated string; null = not restricted. */
+    const toolList = (tools: unknown): string[] | null =>
+        Array.isArray(tools)
+            ? tools.map(String)
+            : typeof tools === 'string' && tools.trim()
+              ? tools
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter(Boolean)
+              : null
     const workspace: Workspace = {
         projectPath: (slug) => {
             const entry = projectEntry(slug)
@@ -107,18 +118,13 @@ async function main(): Promise<void> {
         agentFile: (name) => {
             if (!catalog.exists('agents', name)) return null
             const entry = catalog.get('agents', name)
-            const tools = entry.frontmatter.tools
-            return {
-                body: entry.body,
-                tools: Array.isArray(tools)
-                    ? tools.map(String)
-                    : typeof tools === 'string' && tools.trim()
-                      ? tools
-                            .split(',')
-                            .map((t) => t.trim())
-                            .filter(Boolean)
-                      : null
-            }
+            return { body: entry.body, tools: toolList(entry.frontmatter.tools) }
+        },
+        // An agent file with `provider:` is a role the orchestrator delegates (`delegate`): it runs on that provider.
+        delegates: () => delegateAgents(catalog),
+        projectProviders: (slug) => {
+            const entry = projectEntry(slug)
+            return entry ? projectProviders(catalog, entry.name) : null
         }
     }
     const tasks = new TaskService(store, config, workspace, providers)
@@ -200,7 +206,8 @@ async function main(): Promise<void> {
         // Registers the command menu in Telegram, so the client autocompletes them.
         await bot.api.setMyCommands([
             { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
-            { command: 'stop', description: 'Cancel the running task' },
+            { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
+            { command: 'mode', description: 'A new chat per message, or one thread: /mode fresh|thread' },
             { command: 'status', description: 'What is going on' },
             { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },
             { command: 'schedules', description: 'Recurring tasks and their last runs' },

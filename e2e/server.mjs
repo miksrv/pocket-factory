@@ -37,6 +37,8 @@ const env = {
     GROQ_API_KEY: '',
     CLAUDE_CODE_OAUTH_TOKEN: '',
     CLAUDE_PERMISSION_MODE: 'bypassPermissions',
+    // A chat keeps its first line as the title: the fake CLI would name every chat "Echo: …".
+    CHAT_TITLES: 'off',
     TIMEZONE: 'UTC',
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn'
 }

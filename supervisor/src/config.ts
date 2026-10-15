@@ -16,6 +16,8 @@ export interface Config {
         taskTimeoutMs: number
         /** How long a task stopped by the subscription limit may wait for the window to reset (0 = it fails instead). */
         autoContinueMs: number
+        /** A new web or Telegram chat is named by one small Haiku call (`CHAT_TITLES=haiku`); off = its first line. */
+        chatTitles: boolean
     }
     paths: {
         dataRoot: string
@@ -108,7 +110,8 @@ export function loadConfig(): Config {
             taskTimeoutMs: number('CLAUDE_TASK_TIMEOUT_MIN', 0) * 60_000,
             // A task the subscription limit stopped waits in the queue for the window to reset and
             // continues, when the reset is at most this far away (the weekly window usually is not). 0 = off.
-            autoContinueMs: Math.max(0, number('CLAUDE_AUTO_CONTINUE_HOURS', 6)) * 3_600_000
+            autoContinueMs: Math.max(0, number('CLAUDE_AUTO_CONTINUE_HOURS', 6)) * 3_600_000,
+            chatTitles: (optional('CHAT_TITLES') ?? 'haiku').toLowerCase() !== 'off'
         },
         paths: {
             dataRoot,

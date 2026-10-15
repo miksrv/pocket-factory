@@ -27,6 +27,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
         provider: null,
         agent: null,
         attachments: null,
+        parent_id: null,
         not_before: null,
         limit_waits: 0,
         git: null,

@@ -26,7 +26,9 @@ export function taskRoutes(): Hono<Env> {
         return c.json({
             ...task,
             events: store.listEvents(task.id),
-            conversation: store.getConversation(task.conversation_id)
+            conversation: store.getConversation(task.conversation_id),
+            // The roles this task's orchestrator delegated (`delegate`), each a task of its own.
+            children: store.childTasks(task.id)
         })
     })
 

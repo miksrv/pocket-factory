@@ -47,7 +47,7 @@ that never leave your server, and it works behind an `ANTHROPIC_BASE_URL` proxy.
 | Behind an `ANTHROPIC_BASE_URL` proxy | yes | no | yes | no | no |
 | Plans | any claude.ai login | Pro / Max / Team / Enterprise | Pro / Max | Pro / Max beta | Pro / Max / Team / Enterprise |
 
-What it does not do yet: a worktree per task, merging from the UI, several providers (Codex,
+What it does not do yet: a worktree per task, merging from the UI, other agent runtimes (Codex,
 OpenCode). [docs/LANDSCAPE.md](docs/LANDSCAPE.md) compares the
 open-source neighbours too (Paseo, Happy, claudecodeui, the Telegram bridges, OpenClaw, Hermes) and
 lists what is taken from each.
@@ -55,10 +55,12 @@ lists what is taken from each.
 ## What it does today
 
 - **Telegram** — text and voice (Whisper on Groq) → `claude -p` in your workspaces → the reply,
-  plus the task's project and how full the 5-hour and weekly windows are. Replies continue the
-  same Claude Code session; reply to any message of the bot to switch to that conversation (a
-  schedule's report, a question); `/new [project]`, `/stop`, `/status`, `/usage`, `/model`,
-  `/schedules`, `/run <name>`. Telegram is optional: leave the token empty for a web-only factory.
+  plus the task's project and how full the 5-hour and weekly windows are. Every message starts a
+  new chat, so the last task's context costs nothing; reply to any message (a report, a question,
+  your own earlier task) to continue that chat, or `/mode thread` for one session until `/new`.
+  `/new [project]`, `/stop`, `/status`, `/usage`, `/model`, `/schedules`, `/run <name>`. New chats
+  get a short title by meaning (one Haiku call). Telegram is optional: leave the token empty for a
+  web-only factory.
 - **Photos and files** — send a screenshot, a log or a PDF with the task, from Telegram (with a
   caption, or first and then the text) or the web (paperclip, paste, drop). The agent gets the
   file's path and opens it with the Read tool, which shows images and PDFs to the model.
@@ -91,6 +93,14 @@ lists what is taken from each.
   Docker daemon (a dind sidecar, state in `data/docker`), so a project's compose file brings up its
   database or the whole application for the tests, and what a task started is stopped when it ends.
   Settings → Toolchains lists versions, sizes and containers; nothing is installed on the host.
+- **Model providers** — besides the subscription, a schedule, an agent or a chat can run on a
+  self-hosted model (Ollama, vLLM) or a cloud API (OpenRouter, or OpenAI-compatible ones such as
+  Gemini and Groq), in the same Claude Code CLI. The supervisor's gateway adds each provider's key,
+  so keys never reach the agent; a provider can bring its own MCP servers and TLS certificate, and
+  small models run in a light mode that keeps the prompt short. A Claude orchestrator can delegate
+  a role to such a model (research, drafts) and check the result itself; when the box is down the
+  role runs on Claude instead. Settings → Providers adds, tests
+  and lists them; [docs/SELF_HOSTED_LLM.md](docs/SELF_HOSTED_LLM.md) sets up a GPU box.
 - **Presets** — shareable bundles under `presets/`: `fullstack-ts-go`, `fullstack-ts-php`,
   `pr-review`, `devops` (read-only server checks over SSH), `email-assistant` (Gmail drafts
   through the claude.ai connector, nothing ever sent). A colleague installs one with a click
@@ -130,7 +140,7 @@ Then:
    Tailscale, or set `WEB_BIND=0.0.0.0` together with `WEB_AUTH_PASSWORD` behind an https proxy).
 2. **Projects → New**, or tell the bot *"connect project X"* and let the `onboard-project` skill
    write the file after inspecting the checkout.
-3. Send the bot a task: *"In astronomy-portal change photo URLs from ids to SEO slugs"*.
+3. Send the bot a task: *"In shop change product URLs from ids to SEO slugs"*.
 4. **Schedules → New** for anything recurring: a nightly PR review, a tracker poll, an inbox
    summary. Start with `action: report` and graduate it once you trust the runs.
 
@@ -150,6 +160,7 @@ web/                     admin UI (Vite + React), built into the image and serve
 templates/claude/        seeded into data/claude on every start (never overwrites your edits)
 presets/                 shareable agent + skill bundles, installable from the UI
 docs/SPEC.md             requirements & roadmap · docs/LANDSCAPE.md  the neighbours and what is taken from them
+docs/SELF_HOSTED_LLM.md  your own GPU box as a model provider (Ollama + Caddy + search MCP)
 ```
 
 Moving to another host is `rsync data/` + `docker compose up`.

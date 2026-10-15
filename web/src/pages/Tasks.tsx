@@ -110,6 +110,14 @@ export function TasksPage() {
                                                 >
                                                     ⏱ {task.schedule}
                                                 </Link>
+                                            ) : task.parent_id ? (
+                                                <Link
+                                                    to={`/tasks/${task.parent_id}`}
+                                                    className='badge plain'
+                                                    title='Delegated by this task'
+                                                >
+                                                    ↳ {task.agent}
+                                                </Link>
                                             ) : (
                                                 <span className='badge plain'>{task.source}</span>
                                             )}
@@ -182,7 +190,11 @@ export function TaskPage() {
                         {t.project && <span className='badge plain'>{t.project}</span>}
                         <span className='dim'>{t.source}</span>
                         <span className='dim'>{fmt.when(t.created_at)}</span>
-                        {t.conversation && <Link to={`/chat/${t.conversation_id}`}>open conversation</Link>}
+                        {t.parent_id ? (
+                            <Link to={`/tasks/${t.parent_id}`}>delegated by this task</Link>
+                        ) : (
+                            t.conversation && <Link to={`/chat/${t.conversation_id}`}>open conversation</Link>
+                        )}
                         {t.session_id && <Link to={`/sessions/${t.session_id}`}>transcript</Link>}
                     </span>
                 }
@@ -240,6 +252,30 @@ export function TaskPage() {
                 task={t}
                 onChanged={task.reload}
             />
+
+            {t.children.length > 0 && (
+                <>
+                    <h2>Delegated</h2>
+                    <div className='card'>
+                        {t.children.map((c) => (
+                            <div
+                                key={c.id}
+                                className='row wrap'
+                            >
+                                <StatusBadge status={c.status} />
+                                <Link to={`/tasks/${c.id}`}>{c.agent}</Link>
+                                <span className='dim'>
+                                    {c.provider
+                                        ? `${c.provider}${c.model ? `:${c.model}` : ''}`
+                                        : `subscription · ${c.model ?? 'default'}`}{' '}
+                                    · {fmt.plural(c.num_turns, 'turn')} · {fmt.tokens(taskTokens(c))} tokens ·{' '}
+                                    {fmt.duration(taskDuration(c, now))}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
 
             <h2>Prompt</h2>
             <div

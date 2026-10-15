@@ -91,6 +91,17 @@ describe('Store', () => {
             expect(store.findConversation('telegram', '7')).toBeUndefined()
         })
 
+        it("takes the hidden conversations of the chat's delegated roles with it, and nobody else's", () => {
+            const c = store.createConversation('web', null)
+            const parent = store.createTask(c.id, 'web', 'orchestrate')
+            const role = store.createConversation('delegate', parent.id)
+            const otherParent = store.createTask(store.createConversation('web', null).id, 'web', 'other')
+            const otherRole = store.createConversation('delegate', otherParent.id)
+            store.deleteConversation(c.id)
+            expect(store.getConversation(role.id)?.deleted_at).not.toBeNull()
+            expect(store.getConversation(otherRole.id)?.deleted_at).toBeNull()
+        })
+
         it('lists by newest activity first', () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(T0)
@@ -345,8 +356,28 @@ describe('Store', () => {
                 chat_active: 1,
                 chat_unread_latest: { id: c.id, title: 'Thread' },
                 chat_needs_reply_latest: { id: asking.id, title: 'Asking' },
-                tokens_total: 150
+                // Cache reads are recorded, not counted.
+                tokens_total: 100
             })
+        })
+
+        it('splits the tokens by backend: the subscription and each provider, with delegated roles', () => {
+            const sub = store.createTask(c.id, 'web', 'x')
+            store.updateTask(sub.id, { input_tokens: 100, cache_read_tokens: 900 })
+            const gpu = store.createTask(c.id, 'delegate', 'role', null, null, 'small', null, 'gpu', 'writer', sub.id)
+            store.updateTask(gpu.id, { input_tokens: 400 })
+            const old = store.createTask(c.id, 'web', 'yesterday', null, null, null, null, 'gpu')
+            store.updateTask(old.id, { input_tokens: 50, created_at: at(-24 * 60) })
+            expect(store.usageByProvider(T0.toISOString())).toEqual([
+                expect.objectContaining({ provider: null, tasks_today: 1, tokens_today: 100, tokens_total: 100 }),
+                expect.objectContaining({
+                    provider: 'gpu',
+                    tasks_today: 1,
+                    tokens_today: 400,
+                    tokens_total: 450,
+                    delegated_total: 1
+                })
+            ])
         })
 
         it('reports zeros on an empty store', () => {

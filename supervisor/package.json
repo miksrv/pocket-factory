@@ -1,6 +1,6 @@
 {
     "name": "@pocket-factory/supervisor",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "private": true,
     "type": "module",
     "main": "dist/index.js",
@@ -11,9 +11,9 @@
         "test": "yarn run -T vitest run"
     },
     "dependencies": {
-        "@hono/node-server": "^2.1.1",
+        "@hono/node-server": "^2.1.4",
         "grammy": "^1.36.0",
-        "hono": "^4.13.9",
+        "hono": "^4.13.13",
         "yaml": "^2.9.1"
     },
     "devDependencies": {

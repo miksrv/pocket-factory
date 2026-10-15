@@ -14,7 +14,7 @@ const MIGRATIONS: string[] = [
     `
     CREATE TABLE conversations (
         id          TEXT PRIMARY KEY,
-        channel     TEXT NOT NULL,              -- telegram | web
+        channel     TEXT NOT NULL,              -- telegram | web | delegate
         external_id TEXT,                       -- telegram chat id, null for web
         title       TEXT,
         session_id  TEXT,                       -- Claude Code session for --resume
@@ -217,6 +217,13 @@ const MIGRATIONS: string[] = [
     ALTER TABLE tasks ADD COLUMN agent TEXT;
     ALTER TABLE conversations ADD COLUMN provider TEXT;
     ALTER TABLE conversations ADD COLUMN model TEXT;
+    `,
+    // v16: delegation. A task an orchestrator handed to an agent on another model
+    // (`delegate`, the factory's MCP tool) names the task that asked; it runs in a
+    // conversation of its own (channel `delegate`) that the Chat list never shows.
+    `
+    ALTER TABLE tasks ADD COLUMN parent_id TEXT;
+    CREATE INDEX tasks_parent ON tasks(parent_id) WHERE parent_id IS NOT NULL;
     `
 ]
 

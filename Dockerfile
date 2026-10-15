@@ -2,7 +2,7 @@
 
 ARG NODE_VERSION=22
 ARG CLAUDE_CODE_VERSION=2.1.283
-# Toolchains for the agents (see docs/plans/toolchains.md): mise installs language runtimes
+# Toolchains for the agents (see CLAUDE.md, Toolchains): mise installs language runtimes
 # per checkout into /data/tools, PHP comes from the sury repository (compiling it through
 # mise is slow), the docker CLI talks to the optional dind sidecar (docker-compose.yml).
 ARG MISE_VERSION=2026.10.6

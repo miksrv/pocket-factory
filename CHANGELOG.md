@@ -9,6 +9,68 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.4.0] - 2026-10-15
+
+### Added
+
+- **Delegation to other models.** An agent file with a `provider:` is now a role a Claude
+  orchestrator hands work to: the factory's own MCP tool `delegate` runs the role as a task of its
+  own on that provider (light mode, its search included), in a work directory under the chat, and
+  answers the orchestrator with the role's report and files. The orchestrator waits without
+  spending tokens and lends the role its session slot; the CLI's Agent tool refuses such roles so
+  they never run on Claude by mistake. A role has nobody to ask: its question is answered at once
+  ("decide by the brief"). A role queued behind other work still gets its parent's slot, the same
+  brief after the role's own failure runs again, and deleting a chat takes its roles' hidden
+  conversations with it. The chat shows a "Delegated to …" card, the task page lists
+  the delegated tasks, the Tasks list marks them.
+- When a role's provider does not answer, fails mid-run, or the task's project does not allow it,
+  the role runs on the orchestrator's model instead (or the alias in `fallback:`; `fallback: none`
+  reports that it did not run). Agents → the form's "When the provider is unavailable".
+- Overview → **Providers** (shown once a provider is added): the subscription and every provider
+  in one card, each with whether it answers now (a cheap check about once a minute, never a model
+  call), its load and its tokens today and in all; the foot says how much work the providers took
+  off the subscription and how many roles were delegated. Control plane counts the tokens of every
+  model.
+- Projects → "Providers this project may delegate to" (`providers:` in the project file): a
+  project's work reaches a provider only when it is ticked there.
+- A provider's own MCP servers (Settings → Providers → MCP servers: name, URL, key variable): only
+  the tasks on that provider get them, through the factory's gateway, which adds the key; a
+  subscription task never connects to the provider's box.
+- TLS certificate field on a provider: paste a self-signed box's CA and the factory trusts it at
+  once, no `NODE_EXTRA_CA_CERTS`, no restart.
+- Test checks the provider's MCP servers too; a certificate failure says what to paste.
+- `docs/SELF_HOSTED_LLM.md`: the guide to a GPU box with Ollama, Caddy and a search MCP.
+- **Telegram: a new chat per message.** A message without a reply starts a fresh chat, so a
+  self-contained skill no longer drags the last task's context (and its tokens) along; a reply to
+  any message, the bot's or your own, continues that message's chat, and a reply whose chat was
+  deleted starts a new one with the replied message quoted. An open question still takes the next
+  message as its answer. `/new <project>` sets the project of the next chats, `/model
+  <provider>:<model>` their provider, `/stop` as a reply stops that chat's task. `/mode thread`
+  brings back one session until `/new`.
+- **Chat titles by meaning.** A new web or Telegram chat is named after what its first message
+  is about by one Haiku call without tools (about a thousand tokens, under a second), like Claude
+  Desktop does; `CHAT_TITLES=off` keeps the first line.
+
+### Changed
+
+- Token figures (Overview, task pages, Agents, Audit, Telegram) leave out cache reads: every model
+  call re-reads the whole context, so they were ~95 % of the number. They are still recorded and
+  listed on the task page; old tasks show the new figure at once.
+- Each provider has its own gateway bearer: a task on one provider can no longer use another
+  provider's key.
+- The gateway reports why an upstream request failed instead of a bare "fetch failed".
+- Dependencies: Vite 8 with `@vitejs/plugin-react` 6, marked 18, hono 4.13.13 and
+  `@hono/node-server` 2.1.4 (fixes a `serveStatic` path-decoding bypass, GHSA-rmxm-3fg6-px4f),
+  lucide-react 1.54; CI actions `upload-artifact` 7.0.2 and `codeql-action` 4.38.3. Dependabot no
+  longer offers `@types/node` majors: the types follow the Node the image runs (22).
+
+### Fixed
+
+- Stopping the supervisor waits for each run to write its end (changes, result) before the
+  database closes, instead of only for the CLI processes.
+- Enter on the sign-in page signs in from either field (or moves to the empty one), and the
+  provider dialog's TLS certificate and MCP server rows no longer overlap.
+
 ## [1.3.0] - 2026-10-14
 
 ### Added
@@ -26,7 +88,7 @@ section (`node scripts/release.mjs tag`).
 - **Light mode** for small models (the default on a new provider): the task runs with a short
   system prompt — the agent file's body when a schedule names an agent, else
   `data/claude/light-system.md` — and Read / Write / Edit / Bash / Glob / Grep, no skills, instead
-  of Claude Code's full prompt and tool set; measured on `lookatstars` (RTX 2080 Ti, 9–12B
+  of Claude Code's full prompt and tool set; measured on a self-hosted RTX 2080 Ti (9–12B
   models), the full prompt never reached the file, the short one did on the first try.
 - `tasks.provider` / `tasks.agent`, `conversations.provider` / `model` (migration v15);
   `/api/providers` (list, save, delete, test, models), `PUT /api/conversations/:id/model`,
@@ -198,7 +260,7 @@ Fixes from the owner's first day of real use from Telegram.
   the session) and were confused with each other; `/status` still names the current project.
 - **The footer under every Telegram reply** names the project the agent worked in instead of
   `N turns · tokens · +x% of 5h · Ns`, and the windows line carries this task's share of the
-  5-hour window: `— project: geometki` / `— windows: 5h 27% · week 50% · this task +4%`. Turns,
+  5-hour window: `— project: shop` / `— windows: 5h 27% · week 50% · this task +4%`. Turns,
   tokens and duration stay on the task page.
 - **`/status` is shorter.** Session id and the workspaces path are gone; the running task is shown
   by its first line and how long it has run (or that it is queued, or waits for an answer); the

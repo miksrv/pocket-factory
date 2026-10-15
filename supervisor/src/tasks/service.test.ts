@@ -11,7 +11,8 @@ import {
     mcpKey,
     mcpLabel,
     openQuestions,
-    titleFrom
+    titleFrom,
+    titleOf
 } from './service.js'
 
 const limits = (over: Partial<RateLimits> = {}): RateLimits => ({
@@ -170,7 +171,7 @@ describe('mcpLabel', () => {
 })
 
 describe('detectProject', () => {
-    const workspaces = ['shop', 'ServicePattern', 'UserManagement', 'ui', 'shop-admin']
+    const workspaces = ['shop', 'acme', 'billing', 'ui', 'shop-admin']
 
     it('finds a workspace named as a path segment', () => {
         expect(detectProject({ file_path: '/data/workspaces/shop/src/a.ts' }, workspaces)).toBe('shop')
@@ -187,20 +188,18 @@ describe('detectProject', () => {
     })
 
     it('reads owner/name as the repository', () => {
-        expect(detectProject({ command: 'gh pr list --repo ServicePattern/UserManagement' }, workspaces)).toBe(
-            'UserManagement'
-        )
+        expect(detectProject({ command: 'gh pr list --repo acme/billing' }, workspaces)).toBe('billing')
     })
 
     it('prefers a name with a project file', () => {
-        const input = { command: 'diff /w/shop/a /w/UserManagement/b' }
+        const input = { command: 'diff /w/shop/a /w/billing/b' }
         expect(detectProject(input, workspaces)).toBe('shop')
-        expect(detectProject(input, workspaces, (n) => n === 'UserManagement')).toBe('UserManagement')
+        expect(detectProject(input, workspaces, (n) => n === 'billing')).toBe('billing')
     })
 
     it('escapes regular expression characters in names', () => {
-        expect(detectProject({ file_path: '/w/miksoft.pro/x' }, ['miksoft.pro', 'miksoftXpro'])).toBe('miksoft.pro')
-        expect(detectProject({ file_path: '/w/miksoftXpro/x' }, ['miksoft.pro'])).toBeNull()
+        expect(detectProject({ file_path: '/w/my.site/x' }, ['my.site', 'myXsite'])).toBe('my.site')
+        expect(detectProject({ file_path: '/w/myXsite/x' }, ['my.site'])).toBeNull()
     })
 
     it.each([null, undefined, {}, 'nothing here'])('finds nothing in %j', (input) => {
@@ -231,6 +230,14 @@ describe('titleFrom', () => {
 
     it('cuts mid-word when there is no space late enough', () => {
         expect(titleFrom(`ab ${'c'.repeat(80)}`)).toBe(`ab ${'c'.repeat(57)}…`)
+    })
+})
+
+describe('titleOf', () => {
+    it('takes the first line of the reply without quotes or a final period', () => {
+        expect(titleOf('"Статьи для geometki."\nmore')).toBe('Статьи для geometki')
+        expect(titleOf('«Почта: черновики ответов»')).toBe('Почта: черновики ответов')
+        expect(titleOf('   ')).toBe('')
     })
 })
 

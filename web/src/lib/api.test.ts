@@ -7,6 +7,7 @@ import {
     type Attachment,
     attachmentUrl,
     changesText,
+    eventTokens,
     fmt,
     isImage,
     taskDuration,
@@ -139,10 +140,16 @@ describe('attachments', () => {
 })
 
 describe('taskTokens', () => {
-    it('counts every token, cache included', () => {
-        expect(
-            taskTokens({ input_tokens: 1, output_tokens: 20, cache_read_tokens: 300, cache_creation_tokens: 4000 })
-        ).toBe(4321)
+    it('counts what was sent, written to the cache and generated, not cache reads', () => {
+        expect(taskTokens({ input_tokens: 1, output_tokens: 20, cache_creation_tokens: 4000 })).toBe(4021)
+    })
+})
+
+describe('eventTokens', () => {
+    it('leaves cache reads out of an llm event and a finished status', () => {
+        expect(eventTokens({ tokens: 1000, cacheReadTokens: 900 })).toBe(100)
+        expect(eventTokens({ tokens: 1000, cache_read_tokens: 700 })).toBe(300)
+        expect(eventTokens({ tokens: 1000 })).toBe(1000)
     })
 })
 

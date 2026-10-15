@@ -4,7 +4,17 @@ import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
 import { Tile } from '../components/Tile'
 import { Button, Empty, PageHead, Stat, StatusBadge } from '../components/ui'
-import { api, fmt, type McpEntry, type Stats, type Status, type Task, taskTokens } from '../lib/api'
+import {
+    api,
+    fmt,
+    type McpEntry,
+    type ModelsOverview,
+    type ProviderOverview,
+    type Stats,
+    type Status,
+    type Task,
+    taskTokens
+} from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 export function OverviewPage() {
@@ -102,12 +112,20 @@ export function OverviewPage() {
                     />
                 </div>
                 <div className='card-foot'>
-                    <span>Tokens include cache reads and writes — the subscription meters windows, not money.</span>
+                    <span>
+                        Tokens of every model sent, written to the cache and generated; cache reads are recorded but not
+                        shown. The subscription meters windows, not money.
+                    </span>
                     <span title='Pocket Factory · Claude Code'>
                         {d ? `v${d.version} · ${d.claude.version ?? ''}` : ''}
                     </span>
                 </div>
             </div>
+
+            <ProvidersCard
+                models={d?.models}
+                loggedIn={d?.claude.logged_in}
+            />
 
             <h2>Subscription</h2>
             <LimitsCard
@@ -215,6 +233,100 @@ export function OverviewPage() {
                 </div>
             </div>
         </div>
+    )
+}
+
+const providerTokens = (models: ModelsOverview, key: 'tokens_today' | 'tokens_total') =>
+    models.providers.reduce((n, p) => n + p[key], 0) + models.removed.reduce((n, p) => n + p[key], 0)
+
+/** A provider's state in words: what is wrong, or that it answers and what it is doing. */
+function providerState(p: ProviderOverview): { tone: '' | ' warn' | ' off'; text: string } {
+    if (p.reach?.error) return { tone: ' off', text: p.reach.error }
+    if (!p.reach) return { tone: ' warn', text: 'checking…' }
+    const busy = p.concurrency > 0 ? `${p.running}/${p.concurrency} running` : `${p.running} running`
+    return { tone: '', text: `answers · ${busy}` }
+}
+
+/**
+ * Every backend the tasks run on: the subscription and each provider with its state (a cheap
+ * reachability check about once a minute, never a model call) and its tokens, split here and only
+ * here. The foot says how much work the providers took off the subscription. Without a provider
+ * there is nothing to compare, so the section is not shown.
+ */
+export function ProvidersCard({
+    models,
+    loggedIn
+}: {
+    models: ModelsOverview | undefined
+    loggedIn: boolean | undefined
+}) {
+    if (!models || models.providers.length === 0) return null
+    const sub = models.subscription
+    const offToday = providerTokens(models, 'tokens_today')
+    const offTotal = providerTokens(models, 'tokens_total')
+    const allTotal = sub.tokens_total + offTotal
+    const delegated = models.providers.reduce((n, p) => n + p.delegated_total, 0)
+    return (
+        <>
+            <h2>Providers</h2>
+            <div className='card pad0 models-card'>
+                <div className='card-row'>
+                    <span className={`live${loggedIn ? '' : ' off'} model-name`}>Claude subscription</span>
+                    <span className='dim small grow'>
+                        {sub.model} · {loggedIn ? 'orchestrator and sub-agents' : 'not logged in'}
+                    </span>
+                    <ModelTokens usage={sub} />
+                </div>
+                {models.providers.map((p) => {
+                    const state = providerState(p)
+                    return (
+                        <div
+                            key={p.name}
+                            className='card-row'
+                        >
+                            <span
+                                className={`live${state.tone} model-name`}
+                                title={p.url}
+                            >
+                                {p.name}
+                            </span>
+                            <span className='dim small grow'>
+                                {p.model ?? 'no model'} · {state.text}
+                                {p.last_request?.ok === false && !p.reach?.error
+                                    ? ` · last call failed: ${p.last_request.error ?? ''}`
+                                    : ''}
+                            </span>
+                            <ModelTokens usage={p} />
+                        </div>
+                    )
+                })}
+                <div className='card-foot'>
+                    <span>
+                        {offTotal > 0
+                            ? `Off the subscription: ${fmt.tokens(offToday)} today · ${fmt.tokens(offTotal)} in all (${Math.round((offTotal / allTotal) * 100)} % of every token)${delegated ? ` · ${fmt.plural(delegated, 'delegated role')}` : ''}. Self-hosted models report input tokens only.`
+                            : 'Every token so far went to the subscription.'}
+                    </span>
+                    <Link
+                        to='/settings#providers'
+                        className='quiet'
+                    >
+                        Settings →
+                    </Link>
+                </div>
+            </div>
+        </>
+    )
+}
+
+function ModelTokens({ usage }: { usage: { tokens_today: number; tokens_total: number; tasks_today: number } }) {
+    return (
+        <span
+            className='small nowrap'
+            title={`${fmt.plural(usage.tasks_today, 'task')} today`}
+        >
+            {fmt.tokens(usage.tokens_today)} <span className='dim'>today</span> · {fmt.tokens(usage.tokens_total)}{' '}
+            <span className='dim'>in all</span>
+        </span>
     )
 }
 
@@ -339,18 +451,20 @@ function mcpDetail(m: Status['mcp'] | undefined): string {
     return parts.join(' · ')
 }
 
-/** "2 on · next inbox-morning in 3h" — or what needs the owner: invalid files, failing prefilters, a minute slept through. */
+/**
+ * One short line however many schedules there are: "all fine", or what needs the owner in counts
+ * ("1 missed a firing · 2 invalid"); the names are on the Schedules page.
+ */
 function schedulesDetail(s: Stats['schedules'] | undefined): string {
     if (!s) return '…'
     if (!s.total) return 'none yet — Schedules'
     const parts: string[] = []
     if (s.invalid) parts.push(`${s.invalid} invalid`)
-    if (s.failing.length) parts.push(`prefilter failing: ${s.failing.join(', ')}`)
-    if (s.missed.length) parts.push(`missed a firing: ${s.missed.join(', ')}`)
-    parts.push(`${s.on} of ${s.total} on`)
-    if (s.next) parts.push(`next ${s.next.name} in ${fmt.until(s.next.at)}`)
-    return parts.join(' · ')
+    if (s.failing.length) parts.push(`${s.failing.length} prefilter failing`)
+    if (s.missed.length) parts.push(`${s.missed.length} missed a firing`)
+    return parts.length ? parts.join(' · ') : 'all fine'
 }
+
 function Check({ ok, label, detail, warn }: { ok: boolean; label: string; detail: string; warn?: boolean }) {
     return (
         <div className='card-row'>

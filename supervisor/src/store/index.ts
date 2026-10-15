@@ -5,8 +5,9 @@ import type { RateLimits } from '../claude/runner.js'
 import type { Attachment } from '../files/inbox.js'
 import type { TaskGit } from '../git/changes.js'
 
-export type Channel = 'telegram' | 'web'
-export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook'
+/** `delegate`: the hidden conversation of a task an orchestrator delegated (see `Task.parent_id`). */
+export type Channel = 'telegram' | 'web' | 'delegate'
+export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook' | 'delegate'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 export type TaskEventType =
     'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
@@ -101,6 +102,8 @@ export interface Task {
     agent: string | null
     /** Files the owner sent with the message (data/inbox); their paths reach the agent after the prompt. */
     attachments: Attachment[] | null
+    /** The task whose orchestrator delegated this one (`delegate`); null for every other task. */
+    parent_id: string | null
     /** A queued task does not start before this time: it hit the subscription limit and waits for the window to reset. */
     not_before: string | null
     /** How many times the task went back to the queue to wait for a window reset. */
@@ -195,6 +198,17 @@ export interface TaskStats {
     /** The conversation whose reply landed last / whose question opened last: where a notification click should land. */
     chat_unread_latest: ChatRef | null
     chat_needs_reply_latest: ChatRef | null
+}
+
+/** Tokens per backend: `provider` null is the subscription. */
+export interface ProviderUsage {
+    provider: string | null
+    tasks_today: number
+    tokens_today: number
+    tokens_total: number
+    /** Tasks an orchestrator delegated to this backend (roles; a fallback run counts for the subscription). */
+    delegated_total: number
+    last_task_at: string | null
 }
 
 export interface ChatRef {
@@ -327,6 +341,15 @@ const NEEDS_REPLY = `EXISTS (
 const ACTIVE = `EXISTS (
     SELECT 1 FROM tasks t WHERE t.conversation_id = c.id AND t.status IN ('queued', 'running')
 )`
+/** Conversations of the Chat list: a delegated task's own conversation is the parent task's business. */
+const LISTED = `c.channel != 'delegate'`
+/**
+ * The tokens the UI shows: what was sent, written to the cache and generated. Cache reads are
+ * recorded but not counted here: every model call re-reads the whole context, so they make up
+ * ~95 % of the sum and drown the work itself (owner's trial, 2026-10-15).
+ */
+const FRESH_TOKENS = 'input_tokens + output_tokens + cache_creation_tokens'
+const LLM_FRESH_TOKENS = `json_extract(e.payload, '$.tokens') - COALESCE(json_extract(e.payload, '$.cacheReadTokens'), 0)`
 const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply, ${ACTIVE} AS active FROM conversations c`
 /** A schedule run with the status of the task it queued, if any. */
 const SCHEDULE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
@@ -437,15 +460,26 @@ export class Store {
         return (
             this.db
                 .prepare(
-                    `SELECT ${CONVERSATION} WHERE c.deleted_at IS NULL ${sql} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`
+                    `SELECT ${CONVERSATION} WHERE c.deleted_at IS NULL AND ${LISTED} ${sql} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`
                 )
                 .all(...(values as never[]), limit) as unknown as ConversationRow[]
         ).map(conversationOf)
     }
 
-    /** Soft delete: hide from the Chat list; the next Telegram message starts a fresh conversation. */
+    /**
+     * Soft delete: hide from the Chat list; the next Telegram message starts a fresh conversation.
+     * The hidden conversations of the roles its tasks delegated (`external_id` = the parent task) go with it.
+     */
     deleteConversation(id: string): void {
-        this.db.prepare('UPDATE conversations SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), id)
+        const at = now()
+        this.db
+            .prepare(
+                `UPDATE conversations SET deleted_at = ?, updated_at = ?
+                 WHERE deleted_at IS NULL AND (id = ? OR (channel = 'delegate' AND external_id IN (
+                     SELECT t.id FROM tasks t WHERE t.conversation_id = ?
+                 )))`
+            )
+            .run(at, at, id, id)
     }
 
     // ---- tasks ------------------------------------------------------------
@@ -459,7 +493,8 @@ export class Store {
         model: string | null = null,
         attachments: Attachment[] | null = null,
         provider: string | null = null,
-        agent: string | null = null
+        agent: string | null = null,
+        parentId: string | null = null
     ): Task {
         const task: Task = {
             id: randomUUID(),
@@ -486,6 +521,7 @@ export class Store {
             provider,
             agent,
             attachments: attachments?.length ? attachments : null,
+            parent_id: parentId,
             not_before: null,
             limit_waits: 0,
             git: null,
@@ -495,8 +531,8 @@ export class Store {
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, provider, agent, attachments, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, provider, agent, attachments, parent_id, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
                 task.id,
@@ -509,6 +545,7 @@ export class Store {
                 provider,
                 agent,
                 task.attachments ? JSON.stringify(task.attachments) : null,
+                parentId,
                 task.created_at
             )
         return task
@@ -517,6 +554,15 @@ export class Store {
     getTask(id: string): Task | undefined {
         const row = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined
         return row && taskOf(row)
+    }
+
+    /** The tasks a task delegated, oldest first. */
+    childTasks(parentId: string): Task[] {
+        return tasksOf(
+            this.db
+                .prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at ASC, id ASC')
+                .all(parentId) as unknown as TaskRow[]
+        )
     }
 
     updateTask(id: string, patch: Partial<Omit<Task, 'id'>>): Task {
@@ -631,6 +677,26 @@ export class Store {
         return { requeued: tasksOf(requeued), failed: tasksOf(failed) }
     }
 
+    /** Tokens per backend, today (since `dayStart`) and ever: the subscription (provider null) and each provider a task ran on. */
+    usageByProvider(dayStart: string): ProviderUsage[] {
+        return this.db
+            .prepare(
+                `SELECT provider,
+                    SUM(created_at >= ?) AS tasks_today,
+                    SUM(CASE WHEN created_at >= ? THEN tokens ELSE 0 END) AS tokens_today,
+                    SUM(tokens) AS tokens_total,
+                    SUM(parent_id IS NOT NULL) AS delegated_total,
+                    MAX(created_at) AS last_task_at
+                 FROM (
+                    SELECT *, ${FRESH_TOKENS} AS tokens
+                    FROM tasks
+                 )
+                 GROUP BY provider
+                 ORDER BY provider IS NOT NULL, provider`
+            )
+            .all(dayStart, dayStart) as unknown as ProviderUsage[]
+    }
+
     /** `dayStart`: when "today" began (ISO), the owner's midnight, not UTC's. */
     stats(dayStart: string): TaskStats {
         const row = this.db
@@ -643,7 +709,7 @@ export class Store {
                     SUM(CASE WHEN created_at >= ? THEN tokens ELSE 0 END) AS tokens_today,
                     SUM(tokens) AS tokens_total
                  FROM (
-                    SELECT *, input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens AS tokens
+                    SELECT *, ${FRESH_TOKENS} AS tokens
                     FROM tasks
                  )`
             )
@@ -651,23 +717,23 @@ export class Store {
         const chat = this.db
             .prepare(
                 `SELECT
-                    (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${UNREAD}) AS chat_unread,
-                    (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${NEEDS_REPLY}) AS chat_needs_reply,
+                    (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${LISTED} AND ${UNREAD}) AS chat_unread,
+                    (SELECT COUNT(*) FROM conversations c WHERE c.deleted_at IS NULL AND ${LISTED} AND ${NEEDS_REPLY}) AS chat_needs_reply,
                     (SELECT COUNT(*) FROM tasks t JOIN conversations c ON c.id = t.conversation_id
-                      WHERE c.deleted_at IS NULL AND t.status IN ('queued', 'running')) AS chat_active`
+                      WHERE c.deleted_at IS NULL AND ${LISTED} AND t.status IN ('queued', 'running')) AS chat_active`
             )
             .get() as { chat_unread: number; chat_needs_reply: number; chat_active: number }
         // The newest conversation in each state, so a notification can open the right thread.
         const unreadLatest = this.db
             .prepare(
-                `SELECT c.id, c.title FROM conversations c WHERE c.deleted_at IS NULL AND ${UNREAD}
+                `SELECT c.id, c.title FROM conversations c WHERE c.deleted_at IS NULL AND ${LISTED} AND ${UNREAD}
                  ORDER BY (SELECT MAX(t.finished_at) FROM tasks t WHERE t.conversation_id = c.id AND t.status IN ('done', 'failed')) DESC
                  LIMIT 1`
             )
             .get() as ChatRef | undefined
         const askLatest = this.db
             .prepare(
-                `SELECT c.id, c.title FROM conversations c WHERE c.deleted_at IS NULL AND ${NEEDS_REPLY}
+                `SELECT c.id, c.title FROM conversations c WHERE c.deleted_at IS NULL AND ${LISTED} AND ${NEEDS_REPLY}
                  ORDER BY (SELECT MAX(t.created_at) FROM tasks t WHERE t.conversation_id = c.id AND t.status = 'running' AND t.ask IS NOT NULL) DESC
                  LIMIT 1`
             )
@@ -984,7 +1050,7 @@ export class Store {
                 `SELECT COUNT(*) AS events,
                         COUNT(DISTINCT COALESCE(e.agent, '')) AS agents,
                         COUNT(DISTINCT e.task_id) AS tasks,
-                        SUM(CASE WHEN e.type = 'llm' THEN json_extract(e.payload, '$.tokens') ELSE 0 END) AS tokens
+                        SUM(CASE WHEN e.type = 'llm' THEN ${LLM_FRESH_TOKENS} ELSE 0 END) AS tokens
                  FROM task_events e JOIN tasks t ON t.id = e.task_id ${sql}`
             )
             .get(...(values as never[])) as Record<keyof AuditStats, number | null>
@@ -1012,7 +1078,7 @@ export class Store {
         for (const s of starts) Object.assign(row(s.agent), { runs: s.runs, last_active: s.last })
         const tokens = this.db
             .prepare(
-                `SELECT e.agent, SUM(json_extract(e.payload, '$.tokens')) AS tokens, MAX(e.ts) AS last FROM task_events e
+                `SELECT e.agent, SUM(${LLM_FRESH_TOKENS}) AS tokens, MAX(e.ts) AS last FROM task_events e
                  WHERE e.type = 'llm' ${cond} GROUP BY e.agent`
             )
             .all(...(args as never[])) as Array<{ agent: string | null; tokens: number; last: string }>

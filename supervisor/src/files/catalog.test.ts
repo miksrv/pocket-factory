@@ -40,7 +40,7 @@ describe('Catalog', () => {
         }
     )
 
-    it.each(['Explore', 'miksoft.pro', 'a_b-c.1', 'x'.repeat(64)])('accepts the name %j', (name) => {
+    it.each(['Explore', 'my.site', 'a_b-c.1', 'x'.repeat(64)])('accepts the name %j', (name) => {
         expect(() => catalog.fileFor('agents', name)).not.toThrow()
     })
 

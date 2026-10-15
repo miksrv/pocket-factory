@@ -1,12 +1,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import tls from 'node:tls'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import YAML from 'yaml'
 
 import { BadName, NotFound } from './catalog.js'
-import { modelRef, parseModelRef, Providers } from './providers.js'
+import { modelRef, parseCa, parseModelRef, Providers } from './providers.js'
+
+const fixture = (name: string) => fs.readFileSync(new URL(`../test/fixtures/${name}`, import.meta.url), 'utf8')
 
 describe('parseModelRef', () => {
     it.each([
@@ -15,16 +18,16 @@ describe('parseModelRef', () => {
         ['claude-opus-5-5', null, 'claude-opus-5-5'],
         ['claude:opus', null, 'opus'],
         ['claude', null, null],
-        ['lookatstars', null, 'lookatstars'],
-        ['lookatstars:gemma4:12b', 'lookatstars', 'gemma4:12b'],
+        ['gpu-box', null, 'gpu-box'],
+        ['gpu-box:gemma4:12b', 'gpu-box', 'gemma4:12b'],
         [' gemini : gemini-2.5-pro ', 'gemini', 'gemini-2.5-pro']
     ])('%j → provider %j, model %j', (ref, provider, model) => {
         expect(parseModelRef(ref)).toEqual({ provider, model })
     })
 
     it('round-trips through modelRef', () => {
-        expect(modelRef('lookatstars', 'gemma4:12b')).toBe('lookatstars:gemma4:12b')
-        expect(modelRef('lookatstars', null)).toBe('lookatstars')
+        expect(modelRef('gpu-box', 'gemma4:12b')).toBe('gpu-box:gemma4:12b')
+        expect(modelRef('gpu-box', null)).toBe('gpu-box')
         expect(modelRef(null, 'opus')).toBe('opus')
         expect(modelRef(null, null)).toBeNull()
     })
@@ -42,13 +45,13 @@ describe('Providers', () => {
 
     it('starts empty and saves a provider with defaults filled in', () => {
         expect(providers.all()).toEqual([])
-        const saved = providers.save('lookatstars', {
+        const saved = providers.save('gpu-box', {
             url: 'http://10.77.0.1:11434/',
             models: ['gemma4:12b', 'qwen3.5:9b'],
             concurrency: 1
         })
         expect(saved).toEqual({
-            name: 'lookatstars',
+            name: 'gpu-box',
             kind: 'anthropic',
             url: 'http://10.77.0.1:11434',
             models: ['gemma4:12b', 'qwen3.5:9b'],
@@ -59,7 +62,7 @@ describe('Providers', () => {
             providers: unknown[]
         }
         expect(onDisk.providers).toHaveLength(1)
-        expect(providers.get('lookatstars')?.models).toEqual(['gemma4:12b', 'qwen3.5:9b'])
+        expect(providers.get('gpu-box')?.models).toEqual(['gemma4:12b', 'qwen3.5:9b'])
     })
 
     it('keeps the key out of the file and reads it from the environment', () => {
@@ -118,6 +121,34 @@ describe('Providers', () => {
         expect(providers.list().error).toBeTruthy()
         expect(providers.all()).toEqual([])
         expect(() => providers.save('p', { url: 'http://x', models: ['m'] })).toThrow(/not valid YAML/)
+    })
+
+    it("trusts a provider's own CA, follows a rename and forgets it with the provider", () => {
+        const ca = fixture('test-ca.pem')
+        const trusted = () => tls.getCACertificates('default').some((c) => c.includes(ca.split('\n')[1]))
+        providers.save('box', { url: 'https://203.0.113.10:8443', models: ['m'], ca: `junk before\n${ca}` })
+        expect(providers.list().providers[0].ca).toMatchObject({ subject: 'CN=Test Box Root' })
+        expect(fs.existsSync(path.join(dir, 'config', 'certs', 'box.pem'))).toBe(true)
+        expect(trusted()).toBe(true)
+        // Saved without `ca`: kept, and a rename takes it along.
+        providers.save('box', { name: 'box2', url: 'https://203.0.113.10:8443', models: ['m'] })
+        expect(providers.ca('box')).toBeNull()
+        expect(providers.ca('box2')?.fingerprint).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/)
+        // `ca: null` removes it; so does deleting the provider.
+        providers.save('box2', { url: 'https://203.0.113.10:8443', models: ['m'], ca: null })
+        expect(providers.ca('box2')).toBeNull()
+        expect(trusted()).toBe(false)
+        providers.save('box2', { url: 'https://203.0.113.10:8443', models: ['m'], ca })
+        providers.remove('box2')
+        expect(trusted()).toBe(false)
+    })
+
+    it('refuses a private key, a server certificate and garbage as a CA', () => {
+        expect(() => parseCa('-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----')).toThrow(/private key/)
+        expect(() => parseCa(fixture('test-leaf.pem'))).toThrow(/server's own certificate/)
+        expect(() => parseCa('hello')).toThrow(BadName)
+        expect(() => providers.save('box', { url: 'https://x', models: ['m'], ca: 'hello' })).toThrow(BadName)
+        expect(providers.all()).toEqual([])
     })
 
     it('tolerates odd fields in a hand-written file', () => {

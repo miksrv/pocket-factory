@@ -6,7 +6,20 @@ import { Event, summarizeInput } from './EventFeed'
 import { Tile } from './Tile'
 import { Button, Markdown, StatusBadge } from './ui'
 
-type Segment = { kind: 'text'; text: string; agent: string | null } | { kind: 'steps'; events: TaskEvent[] }
+/** What the supervisor recorded when the orchestrator handed a role its task (`delegate`). */
+interface Delegation {
+    task_id: string
+    agent: string
+    provider: string | null
+    model: string | null
+    /** Why the role runs on the subscription instead of its provider; null when it is on its provider. */
+    fallback: string | null
+}
+
+type Segment =
+    | { kind: 'text'; text: string; agent: string | null }
+    | { kind: 'steps'; events: TaskEvent[] }
+    | { kind: 'delegate'; delegation: Delegation }
 
 /**
  * Prose stays prose; everything the agent did in between (tool calls,
@@ -16,6 +29,10 @@ type Segment = { kind: 'text'; text: string; agent: string | null } | { kind: 's
 function segments(events: TaskEvent[]): Segment[] {
     const out: Segment[] = []
     for (const e of events) {
+        if (e.type === 'status' && e.payload.delegate) {
+            out.push({ kind: 'delegate', delegation: e.payload.delegate as Delegation })
+            continue
+        }
         if (e.type === 'status' || e.type === 'error' || e.type === 'llm' || e.type === 'limits') continue
         if (e.type === 'text' && !e.agent) {
             out.push({ kind: 'text', text: String(e.payload.text ?? ''), agent: e.agent })
@@ -75,6 +92,38 @@ function Steps({ events, live }: { events: TaskEvent[]; live: boolean }) {
                 ))}
             </div>
         </details>
+    )
+}
+
+/** A role handed its task: where it runs (or why not where its file says), and its own task page. */
+function DelegateCard({ delegation: d }: { delegation: Delegation }) {
+    return (
+        <div className='delegate-card'>
+            <Tile
+                name={d.agent}
+                kind='agents'
+                small
+            />
+            <div className='grow'>
+                <div>
+                    Delegated to <strong>{d.agent}</strong>{' '}
+                    <span className='dim'>
+                        ·{' '}
+                        {d.provider
+                            ? `${d.provider}${d.model ? `:${d.model}` : ''}`
+                            : `subscription · ${d.model ?? 'default'}`}
+                    </span>
+                </div>
+                {d.fallback && <div className='dim small'>Not on its provider: {d.fallback}</div>}
+            </div>
+            <Button
+                size='sm'
+                variant='ghost'
+                to={`/tasks/${d.task_id}`}
+            >
+                Task
+            </Button>
+        </div>
     )
 }
 
@@ -139,6 +188,11 @@ export function AssistantTurn({
                         <Markdown
                             key={i}
                             source={p.text}
+                        />
+                    ) : p.kind === 'delegate' ? (
+                        <DelegateCard
+                            key={i}
+                            delegation={p.delegation}
                         />
                     ) : (
                         <Steps

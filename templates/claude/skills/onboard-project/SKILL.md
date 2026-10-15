@@ -17,20 +17,20 @@ description: Connect a new repository to the factory by writing its project file
 
 ```markdown
 ---
-name: Astronomy Portal
-slug: astronomy-portal
-path: /data/workspaces/astronomy-portal
-repo: https://github.com/owner/astronomy-portal
+name: Shop
+slug: shop
+path: /data/workspaces/shop
+repo: https://github.com/owner/shop
 default_branch: main
 pr_base: main
 skill: feature-to-pr
 tracker:
   type: github        # github | clickup | trac | jira | none
-  url: https://github.com/owner/astronomy-portal/issues
+  url: https://github.com/owner/shop/issues
 hosts:
   - host: staging-eu                # a shared host (connection) from /data/config/hosts.yaml
-    path: /srv/astronomy-portal     # this project's path on that server
-    notes: compose service `portal`; docker needs sudo there; restart with `docker compose up -d portal`
+    path: /srv/shop     # this project's path on that server
+    notes: compose service `web`; docker needs sudo there; restart with `docker compose up -d web`
 checks:
   - yarn lint
   - yarn typecheck
