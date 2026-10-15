@@ -1420,6 +1420,14 @@ label.row > input[type='checkbox'] {
 .form-grid > .field.wide {
     grid-column: 1 / -1;
 }
+/* A full-width field has no neighbours to line up with, and a group may hold more than three lines
+   (a TLS badge row, one row per MCP server): the three-row subgrid would stack the extra ones on top of each other. */
+.form-grid > label.field.wide,
+.form-grid > div.field.wide.group {
+    display: flex;
+    flex-direction: column;
+    grid-row: auto;
+}
 .tool-picker {
     display: flex;
     flex-direction: column;

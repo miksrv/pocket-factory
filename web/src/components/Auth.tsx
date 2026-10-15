@@ -1,6 +1,7 @@
 import {
     createContext,
     type FormEvent,
+    type KeyboardEvent,
     type ReactNode,
     useCallback,
     useContext,
@@ -162,7 +163,9 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
         const data = new FormData(e.currentTarget as HTMLFormElement)
         const user = String(data.get('username') ?? username).trim()
         const pass = String(data.get('password') ?? password)
-        if (!user || !pass) return
+        // Enter in a half-filled form moves on to the empty field instead of a browser bubble.
+        if (!user) return userRef.current?.focus()
+        if (!pass) return passwordRef.current?.focus()
         setBusy(true)
         setError(null)
         try {
@@ -205,6 +208,13 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
         }
     }
 
+    // Enter submits by hand: a browser or a password manager's extension may swallow the implicit submission.
+    const onEnter = (e: KeyboardEvent<HTMLInputElement>) => {
+        if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+        e.preventDefault()
+        e.currentTarget.form?.requestSubmit()
+    }
+
     const remaining = locked ? Math.max(0, Math.ceil((lockedUntil - now) / 1000)) : 0
     const countdown = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`
 
@@ -213,6 +223,7 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
             <form
                 className='login-card'
                 onSubmit={(e) => void submit(e)}
+                noValidate
                 aria-busy={busy}
             >
                 <Brand />
@@ -227,6 +238,7 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
                         spellCheck={false}
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
+                        onKeyDown={onEnter}
                         disabled={busy || locked}
                         required
                     />
@@ -241,6 +253,7 @@ export function LoginPage({ policy, onSignedIn }: { policy: AuthState['policy'];
                             autoComplete='current-password'
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
+                            onKeyDown={onEnter}
                             disabled={busy || locked}
                             required
                             aria-invalid={error ? true : undefined}

@@ -32,6 +32,26 @@ test.describe('sign-in', () => {
         expect(logins).toEqual(['POST'])
     })
 
+    test('Enter in either field signs in', async ({ page }) => {
+        await page.goto('/')
+        const user = page.getByRole('textbox', { name: 'Username' })
+        const password = page.locator('input[name="password"]')
+        // Enter with the password still empty moves on to it; Enter there signs in.
+        await user.fill(OWNER.user)
+        await user.press('Enter')
+        await expect(password).toBeFocused()
+        await password.fill(OWNER.password)
+        await password.press('Enter')
+        await expect(page.getByRole('navigation')).toBeVisible()
+
+        await page.getByRole('button', { name: 'Sign out' }).click()
+        await expect(page.getByText('Sign in to your factory.')).toBeVisible()
+        await user.fill(OWNER.user)
+        await password.fill(OWNER.password)
+        await password.press('Enter')
+        await expect(page.getByRole('navigation')).toBeVisible()
+    })
+
     test('refuses a wrong password', async ({ page }) => {
         await page.goto('/')
         await signIn(page, OWNER.user, 'not-the-password')

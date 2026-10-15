@@ -27,6 +27,11 @@ section (`node scripts/release.mjs tag`).
   provider's key.
 - The gateway reports why an upstream request failed instead of a bare "fetch failed".
 
+### Fixed
+
+- Enter on the sign-in page signs in from either field (or moves to the empty one), and the
+  provider dialog's TLS certificate and MCP server rows no longer overlap.
+
 ## [1.3.0] - 2026-10-14
 
 ### Added
