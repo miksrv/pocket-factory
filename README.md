@@ -95,7 +95,9 @@ lists what is taken from each.
   self-hosted model (Ollama, vLLM) or a cloud API (OpenRouter, or OpenAI-compatible ones such as
   Gemini and Groq), in the same Claude Code CLI. The supervisor's gateway adds each provider's key,
   so keys never reach the agent; a provider can bring its own MCP servers and TLS certificate, and
-  small models run in a light mode that keeps the prompt short. Settings → Providers adds, tests
+  small models run in a light mode that keeps the prompt short. A Claude orchestrator can delegate
+  a role to such a model (research, drafts) and check the result itself; when the box is down the
+  role runs on Claude instead. Settings → Providers adds, tests
   and lists them; [docs/SELF_HOSTED_LLM.md](docs/SELF_HOSTED_LLM.md) sets up a GPU box.
 - **Presets** — shareable bundles under `presets/`: `fullstack-ts-go`, `fullstack-ts-php`,
   `pr-review`, `devops` (read-only server checks over SSH), `email-assistant` (Gmail drafts

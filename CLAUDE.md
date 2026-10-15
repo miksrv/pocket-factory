@@ -92,7 +92,8 @@ on :8080 against the container.
     sidecar through `DOCKER_HOST`), `service.ts` (overview cached a minute; `health()` answers from
     the cache and refreshes in the background so a dead sidecar never stalls `/api/status`)
   - `gateway/` — the provider gateway (`/gateway/<name>`, outside `/api`), `translate.ts`
-    Anthropic Messages ↔ OpenAI chat completions, streaming included; MCP pass-through
+    Anthropic Messages ↔ OpenAI chat completions, streaming included; MCP pass-through;
+    `factory.ts` the factory's own MCP server per task (`/factory/<task>/mcp`, tool `delegate`)
   - `git/changes.ts` — the Changes panel (start head recorded before the CLI starts, measured at
     the end of every attempt: branch, base, files / lines, uncommitted, `gh pr list --head`)
   - `claude/mcpLogin.ts` — `claude mcp login --no-browser` under a pseudo-terminal; `claude/models.ts`
@@ -248,8 +249,18 @@ no "Generated with" in PR bodies.
   six built-in tools, `--disable-slash-commands`, `--strict-mcp-config`; a schedule on such a
   provider embodies its `agent:` instead of delegating. Provider tasks have no window share;
   `pausedUntil`, auto-continue and soft-stop apply to subscription tasks only.
+- **Delegation** (1.4.0): an agent file with `provider:` is a role a subscription orchestrator
+  hands work to with `mcp__factory__delegate` (`TaskService.delegate`); `Agent(<role>)` is denied
+  in every subscription session so the role never runs on Claude. The role is a child task
+  (`parent_id`, source and hidden conversation `delegate`) in `data/inbox/<parent chat>/delegate/
+  <child>/`; it borrows the waiting parent's slot, dies with the parent, and a repeated call with
+  the same agent + prompt (a resumed parent) joins it. A provider that does not answer, fails
+  mid-run, or is not in the project file's `providers:` list → the role runs on the subscription
+  with the orchestrator's model (`fallback:` alias, or `none` to report instead). Owner's rule:
+  a dead box must never break the task.
 - No money for providers yet (owner's open call). Work-project code never goes to the self-hosted
-  box in Russia (`lookatstars`); `docs/SELF_HOSTED_LLM.md` is the forker's guide to such a box.
+  box in Russia (`lookatstars`): a project delegates only to providers its file lists;
+  `docs/SELF_HOSTED_LLM.md` is the forker's guide to such a box.
 
 ### MCP
 
@@ -367,8 +378,9 @@ no "Generated with" in PR bodies.
 4. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
    `POST /api/tasks/fire`, "continue in chat" for a laptop session, Merge from the UI, files back
    to the chat, budgets per agent / project, audit export.
-5. Providers: delegation from a Claude orchestrator to a role on another provider
-   (`docs/plans/providers.md`), a per-project provider allowlist, the 1.3.0 review follow-ups.
+5. Providers: put the geometki article writer on `lookatstars` (a `geometki-writer` role + the
+   skill's "delegate, then check and publish" step); tokens moved off the subscription on the
+   Overview, the delegation line in Telegram, the 1.3.0 review follow-ups (`docs/plans/providers.md`).
 6. Toolchains: a weekly prune schedule, `data/docker` size in Health, toolchains in `/status`.
 7. Hardening: backups of `data/`, README for forkers, `useBlocker` for browser back, one shared
    status poll, CodeMirror.

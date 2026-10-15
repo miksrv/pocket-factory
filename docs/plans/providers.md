@@ -4,8 +4,8 @@ Status: shipped. **1.3.0** (2026-10-14): `data/config/providers.yaml`, the trans
 light mode, per-provider concurrency, provider + model per schedule / agent / chat. **1.4.0**
 (2026-10-15): a provider's own MCP servers through the gateway, its TLS CA in the form, a
 per-provider gateway bearer. How it works today is in `CLAUDE.md` (Model providers); the
-forker's guide to a GPU box is `docs/SELF_HOSTED_LLM.md`. Open: delegation (below), the
-follow-ups, the owner's questions.
+forker's guide to a GPU box is `docs/SELF_HOSTED_LLM.md`. Delegation from a Claude orchestrator
+shipped in 1.4.0 too (below). Open: the follow-ups, the owner's questions.
 
 ## Small models in the CLI (tests 2026-10-14, `lookatstars`: RTX 2080 Ti 11 GB, Ollama 0.40)
 
@@ -37,14 +37,36 @@ one endpoint for the orchestrator and all its sub-agents, and the subscription's
 never proxied (SPEC §8). So a provider is chosen **per task**; within one provider roles may use
 different models.
 
-## Delegation (deferred)
+## Delegation (shipped in 1.4.0)
 
-**Claude orchestrator + a role on another provider** needs two processes. A factory MCP tool
-`delegate(agent, prompt)` queues a child task on the agent's provider and returns its report;
-the parent's slot is lent to the child, `tasks.parent_id` links them, the Audit log nests them,
-the dispatcher rules route roles on other providers to `delegate`. First use: a Claude
-fact-check of locally written pages (the geometki pipeline: research → write → draft → link to
-Telegram → the owner publishes).
+A Claude orchestrator hands a role on another provider its work through the factory's own MCP
+server (`/factory/<task>/mcp`, `gateway/factory.ts`, a bearer per task): the tool
+`delegate(agent, prompt, files?)` queues a child task (`tasks.parent_id`, `source: delegate`, a
+hidden conversation of channel `delegate`) on the agent's provider, waits and answers with the
+report, the work directory (`data/inbox/<parent chat>/delegate/<child>/`) and its files. The call
+streams MCP progress every 30 s; the server's `timeout` in `--mcp-config` (3 h) lifts the CLI's
+per-call and idle limits (CLI 2.1.283: `timeout` per server, idle = max(default, timeout)).
+
+- Roles = agent files with `provider:`; their `Agent(<name>)` is denied in every subscription
+  session (verified: "Agent type … has been denied by permission rule" in `-p`), and
+  `--append-system-prompt` names them and the tool, which sits behind ToolSearch.
+- The waiting parent lends its slot to one child at a time; a provider's `concurrency` still
+  queues the box. A stopped or finished parent cancels its children. A parent resumed after a
+  restart calling with the same agent + prompt joins the child already made.
+- Fallback (`fallback:` inherit | alias | none): before queueing, `reachable()` asks the
+  provider's models route (any status < 500 within 10 s, cached a minute; never loads a model);
+  a child that fails on the box for transport reasons (the gateway's health since its start, or
+  the error text) runs once more on the subscription. A project without the provider in its
+  `providers:` list also falls back. The fallback run gets the role's body through
+  `--append-system-prompt` with "use WebSearch / WebFetch" instead of the box's search.
+- Measured 2026-10-15 (local container, haiku orchestrator, gemma4:12b role): research + 180-word
+  note on lookatstars in 29 s, 0 subscription tokens for the role; the orchestrator's brief,
+  waiting, reading and checking the file: 4 turns, ~124k tokens (mostly cache reads of its own
+  system prompt).
+
+Not built: an Overview figure for tokens moved off the subscription, the delegation line in the
+Telegram footer, nested children in the Audit log (the child is its own task there), parallel
+calls sharing one lent slot (a second concurrent child takes a slot of its own).
 
 ## Network (owner, 2026-10-15)
 
