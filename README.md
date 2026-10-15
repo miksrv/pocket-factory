@@ -150,6 +150,7 @@ web/                     admin UI (Vite + React), built into the image and serve
 templates/claude/        seeded into data/claude on every start (never overwrites your edits)
 presets/                 shareable agent + skill bundles, installable from the UI
 docs/SPEC.md             requirements & roadmap · docs/LANDSCAPE.md  the neighbours and what is taken from them
+docs/SELF_HOSTED_LLM.md  your own GPU box as a model provider (Ollama + Caddy + search MCP)
 ```
 
 Moving to another host is `rsync data/` + `docker compose up`.

@@ -107,8 +107,8 @@ export interface RunOptions {
     env?: NodeJS.ProcessEnv
     /** Wall-clock limit for the run; 0 = none. A hung tool otherwise holds a session slot forever. Paused while an `ask` waits for the owner, then restarted. */
     timeoutMs?: number
-    /** Extra MCP servers for this run (`--mcp-config`), as a path to a JSON file. */
-    mcpConfig?: string
+    /** Extra MCP servers for this run (`--mcp-config`): paths to JSON files or JSON strings. */
+    mcpConfig?: string[]
     /** Settings for this run (`--settings`), e.g. `disabledMcpjsonServers`. */
     settings?: Record<string, unknown>
     /** Directories outside the cwd the session may read without asking (`--add-dir`), e.g. the owner's uploads. */
@@ -298,7 +298,7 @@ export function runClaude(options: RunOptions): RunHandle {
     ]
     if (options.model) args.push('--model', options.model)
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
-    if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig)
+    if (options.mcpConfig?.length) args.push('--mcp-config', ...options.mcpConfig)
     if (options.settings && Object.keys(options.settings).length)
         args.push('--settings', JSON.stringify(options.settings))
     for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)

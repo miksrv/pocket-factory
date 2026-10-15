@@ -298,6 +298,14 @@ export interface ProviderStatus {
     error: string | null
 }
 
+/** An MCP server that comes with a provider (a search next to a self-hosted model): only that provider's tasks get it, through the gateway. */
+export interface ProviderMcp {
+    name: string
+    url: string
+    /** Name of the .env variable with its bearer. */
+    token?: string
+}
+
 /** A model provider besides the subscription (`data/config/providers.yaml`): a self-hosted model or a cloud API. */
 export interface Provider {
     name: string
@@ -314,9 +322,13 @@ export interface Provider {
     concurrency: number
     /** Short system prompt and few tools instead of Claude Code's own (small models need it). */
     light: boolean
+    mcp?: ProviderMcp[]
 }
 
-export interface ProviderView extends Provider {
+export interface ProviderView extends Omit<Provider, 'mcp'> {
+    mcp?: Array<ProviderMcp & { token_set: boolean }>
+    /** The CA certificate the factory trusts for this provider (a self-signed box); null = public CAs only. */
+    ca: { subject: string; issuer: string; fingerprint: string; valid_to: string } | null
     token_set: boolean
     running: number
     health: { requests: number; ok: boolean | null; error: string | null; at: string | null } | null
@@ -339,6 +351,8 @@ export interface ProviderTest {
     tool_calling?: boolean
     output?: string
     error?: string
+    /** One MCP `initialize` per server of the provider. */
+    mcp?: Array<{ name: string; ok: boolean; server?: string; error?: string }>
 }
 
 export interface ToolchainsHealth {
@@ -938,7 +952,12 @@ export const api = {
 
     /** Model providers besides the subscription, with each key's presence (never its value) and who uses it. */
     providers: () => request<ProvidersOverview>('/providers'),
-    saveProvider: (name: string, provider: Omit<Provider, 'name'> & { name?: string }, create = false) =>
+    /** `ca`: a PEM replaces the trusted certificate, null removes it, absent keeps it. */
+    saveProvider: (
+        name: string,
+        provider: Omit<Provider, 'name'> & { name?: string; ca?: string | null },
+        create = false
+    ) =>
         request<Provider>(`/providers/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
             method: 'PUT',
             body: JSON.stringify(provider)

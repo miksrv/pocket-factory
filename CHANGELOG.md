@@ -9,6 +9,24 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.4.0] - 2026-10-15
+
+### Added
+
+- A provider's own MCP servers (Settings → Providers → MCP servers: name, URL, key variable): only
+  the tasks on that provider get them, through the factory's gateway, which adds the key; a
+  subscription task never connects to the provider's box.
+- TLS certificate field on a provider: paste a self-signed box's CA and the factory trusts it at
+  once, no `NODE_EXTRA_CA_CERTS`, no restart.
+- Test checks the provider's MCP servers too; a certificate failure says what to paste.
+- `docs/SELF_HOSTED_LLM.md`: the guide to a GPU box with Ollama, Caddy and a search MCP.
+
+### Changed
+
+- Each provider has its own gateway bearer: a task on one provider can no longer use another
+  provider's key.
+- The gateway reports why an upstream request failed instead of a bare "fetch failed".
+
 ## [1.3.0] - 2026-10-14
 
 ### Added

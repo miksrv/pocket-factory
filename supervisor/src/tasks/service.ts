@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -297,8 +297,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly running = new Map<string, RunHandle>()
     /** The provider each running task is on (null = the subscription), for the per-provider limit. */
     private readonly runningOn = new Map<string, string | null>()
-    /** The bearer the CLI presents to the gateway (`ANTHROPIC_AUTH_TOKEN`); the gateway swaps it for the provider's real key. New every start. */
-    readonly gatewayToken = randomBytes(24).toString('hex')
+    /** What the gateway bearers derive from; new every start. */
+    private readonly gatewaySecret = randomBytes(24)
     /** Where the CLI reaches the gateway: the configured port from the start (a task re-queued at boot runs before the server listens), confirmed by `setGatewayPort`. */
     private gatewayBase: string
     private readonly health = new Map<string, ProviderHealth>()
@@ -999,7 +999,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             permissionMode: this.config.claude.permissionMode,
             env: this.agentEnv(),
             timeoutMs: PROBE_TIMEOUT_MS,
-            mcpConfig: this.mcpConfigFile(),
+            mcpConfig: [this.mcpConfigFile()].filter((c): c is string => Boolean(c)),
             onEvent: (event) => {
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
@@ -1079,7 +1079,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return {
             ...env,
             ANTHROPIC_BASE_URL: `${this.gatewayBase}/${encodeURIComponent(provider.name)}`,
-            ANTHROPIC_AUTH_TOKEN: this.gatewayToken,
+            ANTHROPIC_AUTH_TOKEN: this.gatewayToken(provider.name),
             ANTHROPIC_MODEL: model,
             ANTHROPIC_DEFAULT_OPUS_MODEL: model,
             ANTHROPIC_DEFAULT_SONNET_MODEL: model,
@@ -1089,6 +1089,33 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
             DISABLE_AUTOUPDATER: '1'
         }
+    }
+
+    /**
+     * The bearer the CLI of a task on `provider` presents to the gateway (`ANTHROPIC_AUTH_TOKEN`, and the
+     * provider's MCP servers); the gateway swaps it for the provider's real key. It opens that provider's
+     * routes only: an agent on a free local model cannot spend a cloud provider's key with it.
+     */
+    gatewayToken(provider: string): string {
+        return createHmac('sha256', this.gatewaySecret).update(provider).digest('hex')
+    }
+
+    /**
+     * `--mcp-config` (a JSON string) for the MCP servers that come with a provider, each pointed at the
+     * gateway, which adds the server's own key; undefined when the provider has none.
+     */
+    providerMcpConfig(provider: Provider): string | undefined {
+        if (!provider.mcp?.length) return undefined
+        const base = `${this.gatewayBase}/${encodeURIComponent(provider.name)}/mcp`
+        const auth = { Authorization: `Bearer ${this.gatewayToken(provider.name)}` }
+        return JSON.stringify({
+            mcpServers: Object.fromEntries(
+                provider.mcp.map((s) => [
+                    s.name,
+                    { type: 'http', url: `${base}/${encodeURIComponent(s.name)}`, headers: auth }
+                ])
+            )
+        })
     }
 
     /** The system prompt and tool set of a light-mode task: its agent file's, else the factory's generic one. */
@@ -1335,7 +1362,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             // Uploads live outside every checkout: readable without a prompt, in this task and in later ones of the session.
             addDirs: fs.existsSync(this.inbox.root) ? [this.inbox.root] : [],
             resumeSessionId: conversation.session_id ?? undefined,
-            mcpConfig: this.mcpConfigFile(),
+            // The factory's own servers, plus the provider's (its search) for a task on that provider only.
+            mcpConfig: [this.mcpConfigFile(), provider && this.providerMcpConfig(provider)].filter((c): c is string =>
+                Boolean(c)
+            ),
             settings: this.sessionSettings(conversation.project),
             // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
             model,
@@ -1352,7 +1382,18 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
-                    this.rememberMcp(conversation.project ?? '.', event.mcpServers)
+                    // A provider's servers are its own in the registry, not the factory's mcp.json.
+                    const own = new Set(provider?.mcp?.map((s) => s.name))
+                    this.rememberMcp(
+                        conversation.project ?? '.',
+                        event.mcpServers.filter((s) => !own.has(s.name))
+                    )
+                    const mine = event.mcpServers.filter((s) => own.has(s.name))
+                    if (mine.length)
+                        this.rememberRegistry(
+                            mine.map((s) => ({ name: s.name, status: s.status, source: `provider:${provider!.name}` })),
+                            null
+                        )
                     return
                 }
                 if (event.type === 'rate_limit') {

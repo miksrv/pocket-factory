@@ -238,7 +238,8 @@ export function SettingsPage() {
 const tone = (status: string) =>
     status === 'connected' ? 'done' : status === 'needs-auth' ? 'queued' : status === 'failed' ? 'failed' : 'cancelled'
 /** `claude mcp login` knows connectors and project servers; a plugin's stdio server has no sign-in and the owner's own file is not on its list. */
-const canSignIn = (s: McpEntry) => s.status !== 'connected' && s.source !== 'plugin' && s.source !== 'factory'
+const canSignIn = (s: McpEntry) =>
+    s.status !== 'connected' && s.source !== 'plugin' && s.source !== 'factory' && !s.source?.startsWith('provider:')
 const sourceLabel = (source: string | null) =>
     source === 'connector'
         ? 'claude.ai connector'
@@ -248,7 +249,9 @@ const sourceLabel = (source: string | null) =>
             ? 'data/config/mcp.json'
             : source?.startsWith('project:')
               ? `project ${source.slice(8)}`
-              : (source ?? 'seen in a session')
+              : source?.startsWith('provider:')
+                ? `provider ${source.slice(9)} only`
+                : (source ?? 'seen in a session')
 
 /**
  * One list for everything the agents can reach: the claude.ai connectors of the

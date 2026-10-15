@@ -158,7 +158,8 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     `DOCKER_MEMORY` (8g). On macOS Docker Desktop dind's `/var/lib/docker` must be a named volume
     (the local `docker-compose.override.yml`, untracked), on Linux the bind mount is fine
   - `files/providers.ts` + `gateway/` + `web/routes/providers.ts` — **Model providers** (1.3.0,
-    2026-10-14, plan and test results in `docs/plans/providers.md`): `data/config/providers.yaml`
+    2026-10-14, plan and test results in `docs/plans/providers.md`, the forker's guide to a GPU box
+    with Ollama + Caddy + a search MCP in `docs/SELF_HOSTED_LLM.md`): `data/config/providers.yaml`
     lists endpoints besides the subscription (`kind: anthropic` speaks `/v1/messages` itself —
     Ollama, vLLM, OpenRouter; `kind: openai` speaks chat completions — OpenAI, Gemini, Groq — and
     `gateway/translate.ts` converts both ways, streaming included), each with `token` = the name
@@ -182,7 +183,16 @@ the load event from ever firing. Chrome's window is never narrower than 500px, s
     Settings → Providers (`components/Providers.tsx`: list, dialog, **Test** = one tool-calling
     probe straight from the supervisor, **Fetch** = `/v1/models`); `ModelPicker` is the shared
     provider + model pair on the agent form, the schedule form and the chat head.
-    `/api/status.providers` (running, last gateway outcome). Not done: delegation from a Claude
+    `/api/status.providers` (running, last gateway outcome). **Provider MCP and TLS** (2026-10-15,
+    uncommitted): a provider's `mcp:` list (`name`, `url`, `token` = variable) is offered only to
+    the tasks on it, as an extra `--mcp-config` JSON pointing at `/gateway/<provider>/mcp/<server>`,
+    a streamable-HTTP pass-through that adds the server's key (a subscription task never connects
+    to the box; the registry marks such a server `provider:<name>`); the gateway bearer is per
+    provider (`gatewayToken(name)`, HMAC of a per-start secret), so a task on one provider cannot
+    spend another's key. A self-signed box: the form's TLS certificate field takes its CA (PEM),
+    kept as `data/config/certs/<provider>.pem` and added to the supervisor's CA store at once
+    (`tls.setDefaultCACertificates`, no `NODE_EXTRA_CA_CERTS`); Test also runs an MCP `initialize`
+    per server, and a certificate failure says what to paste. Not done: delegation from a Claude
     orchestrator to a role on another provider (plan §4), `$` for cloud providers (owner's call)
 - `web/routes/audit.ts` — the audit log: `task_events` carry `agent` (sub-agent type, null =
     orchestrator) and `parent_tool_use_id`; the runner emits `llm` (one per model call), `agent`

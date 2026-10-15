@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { api, type Provider, type ProviderTest, type ProviderView } from '../lib/api'
+import { api, type Provider, type ProviderMcp, type ProviderTest, type ProviderView } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { Modal, useConfirm } from './Modal'
 import { Button } from './ui'
@@ -181,6 +181,15 @@ function TestProvider({ draft, model }: { draft: Partial<Provider>; model?: stri
                     failed
                 </span>
             )}
+            {r?.mcp?.map((m) => (
+                <span
+                    key={m.name}
+                    className={`badge ${m.ok ? 'done' : 'failed'}`}
+                    title={m.ok ? (m.server ?? '') : (m.error ?? '')}
+                >
+                    MCP {m.name} {m.ok ? 'ok' : 'failed'}
+                </span>
+            ))}
             {(r?.error || state.error) && (
                 <code
                     className='host-output'
@@ -193,6 +202,68 @@ function TestProvider({ draft, model }: { draft: Partial<Provider>; model?: stri
     )
 }
 
+/** The provider's own MCP servers: name, URL and the .env variable with the bearer, one row each. */
+function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: ProviderMcp[]) => void }) {
+    const set = (i: number, patch: Partial<ProviderMcp>) =>
+        onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+    return (
+        <div className='field wide group'>
+            <span className='row between'>
+                <span>MCP servers</span>
+                <Button
+                    size='sm'
+                    onClick={() => onChange([...rows, { name: '', url: '', token: '' }])}
+                >
+                    Add MCP server
+                </Button>
+            </span>
+            {rows.map((r, i) => (
+                <span
+                    key={i}
+                    className='row'
+                    style={{ gap: 6, flexWrap: 'nowrap' }}
+                >
+                    <input
+                        className='mono'
+                        style={{ flex: '0 0 22%', minWidth: 0 }}
+                        value={r.name}
+                        placeholder='search'
+                        aria-label='MCP server name'
+                        onChange={(e) => set(i, { name: e.target.value })}
+                    />
+                    <input
+                        className='mono'
+                        style={{ flex: 1, minWidth: 0 }}
+                        value={r.url}
+                        placeholder='https://203.0.113.10:8443/mcp'
+                        aria-label='MCP server URL'
+                        onChange={(e) => set(i, { url: e.target.value })}
+                    />
+                    <input
+                        className='mono'
+                        style={{ flex: '0 0 28%', minWidth: 0 }}
+                        value={r.token ?? ''}
+                        placeholder='MYBOX_MCP_TOKEN'
+                        aria-label='MCP key variable'
+                        onChange={(e) => set(i, { token: e.target.value.toUpperCase() })}
+                    />
+                    <Button
+                        size='sm'
+                        variant='danger'
+                        onClick={() => onChange(rows.filter((_, j) => j !== i))}
+                    >
+                        Remove
+                    </Button>
+                </span>
+            ))}
+            <span className='dim'>
+                streamable HTTP servers (a web search next to the model) for the tasks on this provider only: a
+                subscription task never connects to them; the factory's gateway adds the key from .env
+            </span>
+        </div>
+    )
+}
+
 export function ProviderDialog({
     open,
     initial,
@@ -202,7 +273,7 @@ export function ProviderDialog({
     onSaved
 }: {
     open: boolean
-    initial?: Partial<Provider>
+    initial?: Partial<Provider> & { ca?: ProviderView['ca'] }
     /** The saved name of the provider being edited; absent when creating. */
     editing?: string
     taken?: string[]
@@ -210,6 +281,10 @@ export function ProviderDialog({
     onSaved: (provider: Provider) => void
 }) {
     const [p, setP] = useState<Provider>({ ...EMPTY, ...initial })
+    const [mcp, setMcp] = useState<ProviderMcp[]>([])
+    /** A pasted PEM to trust; '' = untouched. `dropCa` removes the saved one. */
+    const [ca, setCa] = useState('')
+    const [dropCa, setDropCa] = useState(false)
     const [models, setModels] = useState('')
     const [busy, setBusy] = useState(false)
     const [fetching, setFetching] = useState(false)
@@ -218,6 +293,9 @@ export function ProviderDialog({
         if (open) {
             setP({ ...EMPTY, ...initial })
             setModels((initial?.models ?? []).join('\n'))
+            setMcp((initial?.mcp ?? []).map(({ name, url, token }) => ({ name, url, token })))
+            setCa('')
+            setDropCa(false)
             setError(null)
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,7 +305,10 @@ export function ProviderDialog({
         .split(/[,\n]/)
         .map((m) => m.trim())
         .filter(Boolean)
-    const draft: Provider = { ...p, models: list }
+    const servers = mcp
+        .map((m) => ({ name: m.name.trim(), url: m.url.trim(), token: m.token?.trim() || undefined }))
+        .filter((m) => m.name || m.url)
+    const draft: Provider = { ...p, models: list, mcp: servers }
     const nameTaken = taken.includes(p.name.trim()) && p.name.trim() !== editing
     const fetchModels = async () => {
         setFetching(true)
@@ -262,7 +343,9 @@ export function ProviderDialog({
                     default: p.default || undefined,
                     small: p.small?.trim() || undefined,
                     concurrency: p.concurrency,
-                    light: p.light
+                    light: p.light,
+                    mcp: servers,
+                    ca: ca.trim() ? ca : dropCa ? null : undefined
                 },
                 !editing
             )
@@ -439,6 +522,50 @@ export function ProviderDialog({
                             connectors; models under ~30B need it, a frontier model can take the full prompt
                         </span>
                     </div>
+                    <div className='field wide group'>
+                        <span>TLS certificate</span>
+                        {initial?.ca && !dropCa && !ca.trim() && (
+                            <span
+                                className='row'
+                                style={{ gap: 8 }}
+                            >
+                                <span className='badge done'>trusted</span>
+                                <span
+                                    className='mono dim small'
+                                    title={`${initial.ca.fingerprint} · valid to ${initial.ca.valid_to.slice(0, 10)}`}
+                                >
+                                    {initial.ca.subject}
+                                </span>
+                                <Button
+                                    size='sm'
+                                    variant='danger'
+                                    onClick={() => setDropCa(true)}
+                                >
+                                    Remove
+                                </Button>
+                            </span>
+                        )}
+                        <textarea
+                            className='mono'
+                            rows={ca ? 4 : 2}
+                            value={ca}
+                            placeholder={
+                                initial?.ca && !dropCa
+                                    ? 'paste another CA certificate to replace it'
+                                    : '-----BEGIN CERTIFICATE-----  (only for a server with its own CA)'
+                            }
+                            onChange={(e) => setCa(e.target.value)}
+                        />
+                        <span className='dim'>
+                            a box with a self-signed certificate: paste its CA (for Caddy with tls internal:{' '}
+                            <code>/data/caddy/pki/authorities/local/root.crt</code> in the container); the factory then
+                            trusts it, no restart. Empty for a cloud API or a public certificate. Save, then Test
+                        </span>
+                    </div>
+                    <McpRows
+                        rows={mcp}
+                        onChange={setMcp}
+                    />
                 </div>
                 {nameTaken && (
                     <div className='error small'>{`A provider named "${p.name.trim()}" already exists — pick another name, or open it from the list.`}</div>
@@ -537,6 +664,28 @@ export function ProvidersSection() {
                                     last request failed
                                 </span>
                             )}
+                            {p.ca && (
+                                <span
+                                    className='badge plain'
+                                    title={`${p.ca.subject} · ${p.ca.fingerprint}`}
+                                >
+                                    own CA
+                                </span>
+                            )}
+                            {p.mcp?.map((m) => (
+                                <span
+                                    key={m.name}
+                                    className={`badge ${m.token_set ? 'plain' : 'failed'}`}
+                                    title={
+                                        m.token_set
+                                            ? `${m.url}${m.token ? ` · ${m.token}` : ''}`
+                                            : `${m.token} is not set in .env`
+                                    }
+                                >
+                                    MCP {m.name}
+                                    {m.token_set ? '' : ' key missing'}
+                                </span>
+                            ))}
                             {p.running > 0 && <span className='badge running'>{p.running} running</span>}
                         </span>
                         <span className='host-projects'>

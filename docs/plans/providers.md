@@ -206,14 +206,80 @@ for resumed light sessions (CLI 2.1.283 has no such flag); Overview Health line 
 the context length in Test; web tests for `ModelPicker` / `ProvidersSection`; a chat-level
 agent selector (plan §3).
 
+## State 2026-10-15: `lookatstars` as a plain HTTPS provider (no VPN)
+
+Release 1.3.0 is merged, tagged and deployed to mikserver (PR #15). The first production
+run on `lookatstars` (gemma4 in light mode, four chat tasks) worked but had no web access:
+light mode offers six built-in tools and `--strict-mcp-config`, WebSearch is an Anthropic
+server-side tool, and the search MCP of the Mac test was never installed on the factory.
+
+**Network decision (owner, 2026-10-15).** No WireGuard and no persistent SSH tunnel: a
+standing encrypted link from a box inside the office network to a server in Russia is a
+corporate-security problem (beaconing to a RU address) regardless of what it carries, and the
+SSH sidecar that briefly ran on mikserver was removed the same day. Instead `lookatstars` is
+reached like any cloud API: **HTTPS on one TCP port with a bearer, a request only while a task
+runs.** The owner also rejected third-party DNS (sslip.io) and Let's Encrypt, so TLS comes from
+Caddy's own CA (`tls internal`) for the bare IP, and the factory trusts that root certificate.
+The data rule stands: work-project code never goes to this provider; a per-project provider
+allowlist is a wanted guardrail (not built yet).
+
+**Done on `lookatstars`** (`/srv/llm`, see `docs/SELF_HOSTED_LLM.md` for the generic form):
+`caddy:2` on **8443** with `default_sni` for the IP (IP clients send no SNI; a reload did not
+apply it, a restart did), bearer `LLM_API_TOKEN` in front of Ollama for `/v1/*`, `/api/tags`,
+`/api/show` only (model management stays closed), `mcp-searxng` 2.6 as a streamable-HTTP MCP on
+`/mcp` with its own bearer (`MCP_HTTP_HARDEN`, allowed hosts / origins, `TRUST_PROXY`), the
+upstream Host pinned so the router may map any external port. Root CA exported to
+`/srv/llm/caddy-root.crt` (valid to 2036). Verified on the box over TLS: health, 401 without
+tokens, `/api/pull` blocked, a gemma4 tool-call probe, an MCP `initialize` with a foreign port in
+the Host header.
+
+**Done on mikserver** (on 1.3.0): `LOOKATSTARS_TOKEN` and `LOOKATSTARS_MCP_TOKEN` in `.env`,
+the CA at `data/config/certs/lookatstars-ca.crt` with `NODE_EXTRA_CA_CERTS` in the compose
+override, `providers.yaml` → `https://<box IP>:<router port>` + `token: LOOKATSTARS_TOKEN` (the
+router forwards that port to the box's 8443; verified from outside), the search server parked as
+`data/config/mcp.json.pending`: in the global `mcp.json` every session, subscription ones
+included, would connect to the box at start. Ollama had silently fallen back to the CPU
+("Failed to initialize NVML" after a `daemon-reload`), which made the first task run into
+Node's 300 s headers timeout; fixed with CDI on the box (see the guide), and Caddy's log no
+longer prints `X-Api-Key`.
+
+**1.4.0** (this release) closes the gap without any of that: a provider's own `mcp:` servers
+(only its tasks get them, through the gateway, which adds the key), the CA pasted into the
+provider form (trusted at once, no `NODE_EXTRA_CA_CERTS`), a per-provider gateway bearer (closes
+the first review follow-up below) and Test checking the MCP servers too. Verified in the local
+container: Test ok + MCP ok, a search task on `lookatstars` (17 s), a subscription task with zero
+requests to the box.
+
+**After the 1.4.0 release, on mikserver** (`/srv/pocket-factory`):
+
+1. `git pull && docker compose up -d --build`.
+2. Settings → Providers → `lookatstars` → Edit:
+   - **TLS certificate**: paste `/srv/llm/caddy-root.crt` from the box (`cat` it there, or the
+     current `data/config/certs/lookatstars-ca.crt`); the fingerprint must start `C7:EA:89:7D`.
+   - **MCP servers** → Add: `search`, `https://<box IP>:<router port>/mcp`,
+     `LOOKATSTARS_MCP_TOKEN`. Save.
+3. Test on the row: "tool calling ok" and "MCP search ok".
+4. Remove `NODE_EXTRA_CA_CERTS` from `docker-compose.override.yml` (backup first), delete
+   `data/config/certs/lookatstars-ca.crt` (the form keeps its own copy as `lookatstars.pem`) and
+   `data/config/mcp.json.pending`; `docker compose up -d`.
+5. A chat on `lookatstars`: a search task; then a subscription task and the box's Caddy log
+   (`docker compose logs --since 5m caddy` in `/srv/llm`) shows no request from it.
+
+**Follow-ups from the 1.3.0 review** (listed in PR #15): ~~the gateway bearer is per start and
+shared by every provider~~ (per provider since 1.4.0; per-task tokens would still give per-task
+usage accounting); `light: false` and `kind: openai` not verified
+against a live endpoint; a schedule that inherits `provider:` from its agent shows the
+subscription in the form and `usedBy` misses it; `session: continue` keeps the old backend's
+session on a provider change; `/model claude:<alias>` reply and `/status` name the factory
+model instead of the chat's pinned alias.
+
 ## Steps
 
 1. ~~`lookatstars` setup and the hand-run tests~~ — done 2026-10-14.
-2. Factory, release 1.3.0: providers.yaml, Settings → Providers, provider on schedules / chats /
-   agents, light mode, per-provider concurrency, the OpenAI gateway, labels and accounting.
-3. WireGuard mikserver ↔ `lookatstars`, the search MCP in `data/config/mcp.json`, the geometki
-   schedule and skill.
-4. Delegation (§4).
+2. ~~Factory, release 1.3.0~~ — merged, tagged and deployed 2026-10-14.
+3. ~~WireGuard~~ → HTTPS with a bearer on a router port (above), the search MCP in
+   `data/config/mcp.json`; then the geometki schedule and skill.
+4. Delegation (§4); a per-project provider allowlist; the review follow-ups above.
 
 ## Open questions (owner)
 

@@ -1,7 +1,15 @@
 import { Hono } from 'hono'
 
 import { BadName, NotFound } from '../../files/catalog.js'
-import { CLAUDE_PROVIDER, type Provider, tokenVarProblem } from '../../files/providers.js'
+import {
+    CLAUDE_PROVIDER,
+    fetchError,
+    mcpList,
+    type Provider,
+    type ProviderMcp,
+    type Providers,
+    tokenVarProblem
+} from '../../files/providers.js'
 import { fromOpenAiResponse, type OpenAiResponse, toOpenAiRequest } from '../../gateway/translate.js'
 import type { Env } from '../context.js'
 
@@ -24,7 +32,13 @@ function usedBy(c: { get: (k: 'app') => Env['Variables']['app'] }, name: string)
     )
 }
 
-type Body = Partial<Omit<Provider, 'models'>> & { name?: unknown; models?: unknown; light?: unknown }
+type Body = Partial<Omit<Provider, 'models' | 'mcp'>> & {
+    name?: unknown
+    models?: unknown
+    light?: unknown
+    mcp?: unknown
+    ca?: unknown
+}
 
 /** A provider from a request body, or the saved one by `name` with the body's model; what the test and the model list work on. */
 function candidate(c: { get: (k: 'app') => Env['Variables']['app'] }, body: Body): Provider | { error: string } {
@@ -43,6 +57,12 @@ function candidate(c: { get: (k: 'app') => Env['Variables']['app'] }, body: Body
         : typeof body.models === 'string'
           ? body.models.split(/[,\n]/).map((m) => m.trim())
           : []
+    let mcp: ProviderMcp[] | undefined
+    try {
+        mcp = mcpList(body.mcp, true)
+    } catch (error) {
+        return { error: (error as Error).message }
+    }
     return {
         name: typeof body.name === 'string' && body.name ? body.name : 'test',
         kind: body.kind === 'openai' ? 'openai' : 'anthropic',
@@ -52,7 +72,55 @@ function candidate(c: { get: (k: 'app') => Env['Variables']['app'] }, body: Body
         default: typeof body.default === 'string' ? body.default : undefined,
         small: typeof body.small === 'string' ? body.small : undefined,
         concurrency: typeof body.concurrency === 'number' ? body.concurrency : 1,
-        light: body.light !== false
+        light: body.light !== false,
+        mcp
+    }
+}
+
+export interface McpCheck {
+    name: string
+    ok: boolean
+    /** What the server calls itself in its `initialize` answer. */
+    server?: string
+    error?: string
+}
+
+/** One MCP `initialize` against a provider's server with its key: it answers, the key is accepted, it speaks MCP. */
+async function checkMcp(providers: Providers, server: ProviderMcp): Promise<McpCheck> {
+    const key = providers.mcpKey(server)
+    if (server.token && !key) return { name: server.name, ok: false, error: `${server.token} is not set in .env` }
+    try {
+        const response = await fetch(server.url, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                accept: 'application/json, text/event-stream',
+                ...(key ? { authorization: `Bearer ${key}` } : {})
+            },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'initialize',
+                params: {
+                    protocolVersion: '2025-06-18',
+                    capabilities: {},
+                    clientInfo: { name: 'pocket-factory-test', version: '1' }
+                }
+            }),
+            signal: AbortSignal.timeout(20_000)
+        })
+        const text = await response.text()
+        if (!response.ok) return { name: server.name, ok: false, error: `${response.status}: ${text.slice(0, 200)}` }
+        // JSON, or one SSE `data:` line carrying it.
+        const payload = text.trim().startsWith('{') ? text : (/^data:\s*(.+)$/m.exec(text)?.[1] ?? '')
+        const json = JSON.parse(payload) as {
+            result?: { serverInfo?: { name?: string } }
+            error?: { message?: string }
+        }
+        if (!json.result) return { name: server.name, ok: false, error: json.error?.message ?? 'no result' }
+        return { name: server.name, ok: true, server: json.result.serverInfo?.name }
+    } catch (error) {
+        return { name: server.name, ok: false, error: fetchError(error) }
     }
 }
 
@@ -90,7 +158,8 @@ export function providerRoutes(): Hono<Env> {
             if ('error' in draft) return c.json({ error: draft.error }, 400)
             const saved = providers.save(c.req.param('name'), {
                 ...draft,
-                name: typeof body.name === 'string' ? body.name : undefined
+                name: typeof body.name === 'string' ? body.name : undefined,
+                ca: typeof body.ca === 'string' || body.ca === null ? body.ca : undefined
             })
             return c.json(saved)
         } catch (error) {
@@ -129,8 +198,11 @@ export function providerRoutes(): Hono<Env> {
         const model =
             (typeof body.model === 'string' && body.model.trim()) || provider.default || provider.models[0] || ''
         if (!model) return c.json({ error: 'name a model to test' }, 400)
+        // The provider's MCP servers are checked alongside the model.
+        const mcpChecks = Promise.all((provider.mcp ?? []).map((s) => checkMcp(providers, s)))
+        const answer = async (result: Record<string, unknown>) => c.json({ ...result, mcp: await mcpChecks })
         const key = providers.key(provider)
-        if (provider.token && !key) return c.json({ ok: false, error: `${provider.token} is not set in .env`, model })
+        if (provider.token && !key) return answer({ ok: false, error: `${provider.token} is not set in .env`, model })
         const started = Date.now()
         // Room for a thinking model's reasoning before the call (gemma4 spent 64 tokens thinking and never called).
         const probe = {
@@ -172,7 +244,7 @@ export function providerRoutes(): Hono<Env> {
                       })
             const text = await response.text()
             if (!response.ok)
-                return c.json({
+                return answer({
                     ok: false,
                     model,
                     ms: Date.now() - started,
@@ -186,12 +258,12 @@ export function providerRoutes(): Hono<Env> {
                         ? fromOpenAiResponse(json as OpenAiResponse, model)
                         : (json as typeof reply)
             } catch {
-                return c.json({ ok: false, model, ms: Date.now() - started, error: `not JSON: ${text.slice(0, 200)}` })
+                return answer({ ok: false, model, ms: Date.now() - started, error: `not JSON: ${text.slice(0, 200)}` })
             }
             const content = reply.content ?? []
             const toolCalling = content.some((b) => b.type === 'tool_use' && b.name === 'ping')
             if (!toolCalling && reply.stop_reason === 'max_tokens')
-                return c.json({
+                return answer({
                     ok: true,
                     model,
                     ms: Date.now() - started,
@@ -203,14 +275,9 @@ export function providerRoutes(): Hono<Env> {
                 .map((b) => b.text ?? '')
                 .join(' ')
                 .slice(0, 200)
-            return c.json({ ok: true, model, ms: Date.now() - started, tool_calling: toolCalling, output: said })
+            return answer({ ok: true, model, ms: Date.now() - started, tool_calling: toolCalling, output: said })
         } catch (error) {
-            return c.json({
-                ok: false,
-                model,
-                ms: Date.now() - started,
-                error: error instanceof Error ? error.message : String(error)
-            })
+            return answer({ ok: false, model, ms: Date.now() - started, error: fetchError(error) })
         } finally {
             clearTimeout(timer)
         }
