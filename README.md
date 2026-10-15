@@ -47,7 +47,7 @@ that never leave your server, and it works behind an `ANTHROPIC_BASE_URL` proxy.
 | Behind an `ANTHROPIC_BASE_URL` proxy | yes | no | yes | no | no |
 | Plans | any claude.ai login | Pro / Max / Team / Enterprise | Pro / Max | Pro / Max beta | Pro / Max / Team / Enterprise |
 
-What it does not do yet: a worktree per task, merging from the UI, several providers (Codex,
+What it does not do yet: a worktree per task, merging from the UI, other agent runtimes (Codex,
 OpenCode). [docs/LANDSCAPE.md](docs/LANDSCAPE.md) compares the
 open-source neighbours too (Paseo, Happy, claudecodeui, the Telegram bridges, OpenClaw, Hermes) and
 lists what is taken from each.
@@ -91,6 +91,12 @@ lists what is taken from each.
   Docker daemon (a dind sidecar, state in `data/docker`), so a project's compose file brings up its
   database or the whole application for the tests, and what a task started is stopped when it ends.
   Settings → Toolchains lists versions, sizes and containers; nothing is installed on the host.
+- **Model providers** — besides the subscription, a schedule, an agent or a chat can run on a
+  self-hosted model (Ollama, vLLM) or a cloud API (OpenRouter, or OpenAI-compatible ones such as
+  Gemini and Groq), in the same Claude Code CLI. The supervisor's gateway adds each provider's key,
+  so keys never reach the agent; a provider can bring its own MCP servers and TLS certificate, and
+  small models run in a light mode that keeps the prompt short. Settings → Providers adds, tests
+  and lists them; [docs/SELF_HOSTED_LLM.md](docs/SELF_HOSTED_LLM.md) sets up a GPU box.
 - **Presets** — shareable bundles under `presets/`: `fullstack-ts-go`, `fullstack-ts-php`,
   `pr-review`, `devops` (read-only server checks over SSH), `email-assistant` (Gmail drafts
   through the claude.ai connector, nothing ever sent). A colleague installs one with a click
