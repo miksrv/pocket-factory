@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
 
 import type { Config } from '../config.js'
+import { type AgentFile, names } from '../files/agentFiles.js'
 import type { Catalog } from '../files/catalog.js'
 import { createLogger } from '../logger.js'
 import type { ScheduleRun, Store, Task } from '../store/index.js'
@@ -68,6 +70,8 @@ export interface ScheduleRefs extends Refs {
     agentEnv: () => NodeJS.ProcessEnv
     /** Whether tasks on that provider run in light mode (the run then *is* the agent, with no sub-agents). */
     providerLight: (name: string) => boolean
+    /** The agent file in data/claude/agents, for a run on the subscription that is that agent; null when there is none. */
+    agentFile: (name: string) => AgentFile | null
 }
 
 /**
@@ -468,6 +472,14 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
             this.store.updateConversation(conversation.id, { session_id: null })
         // On a light-mode provider the run embodies the agent (its file is the system prompt) instead of delegating to it.
         const light = Boolean(spec.provider && this.refs.providerLight(spec.provider))
+        // On the subscription too (`claude --agent`): an orchestrator that only spawns the agent and relays
+        // its report costs a third of a run. See `runsAsAgent` for when it is still spawned by one.
+        const own = !spec.provider && spec.agent ? this.refs.agentFile(spec.agent) : null
+        const checkout = spec.project ? this.refs.projectPath(spec.project) : null
+        const asAgent = Boolean(own && spec.agent && runsAsAgent(own, checkout, spec.agent))
+        const embodied = light ? 'light' : asAgent ? 'agent' : undefined
+        // The agent's own model, unless the schedule pins one; `inherit` follows the orchestrator's.
+        const agentModel = asAgent && own?.model && own.model !== 'inherit' ? own.model : undefined
         return this.tasks.submit(
             conversation.id,
             'cron',
@@ -476,17 +488,36 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
                 body,
                 items,
                 trigger,
-                { file, configRoot: this.config.paths.configRoot, embodied: light },
+                {
+                    file,
+                    configRoot: this.config.paths.configRoot,
+                    // The path only for a skill of the factory's own; a project's or a plugin's has none to give.
+                    skillsRoot:
+                        spec.skill && this.refs.skillExists(spec.skill)
+                            ? `${this.config.claude.configDir}/skills`
+                            : undefined,
+                    embodied
+                },
                 current
             ),
             {
                 schedule: spec.name,
-                model: spec.model ?? undefined,
+                model: spec.model ?? agentModel,
                 provider: spec.provider,
-                agent: light && spec.agent ? spec.agent : undefined
+                agent: embodied && spec.agent ? spec.agent : undefined
             }
         )
     }
+}
+
+/**
+ * Whether a schedule's run on the subscription can be the agent itself. Not when the agent could not
+ * keep the schedule's notes (neither Edit nor Write among its tools), nor when the project's checkout
+ * has an agent of the same name, which the CLI would pick under `--agent` instead of the file read here.
+ */
+export function runsAsAgent(file: AgentFile, checkout: string | null, name: string): boolean {
+    const can = (tool: string) => (file.tools === null || names(file.tools, tool)) && !names(file.disallowed, tool)
+    return (can('Edit') || can('Write')) && !(checkout && fs.existsSync(`${checkout}/.claude/agents/${name}.md`))
 }
 
 /** The web conversation every run of a schedule lands in. */
@@ -507,7 +538,7 @@ export function buildPrompt(
     body: string,
     items: Item[],
     trigger: 'cron' | 'manual',
-    paths: { file: string; configRoot: string; embodied?: boolean },
+    paths: { file: string; configRoot: string; skillsRoot?: string; embodied?: 'light' | 'agent' },
     current: Item[] = items
 ): string {
     const lines: string[] = []
@@ -535,7 +566,13 @@ export function buildPrompt(
         }
     }
     if (spec.skill && !paths.embodied) facts.push(`Skill to apply: ${spec.skill}`)
+    if (spec.skill && paths.embodied === 'agent')
+        facts.push(
+            `Skill to apply: ${spec.skill}${paths.skillsRoot ? ` (${paths.skillsRoot}/${spec.skill}/SKILL.md)` : ''}`
+        )
     if (spec.agent && !paths.embodied) facts.push(`Delegate the work to the sub-agent: ${spec.agent}`)
+    if (spec.agent && paths.embodied === 'agent')
+        facts.push(`You run as the agent ${spec.agent}: do the work yourself, no sub-agent for it`)
     if (spec.action)
         facts.push(
             `Mode: ${spec.action}${spec.action === 'report' ? ' (look and report; change nothing, post nothing)' : ''}`

@@ -9,6 +9,20 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.4.1] - 2026-10-16
+
+### Changed
+
+- **A schedule runs as its agent.** A schedule with `agent:` on the subscription now starts the
+  session as that agent (`claude --agent`: its prompt, its tools, its `model:` unless the schedule
+  pins one) instead of an orchestrator that loads the skill, spawns the agent and retells its
+  report. On the geometki pipelines that orchestrator took about a third of every run (six calls
+  over a 40-50k context). The agent's `maxTurns:` applies, and the run's thread says
+  `as <agent>`. An agent with neither `Edit` nor `Write` (it could not keep the schedule's notes),
+  or one shadowed by the project's own `.claude/agents`, is still spawned the old way.
+- **The Audit log and the Agents panel count a task's work under the agent it runs as**: a
+  schedule's agent, and a delegated role, instead of the orchestrator.
+
 ## [1.4.0] - 2026-10-15
 
 ### Added

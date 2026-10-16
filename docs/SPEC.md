@@ -121,7 +121,7 @@ Instructions for every run, in prose. ## Notes: what the agent decided last time
 
 - **Firing.** Each allowed minute fires once (20 s ticker). A firing up to `SCHEDULES_LATE_MIN` late still runs; an older one is recorded as `missed`, told in Telegram, never caught up. "Run now" ignores cron and soft-stop but never overlaps a run; `once: true` switches the file off after one task.
 - **Prefilter.** `command`, `github-prs` (key = PR + head commit), `trac` (key = id + change time). New items only; nothing new = no task. A poller's first firing marks what exists as seen; a changed key is passed as "seen before, changed since".
-- **The task** runs in the schedule's own conversation, a fresh session by default, prompt = run frame + file body + new items; report and questions go to Telegram unless `notify: none`.
+- **The task** runs in the schedule's own conversation, a fresh session by default, prompt = run frame + file body + new items; report and questions go to Telegram unless `notify: none`. A schedule with `agent:` on the subscription runs *as* that agent (`claude --agent`, its prompt, tools and `model:`), not as an orchestrator that spawns it and relays its report; an agent without `Edit` (it could not keep the notes) is still spawned. On a light-mode provider the agent's file is the system prompt.
 - **Guards.** One run at a time; **soft-stop** (`SCHEDULES_SOFT_STOP`, 85 %) skips cron firings of subscription runs while a window is above it; an unanswered question is answered for the owner after `SCHEDULES_ASK_TIMEOUT_MIN`. Start with `action: report` and graduate.
 
 ### 4.4 Session lifecycle

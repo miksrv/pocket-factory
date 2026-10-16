@@ -322,6 +322,15 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   seeding mark lives in `meta`, so "Forget seen items" really hands everything over). An item
   whose key changed (`id@changetime`, `pr@sha`) is handed over as "seen before, changed since".
   Run now always hands over.
+- A schedule with `agent:` on the subscription runs **as** that agent (`claude --agent <name>`,
+  1.4.1): its prompt, tools, `maxTurns:` and `model:` (a schedule's `model:` pins it; none or
+  `inherit` there leaves it to the agent file, whose `inherit` follows the orchestrator), no
+  orchestrator that only spawns it and relays the report (~30 % of a run, measured on geometki).
+  Still spawned the old way: an agent with neither `Edit` nor `Write` (it could not keep the notes)
+  and one the project's checkout shadows in `.claude/agents`. The run's events count as the agent's
+  in the Audit log (`COALESCE(e.agent, t.agent)`, which also puts a delegated role's work under the
+  role). The factory's CLAUDE.md still loads under `--agent` (`omitClaudeMd` is for sub-agents
+  only).
 - One run at a time per schedule; cron firings yield to the windows (`SCHEDULES_SOFT_STOP`,
   default 85 %), manual ones do not. Missed minutes: within `SCHEDULES_LATE_MIN` (5) run late,
   older ones are recorded as `missed` and told in Telegram, **never caught up** (owner's call).

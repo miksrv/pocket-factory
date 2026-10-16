@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
+import { agentFile } from './files/agentFiles.js'
 import { Catalog } from './files/catalog.js'
 import { delegateAgents, projectProviders } from './files/delegates.js'
 import { Hosts } from './files/hosts.js'
@@ -63,16 +64,6 @@ async function main(): Promise<void> {
             return entry.name.toLowerCase() === wanted || path.basename(dir).toLowerCase() === wanted
         })
     }
-    /** `tools:` of an agent file: a YAML list or the CLI's comma-separated string; null = not restricted. */
-    const toolList = (tools: unknown): string[] | null =>
-        Array.isArray(tools)
-            ? tools.map(String)
-            : typeof tools === 'string' && tools.trim()
-              ? tools
-                    .split(',')
-                    .map((t) => t.trim())
-                    .filter(Boolean)
-              : null
     const workspace: Workspace = {
         projectPath: (slug) => {
             const entry = projectEntry(slug)
@@ -115,11 +106,7 @@ async function main(): Promise<void> {
                 )
             }),
         sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null,
-        agentFile: (name) => {
-            if (!catalog.exists('agents', name)) return null
-            const entry = catalog.get('agents', name)
-            return { body: entry.body, tools: toolList(entry.frontmatter.tools) }
-        },
+        agentFile: (name) => agentFile(catalog, name),
         // An agent file with `provider:` is a role the orchestrator delegates (`delegate`): it runs on that provider.
         delegates: () => delegateAgents(catalog),
         projectProviders: (slug) => {
@@ -150,6 +137,7 @@ async function main(): Promise<void> {
                     typeof fm.provider_model === 'string' && fm.provider_model.trim() ? fm.provider_model.trim() : null
             }
         },
+        agentFile: (name) => agentFile(catalog, name),
         agentEnv: () => tasks.agentEnv()
     })
     // Telegram is optional: without a token the factory is web-only (also
