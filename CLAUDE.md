@@ -323,12 +323,13 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   whose key changed (`id@changetime`, `pr@sha`) is handed over as "seen before, changed since".
   Run now always hands over.
 - A schedule with `agent:` on the subscription runs **as** that agent (`claude --agent <name>`,
-  1.4.1): its prompt, tools, `maxTurns:` and `model:` (a schedule's `model:` pins it; none or
-  `inherit` there leaves it to the agent file, whose `inherit` follows the orchestrator), no
-  orchestrator that only spawns it and relays the report (~30 % of a run, measured on geometki).
-  Still spawned the old way: an agent with neither `Edit` nor `Write` (it could not keep the notes)
-  and one the project's checkout shadows in `.claude/agents`. The run's events count as the agent's
-  in the Audit log (`COALESCE(e.agent, t.agent)`, which also puts a delegated role's work under the
+  1.4.1; always since 1.4.2, owner's rule: the agent picked in the schedule is what runs, never an
+  orchestrator in between): its prompt, tools, `maxTurns:` and `model:` (a schedule's `model:` pins
+  it; none or `inherit` there leaves it to the agent file, whose `inherit` follows the
+  orchestrator). The schedule's `skill:` (one of `data/claude/skills`) is given in the prompt, so
+  the agent needs no Read. The frame is the same for every agent: one without `Edit` simply keeps no
+  notes (owner: flexible, give it the tool if it should). The run's events count as the agent's in
+  the Audit log (`COALESCE(e.agent, t.agent)`, which also puts a delegated role's work under the
   role). The factory's CLAUDE.md still loads under `--agent` (`omitClaudeMd` is for sub-agents
   only).
 - One run at a time per schedule; cron firings yield to the windows (`SCHEDULES_SOFT_STOP`,
@@ -393,6 +394,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 
 ## Next
 
+0. **1.5.0: Schedules become Routines** (owner, 2026-10-16): `docs/plans/routines.md`.
 1. Schedules: an IMAP prefilter; whether the Trac prefilter needs `/login` is unverified.
 2. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
    `POST /api/tasks/fire`, "continue in chat" for a laptop session, Merge from the UI, files back

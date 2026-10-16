@@ -1,14 +1,12 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AgentFile } from '../files/agentFiles.js'
 import { createTestApp, type TestApp } from '../test/app.js'
 import { parseCron } from './cron.js'
 import type { Item } from './prefilters.js'
-import { buildPrompt, conversationKey, runsAsAgent } from './service.js'
+import { buildPrompt, conversationKey, underHeading } from './service.js'
 import type { ScheduleSpec } from './spec.js'
 
 const spec = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({
@@ -98,13 +96,16 @@ describe('buildPrompt', () => {
         expect(prompt).toContain('- Mode: report (look and report; change nothing, post nothing)')
     })
 
-    it('runs a subscription agent itself: the skill by its path, no sub-agent', () => {
+    it('runs a subscription agent itself: the skill in the prompt, no sub-agent', () => {
         const prompt = buildPrompt(spec({ skill: 'pr-review', agent: 'reviewer' }), 'x', [], 'cron', {
             ...paths,
-            skillsRoot: '/data/claude/skills',
-            embodied: 'agent'
+            embodied: 'agent',
+            skill: { dir: '/data/claude/skills/pr-review', body: '\nRead the diff.\n' }
         })
-        expect(prompt).toContain('- Skill to apply: pr-review (/data/claude/skills/pr-review/SKILL.md)')
+        expect(prompt).toContain(
+            '## Skill: pr-review\n\nIts other files are in `/data/claude/skills/pr-review`.\n\nRead the diff.\n\n## Instructions'
+        )
+        expect(prompt).not.toContain('Skill to apply')
         expect(prompt).toContain('- You run as the agent reviewer: do the work yourself, no sub-agent for it')
         expect(prompt).not.toContain('Delegate the work')
     })
@@ -235,6 +236,8 @@ describe('a schedule with an agent on the subscription', () => {
         expect(flag(call.argv, '--model')).toBe('opus')
         expect(call.prompt).toContain('You run as the agent publisher')
         expect(call.prompt).not.toContain('Delegate the work')
+        expect(call.prompt).toContain('## Skill: publishing')
+        expect(call.prompt).toContain('Memory between runs')
         const note = t.ctx.store
             .listEvents(task.id)
             .find((e) => e.type === 'status' && (e.payload as { note?: string }).note)
@@ -250,39 +253,52 @@ describe('a schedule with an agent on the subscription', () => {
         expect(flag(call.argv, '--agent')).toBe('publisher')
     })
 
-    it('still spawns an agent that could not edit the schedule notes', async () => {
-        const { task, call } = await run({ tools: 'Read, Grep' })
-        expect(task.agent).toBeNull()
-        expect(call.argv).not.toContain('--agent')
-        expect(call.prompt).toContain('- Delegate the work to the sub-agent: publisher')
+    it("gives the skill's directory for ${CLAUDE_SKILL_DIR}, and leaves a project's own skill to the CLI", async () => {
+        t = createTestApp({ claude: RECORDING_CLAUDE })
+        vi.stubEnv('CALLS', path.join(t.dataRoot, 'calls.jsonl'))
+        const { catalog } = t.ctx
+        catalog.save('agents', 'publisher', { frontmatter: { description: 'Publishes' }, body: 'You publish.' })
+        catalog.save('skills', 'publishing', {
+            frontmatter: { description: 'How to publish' },
+            body: '# Steps\n\nRun ${CLAUDE_SKILL_DIR}/scripts/go.sh'
+        })
+        const checkout = path.join(t.ctx.config.paths.workspacesRoot, 'shop')
+        fs.mkdirSync(checkout, { recursive: true })
+        catalog.save('projects', 'shop', { frontmatter: {}, body: '' })
+        catalog.save('schedules', 'daily', {
+            frontmatter: { cron: '0 8 * * *', agent: 'publisher', skill: 'publishing' },
+            body: 'x'
+        })
+        catalog.save('schedules', 'shop-daily', {
+            frontmatter: { cron: '0 8 * * *', agent: 'publisher', skill: 'publishing', project: 'shop' },
+            body: 'x'
+        })
+        fs.mkdirSync(path.join(checkout, '.claude', 'skills', 'publishing'), { recursive: true })
+        const prompt = (name: string) => async () => {
+            const run = await t.ctx.schedules.fire(name, 'manual')
+            return t.ctx.store.getTask(run.task_id!)!.prompt
+        }
+        const dir = path.join(t.ctx.config.claude.configDir, 'skills', 'publishing')
+        const own = await prompt('daily')()
+        expect(own).toContain(`### Steps\n\nRun ${dir}/scripts/go.sh`)
+        const project = await prompt('shop-daily')()
+        expect(project).not.toContain('## Skill: publishing')
+        expect(project).toContain('- Skill to apply: publishing')
+    })
+
+    it('runs an agent that cannot edit files too, with the same frame', async () => {
+        const { task, call } = await run({ tools: 'mcp__claude_ai_Gmail__search_threads' })
+        expect(task.agent).toBe('publisher')
+        expect(flag(call.argv, '--agent')).toBe('publisher')
+        expect(call.prompt).toContain('## Skill: publishing\n\nIts other files are in')
+        expect(call.prompt).toContain('Memory between runs')
     })
 })
 
-describe('runsAsAgent', () => {
-    const file = (over: Partial<AgentFile> = {}): AgentFile => ({
-        body: 'x',
-        tools: null,
-        disallowed: [],
-        model: null,
-        maxTurns: null,
-        ...over
-    })
-
-    it('needs Edit or Write to keep the notes', () => {
-        expect(runsAsAgent(file(), null, 'a')).toBe(true)
-        expect(runsAsAgent(file({ tools: ['Read', 'Write'] }), null, 'a')).toBe(true)
-        expect(runsAsAgent(file({ tools: ['Read', 'Edit(/data/**)'] }), null, 'a')).toBe(true)
-        expect(runsAsAgent(file({ tools: ['Read', 'Grep'] }), null, 'a')).toBe(false)
-        expect(runsAsAgent(file({ disallowed: ['Edit', 'Write'] }), null, 'a')).toBe(false)
-        expect(runsAsAgent(file({ disallowed: ['Edit'] }), null, 'a')).toBe(true)
-    })
-
-    it("yields to a project's agent of the same name, which the CLI would run instead", () => {
-        const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-checkout-'))
-        expect(runsAsAgent(file(), checkout, 'reviewer')).toBe(true)
-        fs.mkdirSync(path.join(checkout, '.claude', 'agents'), { recursive: true })
-        fs.writeFileSync(path.join(checkout, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\n---\n')
-        expect(runsAsAgent(file(), checkout, 'reviewer')).toBe(false)
-        fs.rmSync(checkout, { recursive: true, force: true })
+describe('underHeading', () => {
+    it('puts headings two levels down, never past six, and leaves code fences alone', () => {
+        expect(underHeading('# A\ntext\n#### B\n##### C\n```\n# not a heading\n```\n#tag')).toBe(
+            '### A\ntext\n###### B\n###### C\n```\n# not a heading\n```\n#tag'
+        )
     })
 })

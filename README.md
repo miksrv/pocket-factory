@@ -102,8 +102,8 @@ lists what is taken from each.
   role runs on Claude instead. Settings → Providers adds, tests
   and lists them; [docs/SELF_HOSTED_LLM.md](docs/SELF_HOSTED_LLM.md) sets up a GPU box.
 - **Presets** — shareable bundles under `presets/`: `fullstack-ts-go`, `fullstack-ts-php`,
-  `pr-review`, `devops` (read-only server checks over SSH), `email-assistant` (Gmail drafts
-  through the claude.ai connector, nothing ever sent). A colleague installs one with a click
+  `pr-review`, `email-assistant` (Gmail drafts through the claude.ai connector, nothing ever
+  sent). A colleague installs one with a click
   into their own factory.
 - **Security** — the bot answers only allow-listed user ids; the web UI has a sign-in with lockout,
   revocable browser sessions and Telegram notices; the CLI's environment carries none of the
