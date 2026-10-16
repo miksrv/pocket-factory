@@ -357,6 +357,10 @@ export interface Provider {
     concurrency: number
     /** Short system prompt and few tools instead of Claude Code's own (small models need it). */
     light: boolean
+    /** Output tokens per model call; empty = 8000. A looping small model fails at this, not at the CLI's 32k. */
+    max_output?: number
+    /** The model's context window in tokens, so the CLI compacts before a small window is full; empty = the CLI's assumption. */
+    context?: number
     mcp?: ProviderMcp[]
 }
 
@@ -577,6 +581,8 @@ export interface McpOverview {
 export interface ToolList {
     common: string[]
     reported: string[]
+    /** Sub-agent types the CLI listed at its last session start (built-ins, agent files, a checkout's and plugins' agents); empty until a session ran. */
+    agents: string[]
     /** One entry per MCP server the factory has seen (claude.ai connectors, plugins, project servers, the owner's own); `tools` are full names, empty while the server needs authentication. */
     mcp: Array<{ server: string; label: string; source: string | null; status: string; tools: string[] }>
     source: 'cli' | 'default'

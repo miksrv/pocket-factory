@@ -114,7 +114,9 @@ function DelegateCard({ delegation: d }: { delegation: Delegation }) {
                             : `subscription · ${d.model ?? 'default'}`}
                     </span>
                 </div>
-                {d.fallback && <div className='dim small'>Not on its provider: {d.fallback}</div>}
+                {d.fallback && (
+                    <div className='small warn-text'>Ran on the subscription, not on its provider: {d.fallback}</div>
+                )}
             </div>
             <Button
                 size='sm'

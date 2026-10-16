@@ -12,7 +12,7 @@ import type { Routines } from './routines/service.js'
 import type { RoutineSpec } from './routines/spec.js'
 import type { Ask, Conversation, RateLimitSnapshot, RoutineRun, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
-import { askQuestions, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
+import { askQuestions, type Delegation, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
 import { WebNotifier } from './telegram/webNotify.js'
 import { VERSION } from './version.js'
@@ -194,13 +194,28 @@ function limitsReport(limits: RateLimitSnapshot | undefined): string[] {
     return lines
 }
 
+/** One line per role the task handed work to: where it ran, or why not on its provider. */
+export function delegationLines(delegations: Delegation[]): string[] {
+    return delegations.map((d) =>
+        d.fallback
+            ? `— ${d.agent} ran on the subscription${d.model ? ` (${d.model})` : ''}: ${d.fallback}`
+            : `— ${d.agent} on ${d.provider ?? 'the subscription'}${d.model ? ` · ${d.model}` : ''}`
+    )
+}
+
 /**
  * Footer under every reply: which project the agent worked in (the owner
- * reads several threads on a phone and forgets) and how full the windows
- * are now, with this task's share. Turns, tokens and duration stay on the
- * task page: the subscription is metered in windows, not money.
+ * reads several threads on a phone and forgets), the roles it delegated and
+ * where they ran, and how full the windows are now, with this task's share.
+ * Turns, tokens and duration stay on the task page: the subscription is
+ * metered in windows, not money.
  */
-function footer(task: Task, limits: RateLimitSnapshot | undefined, publicUrl: string | null): string {
+export function footer(
+    task: Task,
+    limits: RateLimitSnapshot | undefined,
+    publicUrl: string | null,
+    delegations: Delegation[] = []
+): string {
     const delta = task.window_5h_delta
     const share = delta === null ? null : delta < 0.01 ? 'this task <1%' : `this task +${Math.round(delta * 100)}%`
     // A task on another provider touches no subscription window: name the provider and the tokens instead.
@@ -221,6 +236,7 @@ function footer(task: Task, limits: RateLimitSnapshot | undefined, publicUrl: st
             : null,
         pr ? `— ${pr}` : null,
         review ? `— review: ${review}` : null,
+        ...delegationLines(delegations),
         windows ? `— windows: ${windows}` : null
     ]
         .filter(Boolean)
@@ -1006,7 +1022,11 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                   : `❌ ${task.error || 'failed'}`
         const head = task.schedule ? `⏱ **${task.schedule}**\n\n` : ''
         // Delivered = seen: the web's "unread" mark goes; a failed delivery keeps it, so the reply is not lost.
-        void sendMarkdown(bot, chatId, `${head}${body}\n\n${footer(task, tasks.limits(), config.web.publicUrl)}`)
+        void sendMarkdown(
+            bot,
+            chatId,
+            `${head}${body}\n\n${footer(task, tasks.limits(), config.web.publicUrl, tasks.delegationsOf(task.id))}`
+        )
             .then((ids) => {
                 remember(chatId, ids, task.conversation_id, task.id)
                 tasks.markRead(task.conversation_id)
@@ -1026,7 +1046,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             const ids = await sendMarkdown(
                 bot,
                 chatId,
-                `${fromWeb(conversation)}\n\n${body}\n\n${footer(task, tasks.limits(), config.web.publicUrl)}`
+                `${fromWeb(conversation)}\n\n${body}\n\n${footer(task, tasks.limits(), config.web.publicUrl, tasks.delegationsOf(task.id))}`
             )
             remember(chatId, ids, task.conversation_id, task.id)
             tasks.markRead(task.conversation_id)

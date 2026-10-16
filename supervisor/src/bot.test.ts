@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunk, quoteReply, routeMessage, routineNotice } from './bot.js'
+import { chunk, footer, quoteReply, routeMessage, routineNotice } from './bot.js'
 import type { RoutineSpec } from './routines/spec.js'
-import type { RoutineRun } from './store/index.js'
+import type { RoutineRun, Task } from './store/index.js'
 
 const LIMIT = 4000
 
@@ -67,6 +67,42 @@ describe('chunk', () => {
         const parts = chunk(text)
         expect(parts.length).toBeGreaterThan(1)
         expect(parts[1].startsWith('```')).toBe(false)
+    })
+})
+
+describe('footer', () => {
+    const task = {
+        id: 't1',
+        project: 'work',
+        provider: null,
+        model: null,
+        window_5h_delta: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        git: null
+    } as unknown as Task
+
+    it('names every delegated role once, and says when one ran on the subscription instead', () => {
+        const text = footer(task, undefined, null, [
+            { task_id: 'c1', agent: 'researcher', provider: 'gpu', model: 'gemma4:12b', fallback: null },
+            {
+                task_id: 'c2',
+                agent: 'writer',
+                provider: null,
+                model: 'sonnet',
+                fallback: 'project work does not allow provider gpu (`providers:` in its project file)'
+            }
+        ])
+        expect(text.split('\n')).toEqual([
+            '— project: work',
+            '— researcher on gpu · gemma4:12b',
+            '— writer ran on the subscription (sonnet): project work does not allow provider gpu (`providers:` in its project file)'
+        ])
+    })
+
+    it('has no delegation line for a task that delegated nothing', () => {
+        expect(footer(task, undefined, null)).toBe('— project: work')
     })
 })
 

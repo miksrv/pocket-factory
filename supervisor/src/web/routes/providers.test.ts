@@ -126,10 +126,48 @@ describe('providers', () => {
             ANTHROPIC_DEFAULT_HAIKU_MODEL: 's',
             ANTHROPIC_DEFAULT_SONNET_MODEL: 'm',
             CLAUDE_CODE_SUBAGENT_MODEL: 'm',
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+            // Output per call bounded for every provider; the window only when the file names one.
+            CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000'
         })
+        expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined()
         // The ordinary environment loses the provider's key too: the gateway adds it.
         expect(tasks.agentEnv().LOOK_KEY).toBeUndefined()
+    })
+
+    it("passes a provider's output and context limits to the CLI, and refuses ones out of range", async () => {
+        const ok = await put('small', { url: 'http://x', models: ['m'], max_output: 4000, context: 65536 })
+        expect(ok.status).toBe(200)
+        const { tasks, providers } = t.ctx
+        const env = tasks.providerEnv(providers.get('small')!, 'm')
+        expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('4000')
+        expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('65536')
+        const tooMuch = await put('small', { url: 'http://x', models: ['m'], max_output: 64_000 })
+        expect(tooMuch.status).toBe(400)
+        expect(((await tooMuch.json()) as { error: string }).error).toContain('max_output')
+        const tiny = await put('small', { url: 'http://x', models: ['m'], context: 100 })
+        expect(tiny.status).toBe(400)
+    })
+
+    it('refuses an MCP server named like a server of another layer', async () => {
+        t.ctx.store.setMeta('claude.mcp.registry', {
+            trac: { name: 'trac', status: 'connected', source: 'factory', seen_at: null },
+            search: { name: 'search', status: 'connected', source: 'provider:box', seen_at: null }
+        })
+        const clash = await put('box', {
+            url: 'http://box.test',
+            models: ['m'],
+            mcp: [{ name: 'trac', url: 'https://x/mcp' }]
+        })
+        expect(clash.status).toBe(400)
+        expect(((await clash.json()) as { error: string }).error).toContain('already the factory server trac')
+        // Its own server, seen in an earlier session, is no clash.
+        const own = await put('box', {
+            url: 'http://box.test',
+            models: ['m'],
+            mcp: [{ name: 'search', url: 'https://x/mcp' }]
+        })
+        expect(own.status).toBe(200)
     })
 
     it('guards the gateway with the per-start bearer and translates an OpenAI reply', async () => {

@@ -12,6 +12,11 @@
 - Settings: the signed-in browsers and recent sign-ins tables scroll inside a fixed height
 - `.env`: `ROUTINES_SOFT_STOP`, `ROUTINES_LATE_MIN`, `ROUTINES_ASK_TIMEOUT_MIN`; the `SCHEDULES_*` names still work
 - Dev: `yarn dev:web` proxies `/api` to `WEB_PORT` from `.env`
+- Providers: `max_output` (8000 tokens per call unless set) and `context` (the model's real window) per provider, so a looping small model fails in a minute and a long role compacts before the box's window is full
+- Providers: Settings → Providers lists each MCP server's tools under their full `mcp__<server>__<tool>` names; a server name another layer already uses is refused; the README explains the naming rule
+- Delegation: a role that ran on the subscription because of a setting (the project allows no provider) is said so in the chat card, the Telegram footer and a hint on the project form; the footer names every delegated role and where it ran
+- Fixed: a delegated role ignored its file's `maxTurns:`
+- Fixed: a deleted or renamed agent stayed on the Agents page and the Overview as a Claude Code built-in for a week; built-ins are now the sub-agents the CLI reports
 - Fixed: hovering a hint under "Providers this project may delegate to" lit the first provider chip
 - Fixed: a `WEB_PORT` other than 8080 left the container unreachable; the port inside the container is pinned to 8080
 

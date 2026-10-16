@@ -20,7 +20,12 @@ export function ProjectsPage() {
     const sharedHosts = useAsync(() => api.hosts(), [])
     const mcp = useAsync(() => api.mcp(), [])
     const providers = useAsync(() => api.providers(), [])
+    const agents = useAsync(() => api.list('agents'), [])
     const workspaces = status.data?.workspaces ?? []
+    // The roles (agent files with a provider) that would run on the subscription in a project allowing no provider.
+    const roles = (agents.data ?? [])
+        .filter((a) => typeof a.frontmatter.provider === 'string' && a.frontmatter.provider.trim())
+        .map((a) => a.name)
 
     return (
         <Editor
@@ -154,6 +159,13 @@ export function ProjectsPage() {
                                         )
                                     })}
                                 </div>
+                                {roles.length > 0 && !(Array.isArray(fm.providers) && fm.providers.length > 0) && (
+                                    <span className='warn-text small'>
+                                        None ticked: {roles.join(', ')} {roles.length === 1 ? 'has' : 'have'} a
+                                        provider, so in this project {roles.length === 1 ? 'it runs' : 'they run'} on
+                                        the subscription with the orchestrator's model, and each reply says so.
+                                    </span>
+                                )}
                             </Field>
                         )}
                         <ProjectToolchainField slug={str(fm.slug)} />

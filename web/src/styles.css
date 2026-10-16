@@ -299,6 +299,10 @@ p {
 .dim {
     color: var(--text-dim);
 }
+/* A line the owner should notice but that is not an error: a role that ran somewhere else than its file says. */
+.warn-text {
+    color: var(--amber);
+}
 .small {
     font-size: 11.5px;
 }

@@ -216,6 +216,24 @@ laptop does not help: there the CLI keeps tokens in the Keychain, which the cont
 A project file's `mcp:` list limits which of the repository's servers a session loads; an agent's
 tool picker offers the servers' tools, so "a ClickUp agent" is a role with that server ticked.
 
+**Tool names** are Claude Code's convention: an MCP tool is `mcp__<server>__<tool>`, where
+`<server>` is the name the server has in its configuration (a key in `.mcp.json` or
+`data/config/mcp.json`, `name:` under a provider's `mcp:`, a connector's name with spaces and dots
+turned into `_`, as `claude_ai_Gmail`) and `<tool>` is what the server itself calls the tool
+(`searxng_web_search` from mcp-searxng, `read_page` from a page reader). `mcp__<server>` alone, in
+`tools:` or a permission rule, means every tool of that server. Settings → MCP and Settings →
+Providers show the full names to copy; a hand-written agent needs them exactly, a small model given
+a short name guesses wrong. One name is one server: a provider's server may not take a name another
+layer already uses.
+
+```yaml
+# a subscription agent: two Gmail tools and the whole trac server
+tools: [Read, Grep, mcp__claude_ai_Gmail__search_threads, mcp__claude_ai_Gmail__get_thread, mcp__trac]
+# a role on a GPU box with the provider's `search` and `reader` servers
+provider: mybox
+tools: [Read, Write, mcp__search__searxng_web_search, mcp__reader__read_page]
+```
+
 ## Voice
 
 Set `GROQ_API_KEY` in `.env` (free tier is enough). Voice notes are transcribed with

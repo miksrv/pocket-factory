@@ -344,6 +344,8 @@ export function ProviderDialog({
                     small: p.small?.trim() || undefined,
                     concurrency: p.concurrency,
                     light: p.light,
+                    max_output: p.max_output || undefined,
+                    context: p.context || undefined,
                     mcp: servers,
                     ca: ca.trim() ? ca : dropCa ? null : undefined
                 },
@@ -451,6 +453,37 @@ export function ProviderDialog({
                             onChange={(e) => set({ concurrency: Math.max(0, Number(e.target.value) || 0) })}
                         />
                         <span className='dim'>1 for one GPU; 0 = no limit (cloud)</span>
+                    </label>
+                    <label className='field'>
+                        <span>Output per call</span>
+                        <input
+                            type='number'
+                            min={1}
+                            max={32000}
+                            step={1000}
+                            value={p.max_output ?? ''}
+                            placeholder='8000'
+                            onChange={(e) => set({ max_output: e.target.value ? Number(e.target.value) : undefined })}
+                        />
+                        <span className='dim'>
+                            tokens one model call may write; a small model that loops fails at this, not at the CLI's 32
+                            000 five minutes later
+                        </span>
+                    </label>
+                    <label className='field'>
+                        <span>Context window</span>
+                        <input
+                            type='number'
+                            min={8000}
+                            step={1000}
+                            value={p.context ?? ''}
+                            placeholder="the CLI's assumption"
+                            onChange={(e) => set({ context: e.target.value ? Number(e.target.value) : undefined })}
+                        />
+                        <span className='dim'>
+                            the model's real window in tokens (Ollama: num_ctx), so the CLI compacts before it is full;
+                            without it a 64k box overflows silently
+                        </span>
                     </label>
                     <label className='field wide'>
                         <span className='row between'>
@@ -580,6 +613,9 @@ export function ProviderDialog({
 
 export function ProvidersSection() {
     const data = useAsync(() => api.providers(), [], 30_000)
+    // The tools each provider's MCP servers offered to their sessions, under the full names an agent file uses.
+    const known = useAsync(() => api.tools(), [], 60_000)
+    const toolsOf = (server: string) => known.data?.mcp.find((e) => e.server === server)?.tools ?? []
     const [dialog, setDialog] = useState<{ editing?: ProviderView } | null>(null)
     const confirm = useConfirm()
     const overview = data.data
@@ -687,6 +723,20 @@ export function ProvidersSection() {
                                 </span>
                             ))}
                             {p.running > 0 && <span className='badge running'>{p.running} running</span>}
+                            {p.mcp?.map((m) => {
+                                const tools = toolsOf(m.name)
+                                return (
+                                    <span
+                                        key={`${m.name}-tools`}
+                                        className='dim small mono'
+                                        title={`what an agent file lists under tools: — mcp__${m.name} alone means every tool of ${m.name}`}
+                                    >
+                                        {tools.length
+                                            ? tools.join(' · ')
+                                            : `mcp__${m.name}__<tool> — the tools appear after the first task on this provider`}
+                                    </span>
+                                )
+                            })}
                         </span>
                         <span className='host-projects'>
                             <span

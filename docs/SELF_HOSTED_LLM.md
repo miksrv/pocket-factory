@@ -267,6 +267,8 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
        default: gemma4:12b
        concurrency: 1                       # one GPU serves one task at a time
        light: true                          # short system prompt + six tools: small models need it
+       max_output: 8000                     # tokens per model call (the default); a looping model fails here, not at 32k
+       context: 65536                       # the model's real window (num_ctx), so the CLI compacts before it is full
        mcp:                                 # only for the tasks on this provider
          - name: search
            url: https://203.0.113.10:<external port>/mcp
@@ -292,10 +294,16 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
   task is re-reading the growing context every turn, not the writing: keep tasks short and
   make the agent save results to files early.
 - Anthropic's own tools do not exist here: no `WebSearch`, no claude.ai connectors (Gmail,
-  ClickUp …). Search comes from the MCP above; pages are read with its `web_url_read`.
+  ClickUp …). Search comes from the MCP above; pages are read with its `web_url_read`. In an
+  agent file its tools are `mcp__search__<tool>` (the README's "MCP servers" section has the
+  naming rule); Settings → Providers lists the full names once a task has run on the box.
+- The CLI knows Claude's context windows, not the box's: without `context:` it never compacts a
+  long role, and Ollama shifts its window silently until the model loops. `max_output` (8000
+  tokens unless set) ends such a loop in a minute instead of at the CLI's 32 000 ceiling.
 - A box in another country or on another network: whatever the task puts in the prompt (code,
-  tickets, mail) travels there. Pick what runs on it accordingly; the factory has no per-project
-  provider restriction yet.
+  tickets, mail) travels there. A project delegates only to the providers ticked in its file
+  ("Providers this project may delegate to"); with none ticked, a role runs on the subscription
+  and the reply says so.
 - Ollama has no authentication of its own, so Caddy must stay the only thing published; keep
   Ollama on `127.0.0.1`. Rotate a token by changing `.env` on both sides and recreating the
   containers.

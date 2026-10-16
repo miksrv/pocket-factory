@@ -14,13 +14,17 @@ export interface AgentRow {
 }
 
 /**
- * The factory's roster: the orchestrator, every agent file, and any other
- * sub-agent type the audit log saw in the period (Claude Code's built-ins).
+ * The factory's roster: the orchestrator, every agent file, and any other sub-agent type the audit
+ * log saw in the period that the CLI still knows (`reported`: Claude Code's built-ins, a checkout's
+ * or a plugin's agents). A name with activity that neither has is a deleted or renamed agent: it
+ * stays in the Audit log under its own name and is left off here. Until a session has reported
+ * its agents, every such name is shown as a built-in, as before.
  */
 export function rosterOf(
     entries: CatalogEntry[] | undefined,
     activity: AgentActivity[] | undefined,
-    queued = 0
+    queued = 0,
+    reported?: string[]
 ): AgentRow[] {
     const byName = new Map((activity ?? []).map((a) => [a.agent ?? 'orchestrator', a]))
     const rows: AgentRow[] = [
@@ -43,16 +47,15 @@ export function rosterOf(
         })
     }
     for (const a of activity ?? []) {
-        if (a.agent && !rows.some((r) => r.name === a.agent)) {
-            rows.push({
-                name: a.agent,
-                description:
-                    'Ships with Claude Code; the orchestrator calls it through the Agent tool. Nothing to edit.',
-                builtin: true,
-                activity: a,
-                entry: undefined
-            })
-        }
+        if (!a.agent || rows.some((r) => r.name === a.agent)) continue
+        if (reported?.length && !reported.includes(a.agent)) continue
+        rows.push({
+            name: a.agent,
+            description: 'Ships with Claude Code; the orchestrator calls it through the Agent tool. Nothing to edit.',
+            builtin: true,
+            activity: a,
+            entry: undefined
+        })
     }
     return rows
 }
@@ -71,8 +74,9 @@ export function AgentsPanel({ limit }: { limit?: number }) {
     const entries = useAsync(() => api.list('agents'), [], 30_000)
     const activity = useAsync(() => api.agentActivity('7d'), [], 5_000)
     const status = useAsync(() => api.status(), [], 5_000)
+    const known = useAsync(() => api.tools(), [], 60_000)
     const queued = status.data?.stats.queued ?? 0
-    const rows = rosterOf(entries.data, activity.data, queued)
+    const rows = rosterOf(entries.data, activity.data, queued, known.data?.agents)
     const running = rows.filter((r) => (r.activity?.running ?? 0) > 0).length
     // Working agents first, then by last activity, so a cut list shows who is doing things now.
     const last = (r: (typeof rows)[number]) =>

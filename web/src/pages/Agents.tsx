@@ -88,7 +88,7 @@ function AgentGrid() {
     const entries = useAsync(() => api.list('agents'), [], 30_000)
     const activity = useAsync(() => api.agentActivity('7d'), [], 5_000)
     const known = useAsync(() => api.tools(), [])
-    const rows = rosterOf(entries.data, activity.data)
+    const rows = rosterOf(entries.data, activity.data, 0, known.data?.agents)
         .filter((r) => r.name !== 'orchestrator')
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 

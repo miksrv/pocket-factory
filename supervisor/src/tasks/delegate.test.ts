@@ -33,7 +33,7 @@ process.stdin.on('data', (chunk) => {
         if (m.type !== 'user') continue
         const prompt = typeof m.message.content === 'string' ? m.message.content : m.message.content.map((c) => c.text ?? '').join('')
         fs.appendFileSync(process.env.CALLS, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), onProvider, prompt }) + '\\n')
-        out({ type: 'system', subtype: 'init', session_id: S, model: 'fake', tools: [], mcp_servers: [] })
+        out({ type: 'system', subtype: 'init', session_id: S, model: 'fake', tools: ['Read', 'Write'], agents: ['Explore', 'Plan', 'writer'], mcp_servers: [] })
         out({ ...m, session_id: S, parent_tool_use_id: null, isReplay: true })
         const end = (result, isError = false) => {
             out({ type: 'result', subtype: isError ? 'error_during_execution' : 'success', is_error: isError, result, session_id: S, num_turns: 1, duration_ms: 5, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } })
@@ -87,7 +87,9 @@ describe('delegate', () => {
     afterEach(() => t.cleanup())
 
     /** An app with the role `writer` on provider `gpu`, and a running orchestrator task. */
-    async function setup(options: { url?: string; fallback?: string; project?: string; maxSessions?: number } = {}) {
+    async function setup(
+        options: { url?: string; fallback?: string; project?: string; maxSessions?: number; maxTurns?: number } = {}
+    ) {
         t = createTestApp({
             claude: DELEGATE_CLAUDE,
             config: (c) => (c.maxConcurrentSessions = options.maxSessions ?? 2)
@@ -103,7 +105,8 @@ describe('delegate', () => {
                 description: 'Writes notes',
                 provider: 'gpu',
                 provider_model: 'small',
-                ...(options.fallback ? { fallback: options.fallback } : {})
+                ...(options.fallback ? { fallback: options.fallback } : {}),
+                ...(options.maxTurns ? { maxTurns: options.maxTurns } : {})
             },
             body: 'You write notes.'
         })
@@ -155,6 +158,14 @@ describe('delegate', () => {
         expect(note?.payload).toMatchObject({ delegate: { task_id: child.id, agent: 'writer', provider: 'gpu' } })
     })
 
+    it('remembers the sub-agent types the CLI lists at a session start', async () => {
+        await setup()
+        await until(() => t.ctx.tasks.agents().length > 0)
+        expect(t.ctx.tasks.agents()).toEqual(['Explore', 'Plan', 'writer'])
+        const list = (await (await t.request('/api/tools')).json()) as { agents: string[] }
+        expect(list.agents).toEqual(['Explore', 'Plan', 'writer'])
+    })
+
     it('hides the role from the Chat list and its counters', async () => {
         const parent = await setup()
         await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
@@ -203,11 +214,33 @@ describe('delegate', () => {
         expect(outcome.task).toMatchObject({ provider: null, model: 'haiku' })
     })
 
-    it("keeps a project's work off a provider the project does not allow", async () => {
+    it("keeps a project's work off a provider the project does not allow, and says so with the reply", async () => {
         const parent = await setup({ project: 'silent' })
         const outcome = await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
         expect(outcome.task?.provider).toBeNull()
         expect(outcome.text).toContain('project work does not allow provider gpu')
+        // What the Telegram footer and the chat show: the role, where it ran and why not on its provider.
+        expect(t.ctx.tasks.delegationsOf(parent.id)).toEqual([
+            {
+                task_id: outcome.task!.id,
+                agent: 'writer',
+                provider: null,
+                model: 'sonnet',
+                fallback: expect.stringContaining('project work does not allow provider gpu') as unknown
+            }
+        ])
+    })
+
+    it("runs a delegated role with its file's maxTurns, on the provider and on the fallback alike", async () => {
+        const parent = await setup({ maxTurns: 20 })
+        await until(() => runs().some((r) => r.prompt.startsWith('hold until released')))
+        await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        const onProvider = runs().find((r) => r.prompt.startsWith('Write a note'))!
+        expect(onProvider.onProvider).toBe(true)
+        expect(onProvider.argv[onProvider.argv.indexOf('--max-turns') + 1]).toBe('20')
+        // The orchestrator itself keeps the factory's limit.
+        const orchestrator = runs().find((r) => r.prompt.startsWith('hold until released'))!
+        expect(orchestrator.argv[orchestrator.argv.indexOf('--max-turns') + 1]).toBe('50')
     })
 
     it('sends a project to a provider its file allows', async () => {
