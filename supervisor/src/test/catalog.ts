@@ -6,7 +6,7 @@ export function entry(
     body = 'Do the work.',
     extra: Partial<CatalogEntry> = {}
 ): CatalogEntry {
-    const kind: Kind = extra.kind ?? 'schedules'
+    const kind: Kind = extra.kind ?? 'routines'
     const name = extra.name ?? 'nightly'
     return {
         kind,

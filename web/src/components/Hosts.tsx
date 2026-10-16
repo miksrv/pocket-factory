@@ -263,7 +263,7 @@ export function HostDialog({
     /** Present = moving an inline host: the project's path and notes come along and stay with the project. */
     project?: { path?: string; notes?: string }
     /** Whose form opened the dialog; wording only. */
-    owner?: 'project' | 'schedule'
+    owner?: 'project' | 'routine'
     onClose: () => void
     onSaved: (host: HostView, project: { path?: string; notes?: string }) => void
 }) {
@@ -461,16 +461,16 @@ export function HostsSection() {
                                 {h.projects.map((p) => (
                                     <Link
                                         key={`${p.kind}-${p.project}`}
-                                        to={`/${p.kind === 'schedule' ? 'schedules' : 'projects'}/${encodeURIComponent(p.project)}`}
+                                        to={`/${p.kind === 'routine' ? 'routines' : 'projects'}/${encodeURIComponent(p.project)}`}
                                         className='badge plain'
                                         title={[
-                                            p.kind === 'schedule' ? 'schedule' : 'project',
+                                            p.kind === 'routine' ? 'routine' : 'project',
                                             p.path ? `path ${p.path}` : null
                                         ]
                                             .filter(Boolean)
                                             .join(' · ')}
                                     >
-                                        {p.kind === 'schedule' ? '⏱ ' : ''}
+                                        {p.kind === 'routine' ? '⏱ ' : ''}
                                         {p.project}
                                     </Link>
                                 ))}
@@ -573,8 +573,8 @@ export function ProjectHosts({
     shared: HostsOverview | undefined
     onSharedChanged: () => void
     keys: SshKeys | undefined
-    /** Whose file the list belongs to: the wording says "this project" or "this schedule". */
-    owner?: 'project' | 'schedule'
+    /** Whose file the list belongs to: the wording says "this project" or "this routine". */
+    owner?: 'project' | 'routine'
 }) {
     const [dialog, setDialog] = useState<{
         index: number | null
@@ -701,7 +701,7 @@ function SharedHostCard({
     host: HostView | undefined
     onChange: (patch: { path?: string; notes?: string }) => void
     onRemove: () => void
-    owner: 'project' | 'schedule'
+    owner: 'project' | 'routine'
 }) {
     return (
         <div className='host-card shared'>

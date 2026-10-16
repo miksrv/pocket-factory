@@ -114,7 +114,7 @@ export function ChatPage() {
                                 <div className='desc'>
                                     <Channel
                                         channel={c.channel}
-                                        schedule={Boolean(c.external_id?.startsWith('schedule:'))}
+                                        routine={Boolean(c.external_id?.startsWith('schedule:'))}
                                     />
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
                                 </div>
@@ -495,7 +495,7 @@ function Thread({
                             {conversation && (
                                 <Channel
                                     channel={conversation.channel}
-                                    schedule={Boolean(conversation.external_id?.startsWith('schedule:'))}
+                                    routine={Boolean(conversation.external_id?.startsWith('schedule:'))}
                                 />
                             )}
                             <span>·</span>

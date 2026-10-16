@@ -1392,18 +1392,18 @@ label.row > input[type='checkbox'] {
     accent-color: var(--ink);
 }
 /* The schedule's live state above its form: the pane's flex column must not squeeze it under the growing textarea. */
-.schedule-status {
+.routine-status {
     flex-shrink: 0;
 }
-.schedule-status .stat .value .badge {
+.routine-status .stat .value .badge {
     vertical-align: middle;
 }
 /* The on / off badge leads the button row; a wider gap keeps it from reading as one of the buttons. */
-.schedule-status .state-gap {
+.routine-status .state-gap {
     width: 8px;
 }
 /* Show runs scrolls inside the card on a desktop; on a phone the page scrolls as a whole (see the media query). */
-.schedule-runs {
+.routine-runs {
     border-top: 1px solid var(--border);
     max-height: 320px;
 }
@@ -2810,7 +2810,7 @@ dialog.modal[open]::backdrop {
     .card-scroll {
         overflow: visible;
     }
-    .schedule-runs {
+    .routine-runs {
         max-height: none;
     }
     th,
@@ -3068,4 +3068,62 @@ dialog.modal[open]::backdrop {
     margin: 0;
     font-size: 12.5px;
     font-weight: 600;
+}
+
+/* Routines: the form continues under the body (triggers, then the folded rest); the same grid, a rule between. */
+.form-below {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+.form-grid > .field.triggers {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    grid-row: auto;
+}
+.field.triggers > .field-head {
+    color: var(--text-2);
+}
+.field.triggers > .field-head > span:first-child {
+    /* The caption keeps a readable width; the add buttons wrap under it on a phone instead of squeezing it. */
+    flex: 1 1 280px;
+    min-width: 0;
+}
+/* One trigger: its own small grid of fields, like a host card. */
+.trigger-card {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+.trigger-card > .wide {
+    grid-column: 1 / -1;
+}
+.trigger-foot {
+    display: flex;
+    justify-content: flex-end;
+}
+/* The rest of the form folded under "More"; its fields keep the grid. */
+details.more > summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-2);
+    list-style: none;
+}
+details.more > summary::-webkit-details-marker {
+    display: none;
+}
+details.more > summary::before {
+    content: '▸ ';
+    color: var(--text-dim);
+}
+details.more[open] > summary::before {
+    content: '▾ ';
+}
+details.more > .form-grid {
+    margin-top: 12px;
 }

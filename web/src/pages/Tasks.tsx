@@ -47,7 +47,7 @@ export function TasksPage() {
         <div className='page fill'>
             <PageHead
                 title='Tasks'
-                sub='Every task from every channel — Telegram, web, schedules.'
+                sub='Every task from every channel — Telegram, web, routines.'
             />
             <ErrorBox error={tasks.error} />
             <div className='card pad0'>
@@ -104,9 +104,9 @@ export function TasksPage() {
                                         <td>
                                             {task.schedule ? (
                                                 <Link
-                                                    to={`/schedules/${task.schedule}`}
+                                                    to={`/routines/${task.schedule}`}
                                                     className='badge plain'
-                                                    title='Queued by this schedule'
+                                                    title='Queued by this routine'
                                                 >
                                                     ⏱ {task.schedule}
                                                 </Link>

@@ -21,14 +21,14 @@ import type { Env } from '../context.js'
  * when its endpoint has one.
  */
 
-/** Who refers to a provider: schedules and agents with `provider: <name>`. */
+/** Who refers to a provider: routines and agents with `provider: <name>`. */
 function usedBy(c: { get: (k: 'app') => Env['Variables']['app'] }, name: string): string[] {
     const { catalog } = c.get('app')
-    return (['schedules', 'agents'] as const).flatMap((kind) =>
+    return (['routines', 'agents'] as const).flatMap((kind) =>
         catalog
             .list(kind)
             .filter((e) => e.frontmatter.provider === name)
-            .map((e) => `${kind === 'schedules' ? '⏱ ' : ''}${e.name}`)
+            .map((e) => `${kind === 'routines' ? '⏱ ' : ''}${e.name}`)
     )
 }
 
@@ -167,7 +167,7 @@ export function providerRoutes(): Hono<Env> {
         }
     })
 
-    /** Remove; a provider that schedules or agents name answers 409 with their names unless `?force=1`. */
+    /** Remove; a provider that routines or agents name answers 409 with their names unless `?force=1`. */
     app.delete('/:name', (c) => {
         const { providers } = c.get('app')
         const name = c.req.param('name')

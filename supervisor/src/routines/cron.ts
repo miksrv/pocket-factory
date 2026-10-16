@@ -169,7 +169,7 @@ export function cronMatches(cron: Cron, t: LocalTime): boolean {
 
 /**
  * An active window on top of the cron: which weekdays and which hours (in the
- * schedule's zone) a firing is allowed in. `days` is a list or range of
+ * routine's zone) a firing is allowed in. `days` is a list or range of
  * weekday names (`mon-fri`, `mon,wed,fri`), `hours` is `HH:MM-HH:MM`
  * (end exclusive; an end before the start wraps past midnight).
  */
@@ -220,7 +220,7 @@ const MINUTE = 60_000
 /**
  * The first minute after `from` that the cron and the window both allow, or
  * null within a year. Walks minute by minute but jumps to the next hour or
- * day when the larger field cannot match, so a weekly schedule is found in a
+ * day when the larger field cannot match, so a weekly routine is found in a
  * few hundred steps.
  */
 export function nextRun(cron: Cron, window: Window, tz: string, from = new Date()): Date | null {

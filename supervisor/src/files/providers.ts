@@ -11,7 +11,7 @@ import { BadName, NotFound } from './catalog.js'
  * Model providers besides the subscription — `<config>/providers.yaml`, one
  * entry per endpoint: a self-hosted model (Ollama, llama.cpp, vLLM on any
  * machine) or a cloud API (OpenRouter, Gemini, OpenAI, Groq …). A provider is
- * chosen per task (a schedule, a chat, an agent that a task runs as); the
+ * chosen per task (a routine, a chat, an agent that a task runs as); the
  * `claude` CLI then talks to it instead of Anthropic, through the factory's
  * gateway, which holds the key. A `kind: anthropic` endpoint speaks the
  * Messages API itself (`/v1/messages`); a `kind: openai` one speaks the chat

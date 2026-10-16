@@ -821,7 +821,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             model?: string
             /** The provider to run on; undefined = the conversation's choice, null = the subscription whatever the conversation says. */
             provider?: string | null
-            /** The agent the task runs as: a schedule's `agent:` in light mode, or on the subscription (`--agent`). */
+            /** The agent the task runs as: a routine's `agent:` in light mode, or on the subscription (`--agent`). */
             agent?: string
             attachments?: Attachment[]
         } = {}
@@ -841,7 +841,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
-        // A schedule names its provider; the owner's own message runs on what the conversation was set to.
+        // A routine names its provider; the owner's own message runs on what the conversation was set to.
         const provider = options.provider === undefined ? conversation.provider : options.provider
         const model = options.model ?? (provider === conversation.provider ? conversation.model : null)
         const task = this.store.createTask(
@@ -955,7 +955,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     /**
-     * A scheduled run must not hold its schedule (one run at a time) and a
+     * A routine run must not hold its routine (one run at a time) and a
      * session slot for days because nobody answered: after
      * `SCHEDULES_ASK_TIMEOUT_MIN` a permission is denied and a question gets
      * "no answer", and the agent decides by the file's instructions.
@@ -963,7 +963,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * never hears of it, and its parent waits): its question is answered at once.
      */
     private answerLater(taskId: string, ask: Ask, role = false): void {
-        const ms = role ? 0 : this.config.schedules.askTimeoutMs
+        const ms = role ? 0 : this.config.routines.askTimeoutMs
         if (!role && ms <= 0) return
         const minutes = Math.round(ms / 60_000)
         const timer = setTimeout(() => {
@@ -972,12 +972,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const reason = role
                 ? 'a delegated role has nobody to ask'
                 : `no answer from the owner within ${minutes} min`
-            const guide = role ? "the orchestrator's brief" : "the schedule's instructions"
+            const guide = role ? "the orchestrator's brief" : "the routine's instructions"
             try {
                 if (ask.kind === 'permission')
                     this.answer(taskId, {
                         behavior: 'deny',
-                        message: `${reason}; the ${role ? 'role' : 'scheduled run'} goes on without it, or reports what it needed and stops`
+                        message: `${reason}; the ${role ? 'role' : 'routine run'} goes on without it, or reports what it needed and stops`
                     })
                 else {
                     const text = `(${reason}: decide by ${guide}, or report what you needed and stop)`
@@ -1765,7 +1765,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         const model = provider ? (task.model ?? provider.default ?? provider.models[0]) : (task.model ?? this.model())
         const light = provider?.light ? this.lightOptions(task) : null
-        // A schedule's run on the subscription that is its agent itself (`--agent`), not an orchestrator spawning it;
+        // A routine's run on the subscription that is its agent itself (`--agent`), not an orchestrator spawning it;
         // read again at start, since a task may wait hours for a limit reset while the owner edits or deletes the file.
         const asAgentFile = !provider && !task.parent_id && task.agent ? this.workspace.agentFile(task.agent) : null
         const asAgent = asAgentFile ? task.agent! : undefined
@@ -1833,7 +1833,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             settings,
             appendSystemPrompt,
             agent: asAgent,
-            // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
+            // A routine's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
             model,
             // An agent's own `maxTurns:` when the session is that agent, as it had when it ran as a sub-agent.
             maxTurns: asAgentFile?.maxTurns ?? this.config.claude.maxTurns,

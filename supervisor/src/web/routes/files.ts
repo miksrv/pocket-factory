@@ -3,9 +3,9 @@ import { Hono } from 'hono'
 import type { Kind } from '../../files/catalog.js'
 import type { Env } from '../context.js'
 
-const KINDS: Kind[] = ['agents', 'skills', 'projects', 'schedules']
+const KINDS: Kind[] = ['agents', 'skills', 'projects', 'routines']
 
-/** CRUD for agents, skills, projects and schedules — the same files the agent edits. */
+/** CRUD for agents, skills, projects and routines — the same files the agent edits. */
 export function fileRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
@@ -40,7 +40,7 @@ export function fileRoutes(): Hono<Env> {
                     409
                 )
             }
-            // The form says which version it edited; the agent may have written the file since (a schedule's notes after a run).
+            // The form says which version it edited; the agent may have written the file since (a routine's notes after a run).
             if (current && typeof body.updated_at === 'string' && body.updated_at !== current.updated_at) {
                 return c.json(
                     {
@@ -51,9 +51,9 @@ export function fileRoutes(): Hono<Env> {
                 )
             }
             const fm = { ...(frontmatter as Record<string, unknown>) }
-            // A schedule is switched on and off by PUT /api/schedules/:name/enabled, never by the form,
+            // A routine is switched on and off by PUT /api/routines/:name/enabled, never by the form,
             // whose copy of the frontmatter predates the switch: the file on disk keeps its say.
-            if (kind === 'schedules' && current) {
+            if (kind === 'routines' && current) {
                 if (current.frontmatter.enabled === undefined) delete fm.enabled
                 else fm.enabled = current.frontmatter.enabled
             }

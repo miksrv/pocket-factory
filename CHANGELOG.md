@@ -9,6 +9,28 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.5.0] - 2026-10-16
+
+### Changed
+
+- **Schedules are Routines.** A routine is work an agent does again and again: who does it
+  (the agent, first in the form), what to do (the instructions, which the agent still edits to
+  remember its decisions) and when — a list of **triggers**: "on a schedule" (a cron; every
+  firing starts a run) and "when something new appears" (a cron that runs a prefilter first and
+  starts a run only for new items). A routine may have several triggers (a daily run plus a poll),
+  still one run at a time, or none at all and run only by **Run now**. The page is **Routines**
+  (`/routines`; the old paths are gone), the files live in `data/config/routines/` (an existing
+  `schedules/` directory is moved on the first start), Telegram says `/routines`, the run's prompt
+  starts with "Routine run", and new tasks carry the source `routine`. Files written before keep
+  working: `cron:` alone reads as one schedule, `cron:` with `prefilter:` as one poll; the form
+  writes `triggers:` on the next save. The run history, seen items and the routines' chat threads
+  stay as they were.
+- The form puts what matters first — Agent, Skill, Instructions, Triggers — and folds project,
+  model, mode, report, session, once and hosts under **More**. The live panel lists every trigger
+  with its next firing.
+- `.env`: `ROUTINES_SOFT_STOP`, `ROUTINES_LATE_MIN`, `ROUTINES_ASK_TIMEOUT_MIN`; the `SCHEDULES_*`
+  names are still read.
+
 ## [1.4.2] - 2026-10-16
 
 ### Changed

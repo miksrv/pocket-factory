@@ -15,13 +15,14 @@ leave alone and still trust:
 - **Control over what agents do** — an audit log of every model call, tool call, file edit and
   sub-agent, attributed to the agent and the project; rendered transcripts; token and
   subscription-window accounting instead of made-up dollar figures.
-- **Management** — agents, skills, projects and schedules are Markdown files with frontmatter,
+- **Management** — agents, skills, projects and routines are Markdown files with frontmatter,
   edited in the UI or by the agent itself; presets bundle them for sharing; models and tools are
   picked from what your subscription and CLI actually offer.
 - **Pipelines** — skills such as `feature-to-pr` and `pr-review` chain sub-agents (developer,
-  reviewer, …) into repeatable task flows; **schedules** fire tasks on a cron (down to a minute)
-  behind a deterministic prefilter (a shell command, a GitHub or Trac query), so an empty poll
-  costs no tokens, and the schedule file's body is the agent's memory between runs.
+  reviewer, …) into repeatable task flows; **routines** give an agent standing instructions and
+  triggers — a schedule (a cron, down to a minute) or a poll behind a deterministic prefilter (a
+  shell command, a GitHub or Trac query), so an empty poll costs no tokens — and the routine
+  file's body is the agent's memory between runs.
 
 Single-owner by design. You log in to Claude Code with **your own subscription**, create **your own**
 Telegram bot, use **your own** GitHub token, point it at **your own** repositories. Nothing is shared,
@@ -41,7 +42,7 @@ that never leave your server, and it works behind an `ANTHROPIC_BASE_URL` proxy.
 | Telegram, with voice and photos | yes | no, the Claude app | no | no, the Claude app | no |
 | Queue that survives restarts | yes | no | jobs on disk, local | cloud | cloud |
 | Questions and permissions from the phone | yes, web and Telegram | yes | local peek panel | yes | no, runs unattended |
-| Schedules | files, 1-minute cron, prefilter, zero tokens when idle | no | no | a Routines tab | from one hour, every run costs |
+| Routines | files, an agent + triggers, 1-minute cron, prefilter, zero tokens when idle | no | no | a Routines tab | from one hour, every run costs |
 | Audit per model call, tool call and sub-agent | yes | no | no | no | a run transcript |
 | Where the transcript lives | your server | Anthropic | your machine | Anthropic | Anthropic |
 | Behind an `ANTHROPIC_BASE_URL` proxy | yes | no | yes | no | no |
@@ -58,7 +59,7 @@ lists what is taken from each.
   plus the task's project and how full the 5-hour and weekly windows are. Every message starts a
   new chat, so the last task's context costs nothing; reply to any message (a report, a question,
   your own earlier task) to continue that chat, or `/mode thread` for one session until `/new`.
-  `/new [project]`, `/stop`, `/status`, `/usage`, `/model`, `/schedules`, `/run <name>`. New chats
+  `/new [project]`, `/stop`, `/status`, `/usage`, `/model`, `/routines`, `/run <name>`. New chats
   get a short title by meaning (one Haiku call). Telegram is optional: leave the token empty for a
   web-only factory.
 - **Photos and files** — send a screenshot, a log or a PDF with the task, from Telegram (with a
@@ -70,7 +71,7 @@ lists what is taken from each.
   Deleting a conversation deletes its uploaded files from the disk.
 - **Questions and permissions** — `AskUserQuestion` and permission prompts reach you inside the
   run: a form in the browser, a message with buttons in Telegram, free text in either; the task
-  waits with its session open and continues with your answer. A scheduled run's question
+  waits with its session open and continues with your answer. A routine run's question
   unanswered for a while is settled by the file's instructions.
 - **Task queue** — every channel goes through one SQLite queue; one running task per conversation,
   a configurable number overall; tasks survive supervisor restarts (a task interrupted mid-run is
@@ -79,12 +80,12 @@ lists what is taken from each.
 - **Web UI** — Overview (queue, subscription windows, tokens, health), Tasks, Chat with Claude Code
   from the browser with live output (unread and waiting badges, desktop notifications, drafts),
   Sessions (rendered Claude Code transcripts), editors for **Agents**, **Skills**, **Projects**
-  and **Schedules**, **Presets**, an **Audit log** (every model call, tool call and sub-agent, per
+  and **Routines**, **Presets**, an **Audit log** (every model call, tool call and sub-agent, per
   agent and project), Settings (Claude Code model, MCP servers with browser-driven sign-in, SSH
   hosts with host-key trust, Security). Installs as a PWA from the phone.
 - **Factory files** — sub-agents `developer` / `reviewer`, skills `feature-to-pr` /
   `onboard-project`, one Markdown file per project (repo, branches, checks, tracker, hosts, MCP
-  allowlist), one per schedule (cron, prefilter, instructions and the agent's own notes). The UI,
+  allowlist), one per routine (agent, triggers, instructions and the agent's own notes). The UI,
   the owner and the agent edit the same files; what the agent changes shows up in the Audit log
   as file events.
 - **Toolchains** — the image carries `mise`, PHP with composer and the docker CLI. The agents
@@ -93,7 +94,7 @@ lists what is taken from each.
   Docker daemon (a dind sidecar, state in `data/docker`), so a project's compose file brings up its
   database or the whole application for the tests, and what a task started is stopped when it ends.
   Settings → Toolchains lists versions, sizes and containers; nothing is installed on the host.
-- **Model providers** — besides the subscription, a schedule, an agent or a chat can run on a
+- **Model providers** — besides the subscription, a routine, an agent or a chat can run on a
   self-hosted model (Ollama, vLLM) or a cloud API (OpenRouter, or OpenAI-compatible ones such as
   Gemini and Groq), in the same Claude Code CLI. The supervisor's gateway adds each provider's key,
   so keys never reach the agent; a provider can bring its own MCP servers and TLS certificate, and
@@ -141,7 +142,7 @@ Then:
 2. **Projects → New**, or tell the bot *"connect project X"* and let the `onboard-project` skill
    write the file after inspecting the checkout.
 3. Send the bot a task: *"In shop change product URLs from ids to SEO slugs"*.
-4. **Schedules → New** for anything recurring: a nightly PR review, a tracker poll, an inbox
+4. **Routines → New** for anything recurring: a nightly PR review, a tracker poll, an inbox
    summary. Start with `action: report` and graduate it once you trust the runs.
 
 ## Layout
@@ -149,11 +150,11 @@ Then:
 ```
 data/                    runtime state — everything the factory owns, all bind-mounted, gitignored
 ├── claude/              Claude Code home: CLAUDE.md, agents/, skills/, transcripts, login and MCP credentials
-├── config/              projects/*.md, schedules/*.md, hosts.yaml (shared SSH hosts), known_hosts, mcp.json
+├── config/              projects/*.md, routines/*.md, hosts.yaml (shared SSH hosts), known_hosts, mcp.json
 ├── workspaces/          repositories (or WORKSPACES_DIR → a folder you already have)
 ├── inbox/               photos and files sent with messages, per conversation (kept 30 days)
 ├── secrets/ssh/         keys for project hosts, linked to ~/.ssh in the container (mounted read-only)
-├── db/                  SQLite: conversations, tasks, task events, schedule runs, seen items, web sessions
+├── db/                  SQLite: conversations, tasks, task events, routine runs, seen items, web sessions
 └── logs/
 supervisor/              Telegram bot, task queue / session manager, scheduler, HTTP API (TypeScript, Node 22)
 web/                     admin UI (Vite + React), built into the image and served by the supervisor

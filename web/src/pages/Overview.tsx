@@ -210,11 +210,11 @@ export function OverviewPage() {
                         {/* Red: a file that cannot fire or a prefilter that fails. Amber: a firing the factory slept through. */}
                         <Check
                             ok={Boolean(
-                                s && !s.schedules.invalid && !s.schedules.failing.length && !s.schedules.missed.length
+                                s && !s.routines.invalid && !s.routines.failing.length && !s.routines.missed.length
                             )}
-                            label='Schedules'
-                            detail={schedulesDetail(s?.schedules)}
-                            warn={Boolean(s && !s.schedules.invalid && !s.schedules.failing.length)}
+                            label='Routines'
+                            detail={routinesDetail(s?.routines)}
+                            warn={Boolean(s && !s.routines.invalid && !s.routines.failing.length)}
                         />
                         <div className='card-foot'>
                             <span>From .env; edit on the host, restart to apply.</span>
@@ -452,12 +452,12 @@ function mcpDetail(m: Status['mcp'] | undefined): string {
 }
 
 /**
- * One short line however many schedules there are: "all fine", or what needs the owner in counts
- * ("1 missed a firing · 2 invalid"); the names are on the Schedules page.
+ * One short line however many routines there are: "all fine", or what needs the owner in counts
+ * ("1 missed a firing · 2 invalid"); the names are on the Routines page.
  */
-function schedulesDetail(s: Stats['schedules'] | undefined): string {
+function routinesDetail(s: Stats['routines'] | undefined): string {
     if (!s) return '…'
-    if (!s.total) return 'none yet — Schedules'
+    if (!s.total) return 'none yet — Routines'
     const parts: string[] = []
     if (s.invalid) parts.push(`${s.invalid} invalid`)
     if (s.failing.length) parts.push(`${s.failing.length} prefilter failing`)

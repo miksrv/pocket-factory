@@ -9,7 +9,7 @@ import { Button } from './ui'
  * Model providers besides the subscription: self-hosted models (Ollama on a
  * GPU box, llama.cpp, vLLM) and cloud APIs (OpenRouter, Gemini, OpenAI, Groq).
  * The list lives in Settings → Providers (`data/config/providers.yaml`); an
- * agent, a schedule or a chat picks one with `ModelPicker`. Keys never pass
+ * agent, a routine or a chat picks one with `ModelPicker`. Keys never pass
  * through here: a provider names the .env variable that holds its key.
  */
 
@@ -517,7 +517,7 @@ export function ProviderDialog({
                             <span>light mode — a short system prompt and a few tools</span>
                         </label>
                         <span className='dim'>
-                            the system prompt is the agent file's body (a schedule's agent), else
+                            the system prompt is the agent file's body (a routine's agent), else
                             data/claude/light-system.md; tools Read / Write / Edit / Bash / Glob / Grep, no skills or
                             connectors; models under ~30B need it, a frontier model can take the full prompt
                         </span>
@@ -615,7 +615,7 @@ export function ProvidersSection() {
                             ? `${overview.providers.length} provider${overview.providers.length === 1 ? '' : 's'} besides the subscription`
                             : 'No other providers yet'
                         : 'Loading…'}{' '}
-                    · a task runs on one when its schedule, its chat or the agent it runs as says so; keys stay in .env
+                    · a task runs on one when its routine, its chat or the agent it runs as says so; keys stay in .env
                     and go out only from the factory's gateway
                 </span>
                 <Button

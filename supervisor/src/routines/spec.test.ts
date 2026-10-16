@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { entry } from '../test/catalog.js'
-import { parseSchedule, type Refs } from './spec.js'
+import { parseRoutine, type Refs } from './spec.js'
 
 const known =
     (...names: string[]) =>
@@ -20,9 +20,9 @@ const refs: Refs = {
 const defaults = { tz: 'Europe/Warsaw' }
 
 const parse = (frontmatter: Record<string, unknown>, body?: string, extra?: Parameters<typeof entry>[2]) =>
-    parseSchedule(entry(frontmatter, body, extra), defaults, refs)
+    parseRoutine(entry(frontmatter, body, extra), defaults, refs)
 
-describe('parseSchedule', () => {
+describe('parseRoutine', () => {
     it('fills the defaults for a minimal file', () => {
         const parsed = parse({ cron: '0 8 * * 1-5' })
         expect(parsed.errors).toEqual([])
@@ -30,9 +30,15 @@ describe('parseSchedule', () => {
         expect(parsed.name).toBe('nightly')
         expect(parsed.spec).toMatchObject({
             name: 'nightly',
-            cron_text: 'at 08:00 on weekdays',
-            tz: 'Europe/Warsaw',
-            window: {},
+            triggers: [
+                {
+                    kind: 'schedule',
+                    cron_text: 'at 08:00 on weekdays',
+                    tz: 'Europe/Warsaw',
+                    window: {},
+                    prefilter: null
+                }
+            ],
             enabled: true,
             project: null,
             hosts: [],
@@ -48,7 +54,101 @@ describe('parseSchedule', () => {
             max_items: 10,
             once: false
         })
-        expect(parsed.spec?.cron.source).toBe('0 8 * * 1-5')
+        expect(parsed.spec?.triggers[0].cron.source).toBe('0 8 * * 1-5')
+    })
+
+    it('reads a file with no cron at all as a routine that runs only by hand', () => {
+        const parsed = parse({ agent: 'reviewer' })
+        expect(parsed.errors).toEqual([])
+        expect(parsed.spec?.triggers).toEqual([])
+        expect(parsed.spec?.prefilter).toBeNull()
+    })
+
+    it('reads cron: with prefilter: as one poll', () => {
+        const parsed = parse({ cron: '*/10 * * * *', prefilter: { kind: 'command', run: 'ls' } })
+        expect(parsed.spec?.triggers).toMatchObject([{ kind: 'poll', prefilter: { kind: 'command', run: 'ls' } }])
+        expect(parsed.spec?.prefilter).toMatchObject({ kind: 'command' })
+    })
+
+    it('warns about a prefilter with nothing to poll it, and keeps it for Run now', () => {
+        const parsed = parse({ prefilter: { kind: 'command', run: 'ls' } })
+        expect(parsed.errors).toEqual([])
+        expect(parsed.warnings).toContain('prefilter: without cron: or triggers: is only used by Run now')
+        expect(parsed.spec?.prefilter).toMatchObject({ kind: 'command' })
+    })
+
+    describe('triggers:', () => {
+        it('reads schedules and polls, each with its own zone and window on top of the file defaults', () => {
+            const parsed = parse({
+                tz: 'UTC',
+                window: { days: 'mon-fri' },
+                triggers: [
+                    { schedule: '0 8 * * *' },
+                    { poll: '*/15 * * * *', prefilter: { kind: 'command', run: 'ls' }, tz: 'Europe/Warsaw' },
+                    { schedule: '0 20 * * *', window: { hours: '18:00-22:00' } }
+                ]
+            })
+            expect(parsed.errors).toEqual([])
+            expect(parsed.spec?.triggers).toMatchObject([
+                { kind: 'schedule', cron_text: 'at 08:00 every day', tz: 'UTC', prefilter: null },
+                { kind: 'poll', tz: 'Europe/Warsaw', prefilter: { kind: 'command', run: 'ls' } },
+                { kind: 'schedule', tz: 'UTC', window: { hours: { from: 18 * 60, to: 22 * 60 } } }
+            ])
+            expect([...parsed.spec!.triggers[0].window.days!]).toEqual([1, 2, 3, 4, 5])
+            expect([...parsed.spec!.triggers[1].window.days!]).toEqual([1, 2, 3, 4, 5])
+            expect(parsed.spec!.triggers[2].window.days).toBeUndefined()
+            expect(parsed.spec?.prefilter).toMatchObject({ kind: 'command' })
+        })
+
+        it('allows an empty list (Run now only)', () => {
+            const parsed = parse({ triggers: [] })
+            expect(parsed.errors).toEqual([])
+            expect(parsed.spec?.triggers).toEqual([])
+        })
+
+        it.each([
+            [{ triggers: 'daily' }, /triggers must be a list/],
+            [{ triggers: ['0 8 * * *'] }, /triggers\[1\] must be a mapping/],
+            [{ triggers: [{}] }, /triggers\[1\] must have exactly one of/],
+            [{ triggers: [{ schedule: '0 8 * * *', poll: '0 9 * * *' }] }, /exactly one of/],
+            [{ triggers: [{ schedule: '0 8 * *' }] }, /triggers\[1\]: a cron expression has five fields/],
+            [{ triggers: [{ schedule: '' }] }, /triggers\[1\] needs a cron/],
+            [{ triggers: [{ poll: '0 8 * * *' }] }, /triggers\[1\]: a poll needs a prefilter/],
+            [
+                { triggers: [{ poll: '0 8 * * *', prefilter: { kind: 'command' } }] },
+                /triggers\[1\].prefilter.run is required/
+            ],
+            [{ triggers: [{ schedule: '0 8 * * *', tz: 'Mars/Base' }] }, /triggers\[1\].tz "Mars\/Base"/],
+            [
+                { triggers: [{ schedule: '0 8 * * *', window: { hours: 'x' } }] },
+                /triggers\[1\].window.hours must be like/
+            ],
+            [{ triggers: [{ poll: '0 8 * * *', prefilter: { kind: 'github-prs' } }] }, /needs a `repo` or a `project`/]
+        ])('reports an error for %j', (frontmatter, message) => {
+            const parsed = parse(frontmatter)
+            expect(parsed.spec).toBeNull()
+            expect(parsed.errors).toEqual(expect.arrayContaining([expect.stringMatching(message)]))
+        })
+
+        it('ignores a top-level cron: and prefilter: next to triggers:, with a warning', () => {
+            const parsed = parse({
+                cron: '0 8 * * *',
+                prefilter: { kind: 'command', run: 'ls' },
+                triggers: [{ schedule: '0 9 * * *' }]
+            })
+            expect(parsed.errors).toEqual([])
+            expect(parsed.warnings).toContain(
+                'cron: and prefilter: are ignored when triggers: is set; move them under a trigger'
+            )
+            expect(parsed.spec?.triggers).toHaveLength(1)
+            expect(parsed.spec?.prefilter).toBeNull()
+        })
+
+        it('warns about a prefilter on a schedule', () => {
+            const parsed = parse({ triggers: [{ schedule: '0 9 * * *', prefilter: { kind: 'command', run: 'ls' } }] })
+            expect(parsed.warnings).toContain('triggers[1]: a schedule has no prefilter; use poll: for that')
+            expect(parsed.spec?.triggers[0].prefilter).toBeNull()
+        })
     })
 
     it('reads every field of a full file', () => {
@@ -72,7 +172,7 @@ describe('parseSchedule', () => {
         })
         expect(parsed.errors).toEqual([])
         expect(parsed.spec).toMatchObject({
-            tz: 'UTC',
+            triggers: [{ kind: 'poll', tz: 'UTC' }],
             enabled: false,
             project: 'shop',
             hosts: [{ host: 'prod' }, { host: 'prod', path: '/srv/shop', notes: 'read only' }],
@@ -87,12 +187,10 @@ describe('parseSchedule', () => {
             max_items: 100,
             once: true
         })
-        expect([...parsed.spec!.window.days!].sort()).toEqual([1, 2, 3, 4, 5])
+        expect([...parsed.spec!.triggers[0].window.days!].sort()).toEqual([1, 2, 3, 4, 5])
     })
 
     it.each([
-        [{}, /cron is required/],
-        [{ cron: '   ' }, /cron is required/],
         [{ cron: '0 8 * *' }, /^cron: a cron expression has five fields/],
         [{ cron: '0 8 * * *', tz: 'Mars/Base' }, /tz "Mars\/Base" is not a known time zone/],
         [{ cron: '0 8 * * *', window: { hours: 'all day' } }, /window.hours must be like/],
@@ -117,7 +215,7 @@ describe('parseSchedule', () => {
     })
 
     it('collects every error at once', () => {
-        const parsed = parse({ notify: 'x', session: 'y', tz: 'Nowhere/Here' })
+        const parsed = parse({ cron: 'x', notify: 'x', session: 'y', tz: 'Nowhere/Here' })
         expect(parsed.errors).toHaveLength(4)
     })
 

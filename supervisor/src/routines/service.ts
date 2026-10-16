@@ -6,34 +6,49 @@ import type { Config } from '../config.js'
 import type { AgentFile } from '../files/agentFiles.js'
 import type { Catalog, CatalogEntry } from '../files/catalog.js'
 import { createLogger } from '../logger.js'
-import type { ScheduleRun, Store, Task } from '../store/index.js'
+import type { RoutineRun, Store, Task } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
 import { cronMatches, inWindow, localTime, nextRun } from './cron.js'
 import { type Item, PrefilterError, runPrefilter } from './prefilters.js'
-import { type ParsedSchedule, parseSchedule, type Refs, type ScheduleSpec } from './spec.js'
+import { type ParsedRoutine, parseRoutine, type Refs, type RoutineSpec, type Trigger } from './spec.js'
 
-const log = createLogger('schedules')
+const log = createLogger('routines')
 
 /** How often the ticker looks at the clock; a minute is the cron resolution, so twice a minute never misses one. */
 const TICK_MS = 20_000
 const MINUTE = 60_000
 /** How far back a sweep looks for minutes the factory slept through; older gaps are summarised in one line. */
 const SWEEP_LIMIT_MS = 7 * 24 * 60 * MINUTE
-/** Meta key: when the scheduler last looked at the clock, so a restart knows what it slept through. */
+/** Meta key: when the scheduler last looked at the clock, so a restart knows what it slept through. The key predates the rename. */
 const LAST_TICK = 'schedules:last_tick'
-/** Meta key per schedule: the prefilter has been seeded or handed over at least once (survives "Forget seen items"). */
+/** Meta key per routine: the prefilter has been seeded or handed over at least once (survives "Forget seen items"). */
 const seededKey = (name: string) => `schedule:${name}:seeded`
 
-export interface ScheduleView {
+/** What started a run: one of the routine's triggers, or the owner (Run now, /run). */
+export type Firing = Trigger | 'manual'
+
+export interface TriggerView {
+    kind: Trigger['kind']
+    cron: string
+    cron_text: string
+    tz: string
+    window: { days: number[] | null; hours: string | null }
+    /** The poll's prefilter kind; null for a schedule. */
+    prefilter: string | null
+    next_run: string | null
+}
+
+export interface RoutineView {
     name: string
     enabled: boolean
     errors: string[]
     warnings: string[]
-    cron: string | null
-    cron_text: string | null
-    tz: string | null
-    window: { days: number[] | null; hours: string | null } | null
+    /** Empty: the routine runs only by hand. */
+    triggers: TriggerView[]
     project: string | null
+    agent: string | null
+    skill: string | null
+    /** The prefilter kind Run now and the preview use (the first poll's); null = none. */
     prefilter: string | null
     notify: 'telegram' | 'none' | null
     session: 'fresh' | 'continue' | null
@@ -42,11 +57,12 @@ export interface ScheduleView {
     provider: string | null
     /** Pinned model alias for the runs; null = the factory's current one. */
     model: string | null
+    /** The earliest next firing over every trigger. */
     next_run: string | null
-    last_run: ScheduleRun | null
+    last_run: RoutineRun | null
     /** The last firing that queued a task, with the task's status. */
-    last_task: ScheduleRun | null
-    /** The queued or running task of the schedule, if a run is in progress. */
+    last_task: RoutineRun | null
+    /** The queued or running task of the routine, if a run is in progress. */
     active_task: Pick<Task, 'id' | 'status' | 'created_at'> | null
     conversation_id: string | null
     /** Prefilter items handed over (or seeded) so far. */
@@ -60,12 +76,12 @@ export interface Preview {
     ms: number
 }
 
-export interface SchedulesEvents {
-    /** A schedule fired (or was skipped, or missed): the run row as stored. */
-    run: [run: ScheduleRun, spec: ScheduleSpec | null]
+export interface RoutinesEvents {
+    /** A routine fired (or was skipped, or missed): the run row as stored. */
+    run: [run: RoutineRun, spec: RoutineSpec | null]
 }
 
-export interface ScheduleRefs extends Refs {
+export interface RoutineRefs extends Refs {
     projectPath: (slug: string) => string | null
     projectRepo: (slug: string) => string | null
     agentEnv: () => NodeJS.ProcessEnv
@@ -76,14 +92,14 @@ export interface ScheduleRefs extends Refs {
 }
 
 /**
- * The scheduler: reads the schedule files, fires each one at the minutes its
- * cron and window allow, runs the prefilter (no LLM) and queues a task only
- * when there is something new. Memory between runs is the schedule file
+ * The scheduler: reads the routine files, fires each one at the minutes its
+ * triggers allow, runs a poll's prefilter (no LLM) and queues a task only
+ * when there is something new. Memory between runs is the routine file
  * itself (the agent edits its body) plus the store's seen items.
  */
-export class Schedules extends EventEmitter<SchedulesEvents> {
+export class Routines extends EventEmitter<RoutinesEvents> {
     private timer: ReturnType<typeof setInterval> | null = null
-    /** The minute (in the schedule's zone) each schedule last fired at, so a tick never fires twice and a restart does not repeat the minute. */
+    /** The minute (in the trigger's zone) each routine last fired at, so a tick never fires twice and a restart does not repeat the minute. */
     private readonly fired = new Map<string, string>()
     private readonly firing = new Set<string>()
     /** When the ticker last looked at the clock: the minutes since then are the ones to consider. */
@@ -94,7 +110,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         private readonly catalog: Catalog,
         private readonly tasks: TaskService,
         private readonly config: Config,
-        private readonly refs: ScheduleRefs
+        private readonly refs: RoutineRefs
     ) {
         super()
     }
@@ -102,17 +118,17 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
     start(): void {
         if (this.timer) return
         // Runs and seen items of a file that is gone (renamed by hand, deleted outside the UI) would never be looked at again.
-        const files = new Set(this.catalog.list('schedules').map((e) => e.name))
-        for (const name of this.store.scheduleNames()) {
+        const files = new Set(this.catalog.list('routines').map((e) => e.name))
+        for (const name of this.store.routineNames()) {
             if (files.has(name)) continue
-            this.store.dropSchedule(name)
-            log.info(`forgot runs and seen items of "${name}": no such schedule file`)
+            this.store.dropRoutine(name)
+            log.info(`forgot runs and seen items of "${name}": no such routine file`)
         }
         // The minute a previous supervisor fired at must not fire again after a quick restart.
-        for (const [name, run] of this.store.lastScheduleRuns()) {
-            if (run.trigger !== 'cron') continue
-            const parsed = this.parse(name)
-            if (parsed?.spec) this.fired.set(name, localTime(new Date(run.fired_at), parsed.spec.tz).key)
+        for (const [name, run] of this.store.lastRoutineRuns()) {
+            if (run.trigger === 'manual') continue
+            const tz = this.parse(name)?.spec?.triggers[0]?.tz
+            if (tz) this.fired.set(name, localTime(new Date(run.fired_at), tz).key)
         }
         // What the factory slept through since the previous supervisor's last tick: recent firings run late, older ones are recorded as missed.
         const since = this.store.getMeta<string>(LAST_TICK)
@@ -121,7 +137,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         this.timer = setInterval(() => this.tick(), TICK_MS)
         this.timer.unref()
         const enabled = this.all().filter((p) => p.spec?.enabled).length
-        log.info(`scheduler on: ${enabled} enabled schedule(s), tick every ${TICK_MS / 1000} s`)
+        log.info(`scheduler on: ${enabled} enabled routine(s), tick every ${TICK_MS / 1000} s`)
     }
 
     stop(): void {
@@ -131,67 +147,77 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
 
     // ---- files ------------------------------------------------------------
 
-    private all(): ParsedSchedule[] {
+    private all(): ParsedRoutine[] {
         return this.catalog
-            .list('schedules')
-            .map((entry) => parseSchedule(entry, { tz: this.config.timezone }, this.refs))
+            .list('routines')
+            .map((entry) => parseRoutine(entry, { tz: this.config.timezone }, this.refs))
     }
 
-    private parse(name: string): ParsedSchedule | null {
-        if (!this.catalog.exists('schedules', name)) return null
-        return parseSchedule(this.catalog.get('schedules', name), { tz: this.config.timezone }, this.refs)
+    private parse(name: string): ParsedRoutine | null {
+        if (!this.catalog.exists('routines', name)) return null
+        return parseRoutine(this.catalog.get('routines', name), { tz: this.config.timezone }, this.refs)
     }
 
-    list(): ScheduleView[] {
-        const last = this.store.lastScheduleRuns()
-        const lastTask = this.store.lastScheduleRuns(true)
+    list(): RoutineView[] {
+        const last = this.store.lastRoutineRuns()
+        const lastTask = this.store.lastRoutineRuns(true)
         return this.all().map((p) => this.view(p, last.get(p.name) ?? null, lastTask.get(p.name) ?? null))
     }
 
-    get(name: string): ScheduleView | undefined {
+    get(name: string): RoutineView | undefined {
         const parsed = this.parse(name)
         if (!parsed) return undefined
         return this.view(
             parsed,
-            this.store.listScheduleRuns(name, 1, true)[0] ?? null,
-            this.store.lastScheduleRuns(true).get(name) ?? null
+            this.store.listRoutineRuns(name, 1, true)[0] ?? null,
+            this.store.lastRoutineRuns(true).get(name) ?? null
         )
     }
 
-    /** What the schedule would tell the agent this minute; spec only, no file body. */
-    spec(name: string): ScheduleSpec | null {
+    /** What the routine would tell the agent this minute; spec only, no file body. */
+    spec(name: string): RoutineSpec | null {
         return this.parse(name)?.spec ?? null
     }
 
-    runs(name: string, limit = 30, all = false): ScheduleRun[] {
-        return this.store.listScheduleRuns(name, limit, all)
+    runs(name: string, limit = 30, all = false): RoutineRun[] {
+        return this.store.listRoutineRuns(name, limit, all)
     }
 
-    private view(p: ParsedSchedule, last: ScheduleRun | null, lastTask: ScheduleRun | null): ScheduleView {
+    private view(p: ParsedRoutine, last: RoutineRun | null, lastTask: RoutineRun | null): RoutineView {
         const s = p.spec
-        const active = this.store.activeScheduleTask(p.name)
+        const active = this.store.activeRoutineTask(p.name)
+        const triggers: TriggerView[] = (s?.triggers ?? []).map((t) => ({
+            kind: t.kind,
+            cron: t.cron.source,
+            cron_text: t.cron_text,
+            tz: t.tz,
+            window: {
+                days: t.window.days ? [...t.window.days] : null,
+                hours: t.window.hours ? `${hhmm(t.window.hours.from)}-${hhmm(t.window.hours.to)}` : null
+            },
+            prefilter: t.prefilter?.kind ?? null,
+            next_run: s?.enabled ? (nextRun(t.cron, t.window, t.tz)?.toISOString() ?? null) : null
+        }))
+        const next = triggers
+            .map((t) => t.next_run)
+            .filter((n): n is string => n !== null)
+            .sort()[0]
         return {
             name: p.name,
             enabled: s ? s.enabled : Boolean(p.entry.frontmatter.enabled ?? true),
             errors: p.errors,
             warnings: p.warnings,
-            cron: s?.cron.source ?? (typeof p.entry.frontmatter.cron === 'string' ? p.entry.frontmatter.cron : null),
-            cron_text: s?.cron_text ?? null,
-            tz: s?.tz ?? null,
-            window: s
-                ? {
-                      days: s.window.days ? [...s.window.days] : null,
-                      hours: s.window.hours ? `${hhmm(s.window.hours.from)}-${hhmm(s.window.hours.to)}` : null
-                  }
-                : null,
+            triggers,
             project: s?.project ?? null,
+            agent: s?.agent ?? null,
+            skill: s?.skill ?? null,
             prefilter: s?.prefilter?.kind ?? null,
             notify: s?.notify ?? null,
             session: s?.session ?? null,
             once: s?.once ?? false,
             provider: s?.provider ?? null,
             model: s?.model ?? null,
-            next_run: s?.enabled ? (nextRun(s.cron, s.window, s.tz)?.toISOString() ?? null) : null,
+            next_run: next ?? null,
             last_run: last,
             last_task: lastTask,
             active_task: active ? { id: active.id, status: active.status, created_at: active.created_at } : null,
@@ -200,9 +226,9 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         }
     }
 
-    /** The schedule's file was deleted or renamed: its runs and seen items go too. */
+    /** The routine's file was deleted or renamed: its runs and seen items go too. */
     forget(name: string): void {
-        this.store.dropSchedule(name)
+        this.store.dropRoutine(name)
         this.fired.delete(name)
     }
 
@@ -217,56 +243,61 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
     /**
      * Every minute since the last look at the clock is considered once: the
      * current one fires, one the factory slept through (laptop closed, Docker
-     * down) fires late within `SCHEDULES_LATE_MIN`, and an older one is
-     * recorded as missed — nobody wants the 08:00 inbox check at 14:00.
+     * down) fires late within `ROUTINES_LATE_MIN`, and an older one is
+     * recorded as missed — nobody wants the 08:00 inbox check at 14:00. Two
+     * triggers that allow the same minute fire the routine once.
      */
     private tick(): void {
         const now = new Date()
         const from = this.lastTick ?? now
         this.lastTick = now
         this.store.setMeta(LAST_TICK, now.toISOString())
-        const lateMs = this.config.schedules.lateMinutes * MINUTE
+        const lateMs = this.config.routines.lateMinutes * MINUTE
         const start = Math.max(Math.floor(from.getTime() / MINUTE) * MINUTE + MINUTE, now.getTime() - SWEEP_LIMIT_MS)
         const current = Math.floor(now.getTime() / MINUTE) * MINUTE
         if (start > current) return
         for (const p of this.all()) {
             const s = p.spec
-            if (!s?.enabled) continue
-            const missed: Date[] = []
+            if (!s?.enabled || !s.triggers.length) continue
+            const missed: Array<{ at: Date; trigger: Trigger }> = []
             for (let t = start; t <= current; t += MINUTE) {
                 const at = new Date(t)
-                const local = localTime(at, s.tz)
-                if (!cronMatches(s.cron, local) || !inWindow(s.window, local)) continue
+                const trigger = s.triggers.find((tr) => {
+                    const local = localTime(at, tr.tz)
+                    return cronMatches(tr.cron, local) && inWindow(tr.window, local)
+                })
+                if (!trigger) continue
+                const local = localTime(at, trigger.tz)
                 if (this.fired.get(p.name) === local.key) continue
                 this.fired.set(p.name, local.key)
                 const late = now.getTime() - t
                 if (t === current || late <= lateMs) {
                     void this.fire(
                         p.name,
-                        'cron',
+                        trigger,
                         late >= MINUTE
                             ? `late by ${Math.round(late / MINUTE)} min: the factory was off at ${local.key.slice(11)}`
                             : null
-                    ).catch((error) => log.error(`schedule ${p.name} failed to fire`, error))
-                } else missed.push(at)
+                    ).catch((error) => log.error(`routine ${p.name} failed to fire`, error))
+                } else missed.push({ at, trigger })
             }
             if (missed.length) this.recordMissed(p, missed, from.getTime() <= now.getTime() - SWEEP_LIMIT_MS)
         }
     }
 
-    /** One row for everything a schedule slept through in this sweep: the minutes in its zone, and that nothing was run. */
-    private recordMissed(p: ParsedSchedule, minutes: Date[], truncated: boolean): void {
-        const tz = p.spec!.tz
-        const when = (d: Date) => localTime(d, tz).key.replace('T', ' ')
+    /** One row for everything a routine slept through in this sweep: the minutes in its zone, and that nothing was run. */
+    private recordMissed(p: ParsedRoutine, minutes: Array<{ at: Date; trigger: Trigger }>, truncated: boolean): void {
+        const when = (m: { at: Date; trigger: Trigger }) => localTime(m.at, m.trigger.tz).key.replace('T', ' ')
         const list =
             minutes.length <= 3
                 ? minutes.map(when).join(', ')
                 : `${minutes.length} firings between ${when(minutes[0])} and ${when(minutes[minutes.length - 1])}`
         const note = `missed ${list}${truncated ? ' (and anything older than a week)' : ''}: the factory was off, nothing was run`
-        const run = this.store.addScheduleRun({
+        const last = minutes[minutes.length - 1]
+        const run = this.store.addRoutineRun({
             schedule: p.name,
-            fired_at: minutes[minutes.length - 1].toISOString(),
-            trigger: 'cron',
+            fired_at: last.at.toISOString(),
+            trigger: last.trigger.kind,
             status: 'missed',
             note,
             items: 0,
@@ -278,16 +309,18 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
     }
     /**
      * One firing: guards, prefilter, task. Every outcome is a run row, so the
-     * UI can say why nothing happened. A manual run ignores the cron, the
-     * window and the soft-stop, but never overlaps a run in progress.
+     * UI can say why nothing happened. A manual run ignores the crons, the
+     * windows and the soft-stop and looks at the first poll's prefilter, but
+     * never overlaps a run in progress.
      */
-    async fire(name: string, trigger: 'cron' | 'manual', remark: string | null = null): Promise<ScheduleRun> {
+    async fire(name: string, firing: Firing, remark: string | null = null): Promise<RoutineRun> {
         const parsed = this.parse(name)
-        if (!parsed) throw new Error(`schedule "${name}" not found`)
+        if (!parsed) throw new Error(`routine "${name}" not found`)
         const fired_at = new Date().toISOString()
-        const record = (status: ScheduleRun['status'], note: string | null, extra: Partial<ScheduleRun> = {}) => {
+        const trigger = firing === 'manual' ? 'manual' : firing.kind
+        const record = (status: RoutineRun['status'], note: string | null, extra: Partial<RoutineRun> = {}) => {
             const full = [note, remark].filter(Boolean).join(' · ') || null
-            const run = this.store.addScheduleRun({
+            const run = this.store.addRoutineRun({
                 schedule: name,
                 fired_at,
                 trigger,
@@ -307,23 +340,24 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         if (this.firing.has(name)) return record('skipped', 'still checking the previous firing')
         this.firing.add(name)
         try {
-            const active = this.store.activeScheduleTask(name)
+            const active = this.store.activeRoutineTask(name)
             if (active)
                 return record('skipped', `the previous run is still ${active.status} (task ${active.id.slice(0, 8)})`)
-            // Cron firings yield to the owner's subscription windows; a run on another provider touches none.
-            if (trigger === 'cron' && !spec.provider) {
+            // Timed firings yield to the owner's subscription windows; a run on another provider touches none.
+            if (firing !== 'manual' && !spec.provider) {
                 const stop = this.softStop()
                 if (stop) return record('skipped', stop)
             }
 
+            const prefilter = firing === 'manual' ? spec.prefilter : firing.prefilter
             let items: Item[] = []
             let fresh: Item[] = []
             let ms = 0
             let held = 0
-            if (spec.prefilter) {
+            if (prefilter) {
                 const started = Date.now()
                 try {
-                    items = await runPrefilter(spec.prefilter, this.prefilterContext(spec))
+                    items = await runPrefilter(prefilter, this.prefilterContext(spec))
                 } catch (error) {
                     ms = Date.now() - started
                     const message =
@@ -332,7 +366,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
                             : error instanceof Error
                               ? error.message
                               : String(error)
-                    return record('error', `prefilter ${spec.prefilter.kind}: ${message}`, { duration_ms: ms })
+                    return record('error', `prefilter ${prefilter.kind}: ${message}`, { duration_ms: ms })
                 }
                 ms = Date.now() - started
                 const seen = this.store.seenKeys(
@@ -342,7 +376,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
                 const unseen = items.filter((i) => !seen.has(i.key))
                 if (unseen.length === 0)
                     return record('empty', `${items.length} item(s), nothing new`, { duration_ms: ms })
-                if (trigger === 'cron' && spec.first_run === 'skip' && !this.seeded(name)) {
+                if (firing !== 'manual' && spec.first_run === 'skip' && !this.seeded(name)) {
                     this.store.markSeen(name, unseen, null)
                     this.store.setMeta(seededKey(name), fired_at)
                     return record(
@@ -355,13 +389,13 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
                 held = unseen.length - fresh.length
             }
 
-            const task = this.queue(spec, parsed.entry.body, fresh, items, trigger, parsed.entry.path)
+            const task = this.queue(spec, parsed.entry.body, fresh, items, firing, parsed.entry.path)
             if (fresh.length) {
                 this.store.markSeen(name, fresh, task.id)
                 this.store.setMeta(seededKey(name), fired_at)
             }
             const notes = [
-                spec.prefilter
+                prefilter
                     ? `${fresh.length} new item(s)${held ? `, ${held} more wait for the next run` : ''}`
                     : 'task queued'
             ]
@@ -389,9 +423,9 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
     }
 
     /** `once`: the file switches itself off after queueing its task (the body stays as it is). */
-    private switchOff(parsed: ParsedSchedule): boolean {
+    private switchOff(parsed: ParsedRoutine): boolean {
         try {
-            this.catalog.save('schedules', parsed.name, {
+            this.catalog.save('routines', parsed.name, {
                 frontmatter: { ...parsed.entry.frontmatter, enabled: false },
                 body: parsed.entry.body
             })
@@ -401,10 +435,10 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
             return false
         }
     }
-    /** Run the prefilter without marking anything: what a firing would hand over now. */
+    /** Run the prefilter without marking anything: what a manual firing would hand over now. */
     async preview(name: string): Promise<Preview> {
         const parsed = this.parse(name)
-        if (!parsed) throw new Error(`schedule "${name}" not found`)
+        if (!parsed) throw new Error(`routine "${name}" not found`)
         if (!parsed.spec) throw new Error(parsed.errors.join('; '))
         if (!parsed.spec.prefilter) return { items: [], new_keys: [], ms: 0 }
         const started = Date.now()
@@ -424,7 +458,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         }
     }
 
-    private prefilterContext(spec: ScheduleSpec) {
+    private prefilterContext(spec: RoutineSpec) {
         const project = spec.project ? { slug: spec.project, repo: this.refs.projectRepo(spec.project) } : null
         const cwd = (spec.project && this.refs.projectPath(spec.project)) || this.config.paths.workspacesRoot
         return { cwd, env: this.refs.agentEnv(), project }
@@ -432,12 +466,12 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
 
     /**
      * Background work yields to the owner: when the 5-hour or the weekly
-     * window is past the soft-stop share, cron firings are skipped until it
+     * window is past the soft-stop share, timed firings are skipped until it
      * resets. The reading is the CLI's last one; stale readings (a reset has
      * passed) do not count.
      */
     private softStop(): string | null {
-        const threshold = this.config.schedules.softStop
+        const threshold = this.config.routines.softStop
         if (threshold <= 0) return null
         const limits = this.tasks.limits()
         if (!limits) return null
@@ -455,14 +489,7 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
 
     // ---- the task -----------------------------------------------------------
 
-    private queue(
-        spec: ScheduleSpec,
-        body: string,
-        items: Item[],
-        current: Item[],
-        trigger: 'cron' | 'manual',
-        file: string
-    ): Task {
+    private queue(spec: RoutineSpec, body: string, items: Item[], current: Item[], firing: Firing, file: string): Task {
         const key = conversationKey(spec.name)
         let conversation = this.store.findConversation('web', key)
         if (!conversation) conversation = this.store.createConversation('web', key, `⏱ ${spec.name}`, spec.project)
@@ -477,17 +504,17 @@ export class Schedules extends EventEmitter<SchedulesEvents> {
         // that spawns it and relays its report (a third of a run).
         const own = !spec.provider && spec.agent ? this.refs.agentFile(spec.agent) : null
         const embodied = light ? 'light' : own ? 'agent' : undefined
-        // The agent's own model, unless the schedule pins one; `inherit` follows the orchestrator's.
+        // The agent's own model, unless the routine pins one; `inherit` follows the orchestrator's.
         const agentModel = own?.model && own.model !== 'inherit' ? own.model : undefined
         const checkout = spec.project ? this.refs.projectPath(spec.project) : null
         return this.tasks.submit(
             conversation.id,
-            'cron',
+            'routine',
             buildPrompt(
                 spec,
                 body,
                 items,
-                trigger,
+                firing,
                 {
                     file,
                     configRoot: this.config.paths.configRoot,
@@ -539,24 +566,24 @@ export function underHeading(markdown: string): string {
         .join('\n')
 }
 
-/** The web conversation every run of a schedule lands in. */
+/** The web conversation every run of a routine lands in. The key predates the rename, so threads and history stay. */
 export const conversationKey = (name: string) => `schedule:${name}`
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
 
 /**
- * What the agent reads. The frame says this is a scheduled run and where its
- * memory lives; the schedule's own body is the instruction; the prefilter's
- * items are the work; `current` is everything the prefilter sees right now,
- * so notes about what is gone (a merged PR, a closed ticket) can be dropped.
+ * What the agent reads. The frame says this is a routine's run and where its
+ * memory lives; the routine's own body is the instruction; a poll's items
+ * are the work; `current` is everything the prefilter sees right now, so
+ * notes about what is gone (a merged PR, a closed ticket) can be dropped.
  * Everything fetched by the prefilter is data, as the dispatcher rules
  * already say for tickets and PRs.
  */
 export function buildPrompt(
-    spec: ScheduleSpec,
+    spec: RoutineSpec,
     body: string,
     items: Item[],
-    trigger: 'cron' | 'manual',
+    firing: Firing,
     paths: {
         file: string
         configRoot: string
@@ -566,15 +593,20 @@ export function buildPrompt(
     },
     current: Item[] = items
 ): string {
+    const prefilter = firing === 'manual' ? spec.prefilter : firing.prefilter
+    const started =
+        firing === 'manual'
+            ? 'run now by the owner'
+            : `${firing.kind === 'poll' ? 'poll' : 'schedule'} "${firing.cron.source}"`
     const lines: string[] = []
-    lines.push(`# Scheduled run: ${spec.name}`)
+    lines.push(`# Routine run: ${spec.name}`)
     lines.push('')
     lines.push(
-        `This task was started by the factory's scheduler (${trigger === 'cron' ? `cron "${spec.cron.source}"` : 'run now from the UI'}, ${new Date().toISOString()}), not by a message from the owner. The owner reads your report later${spec.notify === 'telegram' ? ' in Telegram' : ' in the web UI'}: do the work the instructions below describe and end with a short report. Ask with AskUserQuestion only when you cannot go on without the owner; otherwise decide by the instructions.`
+        `This task was started by the factory's routine (${started}, ${new Date().toISOString()}), not by a message from the owner. The owner reads your report later${spec.notify === 'telegram' ? ' in Telegram' : ' in the web UI'}: do the work the instructions below describe and end with a short report. Ask with AskUserQuestion only when you cannot go on without the owner; otherwise decide by the instructions.`
     )
     lines.push('')
     lines.push(
-        `Memory between runs is the schedule file itself: \`${paths.file}\`. When you decide something the next run should know (a ticket deferred, a PR skipped on purpose, a host that must not be touched), edit the file's Markdown body — add or update a line under a heading such as "Notes" or "Deferred" — and never touch its YAML frontmatter. The next run reads the file again.`
+        `Memory between runs is the routine file itself: \`${paths.file}\`. When you decide something the next run should know (a ticket deferred, a PR skipped on purpose, a host that must not be touched), edit the file's Markdown body — add or update a line under a heading such as "Notes" or "Deferred" — and never touch its YAML frontmatter. The next run reads the file again.`
     )
     const facts: string[] = []
     if (spec.project)
@@ -615,7 +647,7 @@ export function buildPrompt(
     lines.push('## Instructions')
     lines.push('')
     lines.push(body.trim() || '(no instructions in the file yet: report what you found and stop)')
-    if (spec.prefilter) {
+    if (prefilter) {
         lines.push('')
         lines.push(`## New since the last run (${items.length})`)
         lines.push('')
@@ -639,7 +671,7 @@ export function buildPrompt(
         lines.push(current.length ? current.map((i) => i.title).join('; ') : '(nothing)')
         lines.push('')
         lines.push(
-            'The complete current list, not only the new items. A line in the Notes of the schedule file about something that is not in this list any more (a merged or closed pull request, a closed ticket, a host that recovered) is stale: remove it in the same edit that adds your new notes, so the file does not grow.'
+            'The complete current list, not only the new items. A line in the Notes of the routine file about something that is not in this list any more (a merged or closed pull request, a closed ticket, a host that recovered) is stale: remove it in the same edit that adds your new notes, so the file does not grow.'
         )
     }
     return lines.join('\n')

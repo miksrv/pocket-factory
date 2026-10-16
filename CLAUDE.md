@@ -15,7 +15,8 @@ you close your laptop lid*. Four things it adds on top of the CLI, in this order
    sub-agent, per agent and project), rendered transcripts, tokens and subscription windows.
 3. **Management** — agents, skills and projects as Markdown files edited in the UI or by the agent;
    presets; live model and tool lists.
-4. **Pipelines** — skills chaining sub-agents into repeatable flows; schedules with prefilters.
+4. **Pipelines** — skills chaining sub-agents into repeatable flows; routines (an agent, its
+   instructions, triggers with prefilters).
 
 Concept, use cases and security model: `docs/SPEC.md` (§4.4 session lifecycle and §8 security are
 the load-bearing parts). History of what shipped: `CHANGELOG.md` and git log.
@@ -81,10 +82,10 @@ on :8080 against the container.
   - `telegram/webNotify.ts` — a `web` task's reply unread after `TELEGRAM_WEB_NOTIFY_MIN` (default
     2), or its question still open, goes to Telegram; the chat's topic switches to that thread and
     the task is escalated (its next questions and reply go at once). Timers live in memory
-  - `files/catalog.ts` agents / skills / projects / schedules as Markdown+frontmatter;
+  - `files/catalog.ts` agents / skills / projects / routines as Markdown+frontmatter;
     `files/hosts.ts` shared SSH hosts; `files/knownHosts.ts`; `files/inbox.ts` attachments;
     `files/providers.ts`; `sessions/transcripts.ts` indexes Claude Code JSONL; `presets/`
-  - `schedules/` — `spec.ts` (frontmatter), `cron.ts` (dependency-free five-field matcher with
+  - `routines/` — `spec.ts` (frontmatter, `triggers:`), `cron.ts` (dependency-free five-field matcher with
     zones, `nextRun`, `startOfDay`), `prefilters.ts` (`command`, `github-prs`, `trac`), `service.ts`
     (the scheduler, 20 s tick)
   - `toolchains/` — `detect.ts` (a checkout's needs: go.mod, `.nvmrc`, engines, composer,
@@ -109,7 +110,7 @@ on :8080 against the container.
     `useLeaveGuard`) goes through `await confirm({ title, action, danger, onConfirm })`, never
     `window.confirm`. A destructive question focuses Cancel, keeps the window open while
     `onConfirm` runs and shows its error inline; on a phone it is a bottom sheet.
-  - `components/Editor.tsx` shared list+form for agents / skills / projects / schedules (an
+  - `components/Editor.tsx` shared list+form for agents / skills / projects / routines (an
     `aside` slot shows live state above the form).
   - Lists are keyset-paged (`lib/usePaged.ts` + `LoadMore`) with a `(timestamp, id)` cursor sent
     as `before` + `before_id`; the audit log pages by event id and the server says `has_more`.
@@ -182,7 +183,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - **The orchestrator's model is a run-time setting**, not `.env`: `meta` `claude.model`
   (`claude/models.ts`, default `sonnet`), set by Telegram `/model <alias>` or Settings → Claude
   Code → Model; applies to the next task everywhere. Sub-agents keep their files' `model:`
-  (`inherit` follows the orchestrator). A schedule may pin `model:` (`tasks.model`). The limits
+  (`inherit` follows the orchestrator). A routine may pin `model:` (`tasks.model`). The limits
   probe stays on `haiku`.
 - The CLI's environment is `process.env` minus the supervisor's own secrets (`PRIVATE_ENV` in
   `tasks/service.ts`: bot token, allowed ids, web auth, Groq key; `agentEnv` also strips every
@@ -240,7 +241,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   Gemini, Groq) through `gateway/translate.ts`. Each has `token` (the name of the `.env` variable
   with its key; never a factory secret), `models`, `default`, `small`, `concurrency`, `light`,
   `mcp:` and an optional CA (`data/config/certs/<provider>.pem`, added to the CA store at once).
-- A task's provider comes from its schedule, the agent it runs as (`provider:` +
+- A task's provider comes from its routine, the agent it runs as (`provider:` +
   `provider_model:`; `model:` stays a CLI alias so the agent still works as a sub-agent), or the
   conversation (Chat selector, `/model provider:model`; a change forgets the session).
 - The CLI is pointed at `/gateway/<name>` with a per-provider bearer (`gatewayToken(name)`, HMAC of
@@ -248,7 +249,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   reach an agent. A provider's `mcp:` servers are offered only to its tasks, through the gateway;
   a subscription task never connects to the box.
 - **Light mode** (default): `--system-prompt` = the agent's body or `data/claude/light-system.md`,
-  six built-in tools, `--disable-slash-commands`, `--strict-mcp-config`; a schedule on such a
+  six built-in tools, `--disable-slash-commands`, `--strict-mcp-config`; a routine on such a
   provider embodies its `agent:` instead of delegating. Provider tasks have no window share;
   `pausedUntil`, auto-continue and soft-stop apply to subscription tasks only.
 - **Delegation** (1.4.0): an agent file with `provider:` is a role a subscription orchestrator
@@ -312,46 +313,58 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - The footer names the task's project and the windows with the task's share, not turns / tokens
   (those stay on the task page). The bot marks a conversation read only once delivery succeeded.
 
-### Schedules
+### Routines (Schedules until 1.4.2)
 
-- **Files, not rows**: `data/config/schedules/<name>.md`, because the body is both the instruction
-  for every run and the agent's memory between runs, which the agent edits itself. The store keeps
-  only `schedule_runs` (last 1000 per schedule) and `seen_items`.
-- A firing without a prefilter always starts a task; with one, only new items do (zero tokens on
-  an empty poll). A poller's first cron firing marks what exists as seen (`first_run: skip`; the
-  seeding mark lives in `meta`, so "Forget seen items" really hands everything over). An item
-  whose key changed (`id@changetime`, `pr@sha`) is handed over as "seen before, changed since".
-  Run now always hands over.
-- A schedule with `agent:` on the subscription runs **as** that agent (`claude --agent <name>`,
-  1.4.1; always since 1.4.2, owner's rule: the agent picked in the schedule is what runs, never an
-  orchestrator in between): its prompt, tools, `maxTurns:` and `model:` (a schedule's `model:` pins
-  it; none or `inherit` there leaves it to the agent file, whose `inherit` follows the
-  orchestrator). The schedule's `skill:` (one of `data/claude/skills`) is given in the prompt, so
-  the agent needs no Read. The frame is the same for every agent: one without `Edit` simply keeps no
+- A **routine** = who does it (`agent:`), what to do (the body: instructions and the agent's own
+  notes) and when (`triggers:`). **Files, not rows**: `data/config/routines/<name>.md`, because
+  the body is both the instruction for every run and the agent's memory between runs, which the
+  agent edits itself. The store keeps only `schedule_runs` (last 1000 per routine) and
+  `seen_items`; their table and column names, the conversation key `schedule:<name>` and the meta
+  keys predate the rename on purpose (history and threads stay). The task source is `routine`
+  (`cron` in rows before 1.5.0). On start `config/schedules/` is moved to `config/routines/` once
+  (`migrateSchedulesDir`); a name present in both stays put and is logged.
+- `triggers:` is a list of `- schedule: <cron>` (every firing starts a run) and `- poll: <cron>` +
+  `prefilter:` (only new items do; zero tokens on an empty poll), each with an optional `tz:` /
+  `window:` over the file's. Several triggers still mean one run at a time; an empty list is a
+  routine that runs only by **Run now** (always available, never a trigger). A file with the old
+  `cron:` (+ `prefilter:`) reads as one trigger; the form writes the new shape on the next save.
+  Run now and Preview use the first poll's prefilter. A poll's first firing marks what exists as
+  seen (`first_run: skip`; the seeding mark lives in `meta`, so "Forget seen items" really hands
+  everything over). An item whose key changed (`id@changetime`, `pr@sha`) is handed over as "seen
+  before, changed since". Run now always hands over.
+- A routine with `agent:` on the subscription runs **as** that agent (`claude --agent <name>`,
+  1.4.1; always since 1.4.2, owner's rule: the agent picked is what runs, never an orchestrator in
+  between): its prompt, tools, `maxTurns:` and `model:` (the routine's `model:` pins it; none or
+  `inherit` there leaves it to the agent file, whose `inherit` follows the orchestrator). The
+  routine's `skill:` (one of `data/claude/skills`) is given in the prompt, so the agent needs no
+  Read. The frame ("Routine run") is the same for every agent: one without `Edit` simply keeps no
   notes (owner: flexible, give it the tool if it should). The run's events count as the agent's in
   the Audit log (`COALESCE(e.agent, t.agent)`, which also puts a delegated role's work under the
   role). The factory's CLAUDE.md still loads under `--agent` (`omitClaudeMd` is for sub-agents
   only).
-- One run at a time per schedule; cron firings yield to the windows (`SCHEDULES_SOFT_STOP`,
-  default 85 %), manual ones do not. Missed minutes: within `SCHEDULES_LATE_MIN` (5) run late,
+- One run at a time per routine; timed firings yield to the windows (`ROUTINES_SOFT_STOP`,
+  default 85 %), manual ones do not. Missed minutes: within `ROUTINES_LATE_MIN` (5) run late,
   older ones are recorded as `missed` and told in Telegram, **never caught up** (owner's call).
-  `once: true` switches the file off after queueing. A `cron` task's question is answered for the
-  owner after `SCHEDULES_ASK_TIMEOUT_MIN` (120): permission → deny, question → "decide by the
-  instructions".
-- The form asks for one cron field (read back in words by `GET /api/schedules/cron`); the zone is
-  `TIMEZONE` in `.env` (empty = UTC), which is also where "today" starts for the stats. `tz:` /
-  `window:` in a file are honoured but not offered. The file routes refuse a save older than the
-  file (409 "changed on disk") since the agent edits schedules every run.
+  `once: true` switches the file off after queueing. A routine task's question is answered for the
+  owner after `ROUTINES_ASK_TIMEOUT_MIN` (120): permission → deny, question → "decide by the
+  instructions". The `SCHEDULES_*` names of an older `.env` are still read.
+- The form, top to bottom: Agent, Skill, Instructions (the body), Triggers (cards; one cron field
+  each, read back in words by `GET /api/routines/cron`), then the rest folded under "More"
+  (project, model / provider, mode, report to, session, once, hosts). The zone is `TIMEZONE` in
+  `.env` (empty = UTC), which is also where "today" starts for the stats. `tz:` / `window:` are
+  honoured but not offered. The file routes refuse a save older than the file (409 "changed on
+  disk") since the agent edits routines every run. `/api/routines/*` and `/routines` only: no
+  aliases or redirects for the old paths (single owner, no outside scripts).
 - Mail has no deterministic prefilter yet (Gmail lives in the session as a connector): a mail
-  schedule is a prompt-type one at a coarse cadence. Trac is polled over HTTP from the supervisor
-  (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every schedule with
+  routine is a schedule at a coarse cadence. Trac is polled over HTTP from the supervisor
+  (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every routine with
   `action: report` and graduate it.
 
 ### Hosts, GitHub, security
 
 - **Hosts are shared** (like an IDE's SSH configurations): `data/config/hosts.yaml` holds each
   connection (`name`, `ssh`, optional `key` = file name in `data/secrets/ssh`); a project or
-  schedule refers to `- host: <name>` and adds its own `path` and `notes` (those are the project's,
+  routine refers to `- host: <name>` and adds its own `path` and `notes` (those are the project's,
   never the host's). Host keys live in `data/config/known_hosts` (`data/secrets` is read-only) and
   are trusted from the UI after keyscan + fingerprint confirmation. Keys are never read by the
   API; passwords are not supported. Host work is read-only by rule. Branches are `feature/…` /
@@ -394,13 +407,14 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 
 ## Next
 
-0. **1.5.0: Schedules become Routines** (owner, 2026-10-16): `docs/plans/routines.md`.
-1. Schedules: an IMAP prefilter; whether the Trac prefilter needs `/login` is unverified.
+1. Routines: trigger `api` (a per-routine token, `POST /api/routines/<name>/fire`, see
+   `docs/plans/routines.md`); an IMAP prefilter; whether the Trac prefilter needs `/login` is
+   unverified.
 2. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
    `POST /api/tasks/fire`, "continue in chat" for a laptop session, Merge from the UI, files back
    to the chat, budgets per agent / project, audit export.
 3. Providers: tokens moved off the subscription on the Overview, the delegation line in Telegram,
    the 1.3.0 review follow-ups (`docs/plans/providers.md`).
-4. Toolchains: a weekly prune schedule, `data/docker` size in Health, toolchains in `/status`.
+4. Toolchains: a weekly prune routine, `data/docker` size in Health, toolchains in `/status`.
 5. Hardening: backups of `data/`, README for forkers, `useBlocker` for browser back, one shared
    status poll, CodeMirror.

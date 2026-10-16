@@ -4,7 +4,7 @@ import type { Hosts } from '../files/hosts.js'
 import type { KnownHosts } from '../files/knownHosts.js'
 import type { Providers } from '../files/providers.js'
 import type { Presets } from '../presets/index.js'
-import type { Schedules } from '../schedules/service.js'
+import type { Routines } from '../routines/service.js'
 import type { Transcripts } from '../sessions/transcripts.js'
 import type { Store } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
@@ -22,7 +22,7 @@ export interface AppContext {
     providers: Providers
     transcripts: Transcripts
     presets: Presets
-    schedules: Schedules
+    routines: Routines
     auth: WebAuth
     toolchains: Toolchains
 }

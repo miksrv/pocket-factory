@@ -8,9 +8,9 @@ import { type Attachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './files/
 import { modelRef, parseModelRef } from './files/providers.js'
 import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
-import type { Schedules } from './schedules/service.js'
-import type { ScheduleSpec } from './schedules/spec.js'
-import type { Ask, Conversation, RateLimitSnapshot, ScheduleRun, Store, Task, TaskEvent } from './store/index.js'
+import type { Routines } from './routines/service.js'
+import type { RoutineSpec } from './routines/spec.js'
+import type { Ask, Conversation, RateLimitSnapshot, RoutineRun, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import { askQuestions, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
 import { markdownToTelegramHtml } from './telegram/format.js'
@@ -120,16 +120,16 @@ function clockAt(iso: string, timeZone: string): string {
 }
 
 /**
- * What the owner hears about a schedule's run row, or null. Errors, missed
+ * What the owner hears about a routine's run row, or null. Errors, missed
  * minutes and a firing stuck behind the previous run are told once per
- * distinct note (`lastNotice` remembers it per schedule). A firing skipped
- * for the soft-stop is told every time, unless the schedule says
+ * distinct note (`lastNotice` remembers it per routine). A firing skipped
+ * for the soft-stop is told every time, unless the routine says
  * `notify: none`: it would have sent a report, so silence would read as a
  * dead factory.
  */
-export function scheduleNotice(
-    run: ScheduleRun,
-    spec: ScheduleSpec | null,
+export function routineNotice(
+    run: RoutineRun,
+    spec: RoutineSpec | null,
     lastNotice: Map<string, string>,
     timeZone: string
 ): string | null {
@@ -140,7 +140,7 @@ export function scheduleNotice(
         const resets = /resets (\S+)/.exec(note)?.[1]
         const until =
             resets && !Number.isNaN(Date.parse(resets)) ? `${clockAt(resets, timeZone)} (in ${resetsIn(resets)})` : null
-        return `⏸ Schedule **${run.schedule}** skipped this run: subscription ${reason}.${until ? ` Scheduled runs resume after the reset, ${until}.` : ''} /run ${run.schedule} runs it anyway.`
+        return `⏸ Routine **${run.schedule}** skipped this run: subscription ${reason}.${until ? ` Routine runs resume after the reset, ${until}.` : ''} /run ${run.schedule} runs it anyway.`
     }
     const stuck = run.status === 'skipped' && note.startsWith('the previous run is still')
     if (run.status !== 'error' && run.status !== 'missed' && !stuck) {
@@ -150,10 +150,10 @@ export function scheduleNotice(
     if (lastNotice.get(run.schedule) === note) return null
     lastNotice.set(run.schedule, note)
     return run.status === 'missed'
-        ? `⏭ Schedule **${run.schedule}** ${run.note ?? 'missed a firing'}. /run ${run.schedule} starts it now.`
+        ? `⏭ Routine **${run.schedule}** ${run.note ?? 'missed a firing'}. /run ${run.schedule} starts it now.`
         : stuck
-          ? `⏸ Schedule **${run.schedule}** skipped a firing: ${run.note}. It waits for your answer or for the task to end.`
-          : `⚠️ Schedule **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`
+          ? `⏸ Routine **${run.schedule}** skipped a firing: ${run.note}. It waits for your answer or for the task to end.`
+          : `⚠️ Routine **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`
 }
 
 /** Time passed since `iso`: `under a minute`, `5 min`, `3 h`, `2 d`. */
@@ -240,7 +240,7 @@ function permissionSummary(input: Record<string, unknown>): string {
  * A question of the agent as a Telegram message: the question, its options
  * with their descriptions, and one button per option; free text is the
  * "Other" choice — typed when the task is the chat's topic, as a reply to
- * the question otherwise (a scheduled run's question, say). A permission
+ * the question otherwise (a routine run's question, say). A permission
  * request gets Allow / Deny.
  */
 function askMessage(
@@ -336,19 +336,13 @@ interface ChatDefaults {
     model: string | null
 }
 
-export function createBot(
-    config: Config,
-    tasks: TaskService,
-    store: Store,
-    schedules?: Schedules,
-    auth?: WebAuth
-): Bot {
+export function createBot(config: Config, tasks: TaskService, store: Store, routines?: Routines, auth?: WebAuth): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
 
     // A chat talks to one conversation at a time — its topic: its own by
     // default, or the one the owner switched to by replying to a message of
-    // the bot (a schedule's report, a question). `/new` switches back.
+    // the bot (a routine's report, a question). `/new` switches back.
     const topicFor = (chatId: number): Conversation =>
         store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
     const conversationFor = (ctx: Context) => topicFor(ctx.chat!.id)
@@ -365,7 +359,7 @@ export function createBot(
     }
     const topicName = (conversation: Conversation) =>
         conversation.title || (conversation.channel === 'telegram' ? 'this chat' : 'web conversation')
-    // Where scheduled runs report and ask: the owner's private chat (a user's chat id is the user id).
+    // Where routine runs report and ask: the owner's private chat (a user's chat id is the user id).
     const ownerChat = [...config.telegram.allowedUserIds][0]
     /**
      * A web task the owner left (reply unopened, question unanswered, see
@@ -378,14 +372,14 @@ export function createBot(
         conversation: (id) => store.getConversation(id),
         notify: (kind, task) => (kind === 'reply' ? void deliverWeb(task) : askFromWeb(task))
     })
-    /** The chat a task talks to: its own for a Telegram task, the owner's for a scheduled one or a topic's, none otherwise. */
+    /** The chat a task talks to: its own for a Telegram task, the owner's for a routine run or a topic's, none otherwise. */
     const chatFor = (task: Task): number | null => {
-        if (task.source === 'cron')
-            return task.schedule && schedules?.spec(task.schedule)?.notify === 'none' ? null : (ownerChat ?? null)
+        if (task.source === 'routine' || task.source === 'cron')
+            return task.schedule && routines?.spec(task.schedule)?.notify === 'none' ? null : (ownerChat ?? null)
         const conversation = tasks.conversationOf(task)
         if (!conversation) return null
         if (conversation.channel === 'telegram') return Number(conversation.external_id) || null
-        // A Telegram message into another conversation (a schedule's thread): the chat that has it as its topic.
+        // A Telegram message into another conversation (a routine's thread): the chat that has it as its topic.
         if (task.source === 'telegram') return store.telegramChatsFor(conversation.id)[0] ?? ownerChat ?? null
         // A web task whose question already reached Telegram: its next questions follow there.
         if (task.source === 'web' && notifier.isEscalated(task.id)) return webChatFor(conversation)
@@ -474,32 +468,33 @@ export function createBot(
                 '/stop — cancel the running task (as a reply: the task of that chat)',
                 '/status — what is going on',
                 '/usage — subscription limits (5-hour and weekly windows)',
-                '/schedules — recurring tasks and their last runs',
-                '/run <name> — fire a schedule now'
+                '/routines — the routines and their last runs',
+                '/run <name> — fire a routine now'
             ].join('\n')
         )
     })
 
-    bot.command('schedules', async (ctx) => {
-        const list = schedules?.list() ?? []
-        if (!list.length) return void (await ctx.reply('No schedules yet — create one in the web UI (Schedules).'))
+    bot.command('routines', async (ctx) => {
+        const list = routines?.list() ?? []
+        if (!list.length) return void (await ctx.reply('No routines yet — create one in the web UI (Routines).'))
         const lines = list.map((s) => {
             const state = s.errors.length ? '⚠️ invalid' : s.enabled ? '🟢 on' : '⚪️ off'
             const last = s.last_run
                 ? `last ${s.last_run.status}${s.last_run.note ? ` (${s.last_run.note})` : ''} ${resetsAgo(s.last_run.fired_at)}`
                 : 'never ran'
             const next = s.next_run ? `next in ${resetsIn(s.next_run)}` : null
-            return `${state} ${s.name} — ${s.cron_text ?? s.cron ?? '?'}${s.project ? ` · ${s.project}` : ''}\n    ${[last, next].filter(Boolean).join(' · ')}`
+            const when = s.triggers.map((t) => (t.kind === 'poll' ? `poll ${t.cron_text}` : t.cron_text)).join(', ')
+            return `${state} ${s.name} — ${s.agent ? `${s.agent} · ` : ''}${when || 'by hand'}${s.project ? ` · ${s.project}` : ''}\n    ${[last, next].filter(Boolean).join(' · ')}`
         })
         await ctx.reply(lines.join('\n'))
     })
 
     bot.command('run', async (ctx) => {
         const name = ctx.match.trim()
-        if (!schedules) return void (await ctx.reply('Schedules are not available.'))
-        if (!name) return void (await ctx.reply('Usage: /run <schedule name>'))
-        if (!schedules.get(name)) return void (await ctx.reply(`No schedule named "${name}". /schedules lists them.`))
-        const run = await schedules.fire(name, 'manual')
+        if (!routines) return void (await ctx.reply('Routines are not available.'))
+        if (!name) return void (await ctx.reply('Usage: /run <routine name>'))
+        if (!routines.get(name)) return void (await ctx.reply(`No routine named "${name}". /routines lists them.`))
+        const run = await routines.fire(name, 'manual')
         const sent = await ctx.reply(
             run.status === 'queued'
                 ? `▶️ ${name}: task queued (${run.note}). The report comes here when it is done; reply to it to follow up.`
@@ -692,7 +687,7 @@ export function createBot(
     })
 
     // A reply to a message (the bot's or the owner's own) goes to that message's conversation
-    // (a schedule's thread, an older chat) and makes it the chat's topic. Otherwise the mode
+    // (a routine's thread, an older chat) and makes it the chat's topic. Otherwise the mode
     // decides (`routeMessage`): `fresh` starts a new chat, `thread` stays in the topic. While
     // the agent waits for an answer, the message is the answer (see TaskService.submit).
     const submit = async (ctx: Context, prompt: string, attachments: Attachment[] = []) => {
@@ -978,7 +973,7 @@ export function createBot(
     tasks.on('task', (task) => {
         if (task.status !== 'queued' || !task.not_before || toldWaits.get(task.id) === task.limit_waits) return
         toldWaits.set(task.id, task.limit_waits)
-        if (task.source !== 'telegram' && task.source !== 'cron') return
+        if (task.source !== 'telegram' && task.source !== 'routine' && task.source !== 'cron') return
         const chatId = chatFor(task)
         if (!chatId) return
         const clock = clockAt(task.not_before, config.timezone)
@@ -993,10 +988,10 @@ export function createBot(
     })
 
     // Deliver results of Telegram-originated tasks back to their chat, and of
-    // scheduled runs to the owner (unless the schedule says notify: none).
+    // routine runs to the owner (unless the routine says notify: none).
     tasks.on('task', (task) => {
         if (
-            (task.source !== 'telegram' && task.source !== 'cron') ||
+            (task.source !== 'telegram' && task.source !== 'routine' && task.source !== 'cron') ||
             task.status === 'queued' ||
             task.status === 'running'
         )
@@ -1046,16 +1041,16 @@ export function createBot(
     // minute the factory slept through, a firing skipped because the previous
     // run still waits, and a firing skipped for the soft-stop are told too.
     const lastNotice = new Map<string, string>()
-    schedules?.on('run', (run, spec) => {
+    routines?.on('run', (run, spec) => {
         if (!ownerChat) return
-        const text = scheduleNotice(run, spec, lastNotice, config.timezone)
+        const text = routineNotice(run, spec, lastNotice, config.timezone)
         if (!text) return
         void sendMarkdown(bot, ownerChat, text)
             .then((ids) => {
                 const conversation = store.findConversation('web', `schedule:${run.schedule}`)
                 if (conversation) remember(ownerChat, ids, conversation.id, run.task_id)
             })
-            .catch((error) => log.error('schedule notice failed', error))
+            .catch((error) => log.error('routine notice failed', error))
     })
 
     // The web UI's door: the owner hears about every sign-in, the first wrong

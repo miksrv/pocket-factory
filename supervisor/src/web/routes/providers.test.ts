@@ -60,10 +60,10 @@ describe('providers', () => {
         }
     })
 
-    it('refuses to delete a provider a schedule names, unless forced', async () => {
+    it('refuses to delete a provider a routine names, unless forced', async () => {
         await put('look', { url: 'http://x', models: ['m'] })
         const file = await t.request(
-            '/api/schedules/nightly',
+            '/api/routines/nightly',
             json({ frontmatter: { cron: '0 3 * * *', provider: 'look' }, body: 'Write.' }, { method: 'PUT' })
         )
         expect(file.status).toBe(201)
@@ -73,8 +73,8 @@ describe('providers', () => {
         expect(refused.status).toBe(409)
         expect((await t.request('/api/providers/look?force=1', { method: 'DELETE' })).status).toBe(204)
         expect((await t.request('/api/providers/look', { method: 'DELETE' })).status).toBe(404)
-        // The schedule now points at a provider that is gone: invalid until fixed.
-        const view = (await (await t.request('/api/schedules/nightly/status')).json()) as { errors: string[] }
+        // The routine now points at a provider that is gone: invalid until fixed.
+        const view = (await (await t.request('/api/routines/nightly/status')).json()) as { errors: string[] }
         expect(view.errors.join(' ')).toMatch(/provider "look"/)
     })
 

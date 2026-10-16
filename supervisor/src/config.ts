@@ -56,14 +56,19 @@ export interface Config {
     logLevel: 'debug' | 'info' | 'warn' | 'error'
     /** The owner's zone (`TIMEZONE`, UTC without it): cron expressions are read in it, and "today" starts at its midnight. */
     timezone: string
-    schedules: {
+    routines: {
         /** Cron firings are skipped while the 5-hour or weekly window is at or above this share (0..1); 0 = never. */
         softStop: number
         /** A firing the factory slept through still runs when it is at most this many minutes late; older ones are recorded as missed. */
         lateMinutes: number
-        /** A scheduled run's question or permission request unanswered for this long is answered for the owner (deny / "no answer"); 0 = wait forever. */
+        /** A routine run's question or permission request unanswered for this long is answered for the owner (deny / "no answer"); 0 = wait forever. */
         askTimeoutMs: number
     }
+}
+
+/** The first of the names that is set in the environment (a renamed variable keeps its old name working), else the first. */
+function either(name: string, ...older: string[]): string {
+    return [name, ...older].find((n) => optional(n) !== undefined) ?? name
 }
 
 function optional(name: string): string | undefined {
@@ -152,10 +157,12 @@ export function loadConfig(): Config {
         maxConcurrentSessions: Math.max(1, Math.floor(number('MAX_CONCURRENT_SESSIONS', 2))),
         logLevel: logLevel(optional('LOG_LEVEL')),
         timezone: timeZone(optional('TIMEZONE') ?? 'UTC'),
-        schedules: {
-            softStop: share('SCHEDULES_SOFT_STOP', 0.85),
-            lateMinutes: Math.max(0, Math.floor(number('SCHEDULES_LATE_MIN', 5))),
-            askTimeoutMs: Math.max(0, number('SCHEDULES_ASK_TIMEOUT_MIN', 120)) * 60_000
+        // ROUTINES_* since 1.5.0; the SCHEDULES_* names of a .env written before still count.
+        routines: {
+            softStop: share(either('ROUTINES_SOFT_STOP', 'SCHEDULES_SOFT_STOP'), 0.85),
+            lateMinutes: Math.max(0, Math.floor(number(either('ROUTINES_LATE_MIN', 'SCHEDULES_LATE_MIN'), 5))),
+            askTimeoutMs:
+                Math.max(0, number(either('ROUTINES_ASK_TIMEOUT_MIN', 'SCHEDULES_ASK_TIMEOUT_MIN'), 120)) * 60_000
         }
     }
 }

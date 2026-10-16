@@ -13,7 +13,7 @@ import { Hosts } from '../files/hosts.js'
 import { KnownHosts } from '../files/knownHosts.js'
 import { Providers } from '../files/providers.js'
 import { Presets } from '../presets/index.js'
-import { Schedules } from '../schedules/service.js'
+import { Routines } from '../routines/service.js'
 import { Transcripts } from '../sessions/transcripts.js'
 import { openDatabase } from '../store/db.js'
 import { Store } from '../store/index.js'
@@ -95,13 +95,13 @@ export function testConfig(dataRoot: string): Config {
         maxConcurrentSessions: 2,
         logLevel: 'error',
         timezone: 'UTC',
-        schedules: { softStop: 0.85, lateMinutes: 5, askTimeoutMs: 120 * 60_000 }
+        routines: { softStop: 0.85, lateMinutes: 5, askTimeoutMs: 120 * 60_000 }
     }
 }
 
 /**
  * The whole HTTP application on a fresh temporary DATA_ROOT, wired the way
- * index.ts wires it (real Store, Catalog, Hosts, TaskService, Schedules,
+ * index.ts wires it (real Store, Catalog, Hosts, TaskService, Routines,
  * WebAuth…), minus the network listener and Telegram. A fake `claude` is put
  * first on PATH, so nothing a test triggers can start the real CLI. The
  * scheduler and the auth sweeper are not started; `cleanup` stops them anyway.
@@ -148,7 +148,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     const tasks = new TaskService(store, config, workspace, providers)
     // The gateway's address for tasks on other providers; tests never listen, so any port.
     tasks.setGatewayPort(8080)
-    const schedules = new Schedules(store, catalog, tasks, config, {
+    const routines = new Routines(store, catalog, tasks, config, {
         projectExists: (slug) => projectPath(slug) !== null,
         projectPath,
         projectRepo: () => null,
@@ -178,7 +178,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         providers,
         transcripts,
         presets: new Presets(config.presetsDir),
-        schedules,
+        routines,
         auth,
         toolchains
     }
@@ -193,7 +193,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     }
 
     const cleanup = async () => {
-        schedules.stop()
+        routines.stop()
         auth.stop()
         await tasks.shutdown()
         db.close()

@@ -10,7 +10,7 @@ import { ChatPage } from './pages/Chat'
 import { OverviewPage } from './pages/Overview'
 import { PresetsPage } from './pages/Presets'
 import { ProjectsPage } from './pages/Projects'
-import { SchedulesPage } from './pages/Schedules'
+import { RoutinesPage } from './pages/Routines'
 import { SessionPage, SessionsPage } from './pages/Sessions'
 import { SettingsPage } from './pages/Settings'
 import { SkillsPage } from './pages/Skills'
@@ -85,12 +85,12 @@ export function App() {
                             element={<ProjectsPage />}
                         />
                         <Route
-                            path='schedules'
-                            element={<SchedulesPage />}
+                            path='routines'
+                            element={<RoutinesPage />}
                         />
                         <Route
-                            path='schedules/:name'
-                            element={<SchedulesPage />}
+                            path='routines/:name'
+                            element={<RoutinesPage />}
                         />
                         <Route
                             path='presets'
