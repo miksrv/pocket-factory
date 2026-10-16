@@ -420,7 +420,6 @@ function AgentEditor() {
                 return (
                     <>
                         <Field
-                            label='Model'
                             hint={
                                 provider
                                     ? 'A role on another model: a Claude orchestrator hands it work with the delegate tool (never as its own sub-agent), and a routine naming it runs on this provider. In light mode the body below is its whole system prompt.'

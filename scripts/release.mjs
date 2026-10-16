@@ -23,12 +23,13 @@ const sh = (cmd, args, opts = {}) =>
     execFileSync(cmd, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim()
 const currentVersion = () => JSON.parse(fs.readFileSync(PACKAGES[0], 'utf8')).version
 
-/** The `## [x.y.z] - date` section of CHANGELOG.md, heading excluded, or null. */
+/** The `## x.y.z` section of CHANGELOG.md, heading excluded, or null. */
+const HEADING = /^## \d/
 function notesOf(version) {
     const lines = fs.readFileSync(CHANGELOG, 'utf8').split('\n')
-    const start = lines.findIndex((line) => line.startsWith(`## [${version}]`))
+    const start = lines.findIndex((line) => line.trim() === `## ${version}`)
     if (start < 0) return null
-    const end = lines.findIndex((line, i) => i > start && line.startsWith('## ['))
+    const end = lines.findIndex((line, i) => i > start && HEADING.test(line))
     return lines
         .slice(start + 1, end < 0 ? undefined : end)
         .join('\n')
@@ -52,11 +53,12 @@ function bump(version) {
     }
     let changelog = fs.readFileSync(CHANGELOG, 'utf8')
     if (notesOf(version) === null) {
-        const now = new Date() // the local date, not UTC: the owner's evening is still today
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-        const at = changelog.search(/^## \[/m)
-        if (at < 0) fail('CHANGELOG.md has no "## [" section to insert before')
-        changelog = `${changelog.slice(0, at)}## [${version}] - ${today}\n\n### Changed\n\n- \n\n${changelog.slice(at)}`
+        // The section's kind follows the part of the version that moved (changesets style): one list per version.
+        const [major, minor] = [version, was].map((v) => v.split('.').map(Number))
+        const kind = major[0] !== minor[0] ? 'Major' : major[1] !== minor[1] ? 'Minor' : 'Patch'
+        const at = changelog.search(/^## \d/m)
+        if (at < 0) fail('CHANGELOG.md has no "## x.y.z" section to insert before')
+        changelog = `${changelog.slice(0, at)}## ${version}\n\n### ${kind} Changes\n\n- \n\n${changelog.slice(at)}`
         fs.writeFileSync(CHANGELOG, changelog)
         console.log(`CHANGELOG.md: opened a section for ${version} (fill in the bullets)`)
     }

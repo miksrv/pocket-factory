@@ -29,9 +29,9 @@ Owner: Misha Topchilo. Single-owner tool; a fork uses the forker's own subscript
 yarn install                 # Yarn 4 workspaces (corepack)
 yarn typecheck               # tsc --noEmit for all workspaces
 yarn build                   # supervisor → supervisor/dist, web → web/dist
-yarn dev                     # supervisor + API on :8080 on the host (reads .env itself, CLAUDE_CONFIG_DIR=data/claude)
+yarn dev                     # supervisor + API on WEB_PORT (:8080 by default) on the host (reads .env itself, CLAUDE_CONFIG_DIR=data/claude)
 TELEGRAM_BOT_TOKEN= yarn dev # web-only: use this while the container runs, or Telegram answers 409 to both pollers
-yarn dev:web                 # Vite dev server on :5173 proxying /api → :8080
+yarn dev:web                 # Vite dev server on :5173 proxying /api → WEB_PORT from .env
 docker compose up -d --build # build image + (re)start the supervisor container
 docker compose logs -f supervisor
 docker compose run --rm supervisor claude -p "Reply with exactly: OK" --model haiku --max-turns 1   # auth smoke test
@@ -63,7 +63,7 @@ SSE stream keeps the load event from ever firing. Chrome's window is never narro
 that is the "phone" width.
 
 After code changes, rebuild the container yourself (`docker compose up -d --build`): the owner tests
-on :8080 against the container.
+against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8080 is taken there).
 
 ## Layout
 
@@ -146,9 +146,11 @@ on :8080 against the container.
 `MAJOR.MINOR.PATCH`: the major almost never moves, a minor adds something the owner can see or
 use, a patch fixes or polishes. The version lives in the root `package.json` (the workspaces are
 kept in step), is read by `supervisor/src/version.ts`, shown in the sidebar foot, in Telegram
-`/status`, in `/api/status` `version` and in the start-up log. `CHANGELOG.md` (Keep a Changelog,
-newest first, `## [x.y.z] - date` with `### Added` / `Changed` / `Fixed`) is written **with** the
-change, before the commit.
+`/status`, in `/api/status` `version` and in the start-up log. `CHANGELOG.md` is written **with**
+the change, before the commit: newest first, `## x.y.z` with one `### Major | Minor | Patch
+Changes` list (the part of the version that moved), **one line per change**, very short, in the
+shape `Area: what changed for the owner` (`Routines: …`, `Telegram: …`, `Fixed: …`); no dates (the
+tags carry them), no paragraphs, no implementation detail.
 
 When the owner says "let's make a new version" (or the work is ready to commit): pick the next
 version, `node scripts/release.mjs bump <x.y.z>`, fill the new section, and the commit carries both.

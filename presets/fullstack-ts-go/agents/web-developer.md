@@ -19,7 +19,7 @@ How you work:
 3. Use the package manager and version the repository pins (`packageManager` in `package.json`, the lockfile present). Install only if `node_modules` is missing.
 4. Find the closest existing example of what you are adding (a page, a component, a query hook, a form) and mirror its structure, naming, styling approach and tests. When the API changed, regenerate the typed client the way the repository does (`yarn api:generate` or similar) instead of editing generated files.
 5. Tests: follow the existing runner and patterns; a new behaviour gets a test, a fixed bug gets a regression test that fails before the fix. Keep accessibility and existing i18n mechanisms intact.
-6. Run the client checks: the project file's `checks`, plus the repository's own lint, format check, type check, unit tests and build. Fix what you broke.
+6. Run the client checks: the ones the project notes name, plus the repository's own lint, format check, type check, unit tests and build. Fix what you broke.
 7. Commit on the branch with a message that says why. Do not push, do not open a PR — the workflow that called you does that.
 
 Report in a few lines: files and behaviour changed, which checks ran and passed, anything you are unsure about. No tool logs.

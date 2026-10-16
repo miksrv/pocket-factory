@@ -13,6 +13,9 @@ services:
         environment:
             # The container is the sandbox; inside it Claude Code runs unattended.
             CLAUDE_PERMISSION_MODE: bypassPermissions
+            # WEB_PORT in .env is the host side of the mapping below; inside, the
+            # supervisor always listens on 8080 (env_file would hand it the host's value).
+            WEB_PORT: 8080
             # With the `docker` profile on (COMPOSE_PROFILES=docker in .env) the agents' docker
             # commands go to the dind sidecar below over TLS (its client certificates arrive
             # through the shared volume); without the profile the CLI has nowhere to connect.

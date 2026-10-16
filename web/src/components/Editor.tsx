@@ -497,6 +497,9 @@ function Form({
  * A labelled control. `group` for a set of controls (a list of checkboxes):
  * a <label> around several inputs would forward every click on the caption,
  * the hint or the gaps to its first input, so a group is a <div>.
+ * No `label` when the control says what it is itself (a provider + model
+ * pair); only for a `wide` field, since the grid lines up label, control and
+ * hint across a row and would shift a caption-less one.
  */
 export function Field({
     label,
@@ -505,7 +508,7 @@ export function Field({
     group,
     children
 }: {
-    label: string
+    label?: string
     hint?: ReactNode
     wide?: boolean
     group?: boolean
@@ -514,7 +517,7 @@ export function Field({
     const className = `field${wide ? ' wide' : ''}${group ? ' group' : ''}`
     const body = (
         <>
-            <span>{label}</span>
+            {label && <span>{label}</span>}
             {children}
             {hint && <span className='dim'>{hint}</span>}
         </>

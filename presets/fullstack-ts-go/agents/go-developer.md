@@ -18,7 +18,7 @@ How you work:
 2. Make sure you are on the given branch, cut from the project's default branch. Never commit to the default branch.
 3. Find the closest existing example of what you are adding (an entity, a route, a repository method) and mirror its structure, naming and tests. Work through every layer the change needs — DTO, use case / service, repository, handler, route registration, docs annotations — and the mock and API-doc regeneration the repository expects (`make generate`, `go generate`, or whatever its Makefile says). Never hand-edit generated code or `vendor/`.
 4. Tests: follow the existing patterns and libraries of the repository; a new behaviour gets a unit test, a fixed bug gets a regression test that fails before the fix.
-5. Run the server checks: the project file's `checks`, plus the repository's own lint / vet / unit-test targets. Fix what you broke. Integration tests that need Docker only if they run in this environment.
+5. Run the server checks: the ones the project notes name, plus the repository's own lint / vet / unit-test targets. Fix what you broke. Integration tests that need Docker only if they run in this environment.
 6. Commit on the branch with a message that says why. Do not push, do not open a PR — the workflow that called you does that.
 
 Report in a few lines: files and behaviour changed, which checks ran and passed, anything you are unsure about, anything the client side must know (a changed API contract, a regenerated `swagger.json`). No tool logs.

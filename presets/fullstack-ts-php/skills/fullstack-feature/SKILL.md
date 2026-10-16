@@ -9,7 +9,7 @@ Use this when the project file names it in `skill:` and the task is a change to 
 
 ## Steps
 
-1. **Project.** Read `/data/config/projects/<project>.md`: `path`, `default_branch`, `pr_base`, `checks`, notes. `cd` into `path`. Read the repository's `CLAUDE.md` for its layout and commands.
+1. **Project.** Read `/data/config/projects/<project>.md`: `path`, `default_branch`, `pr_base`, and the notes (the checks to run, the tracker). `cd` into `path`. Read the repository's `CLAUDE.md` for its layout and commands.
 2. **Sync.** `git fetch origin`; make sure `default_branch` is up to date locally. Never work on `default_branch` itself.
 3. **Branch.** `feature/<short-kebab-summary>` for a feature, `fix/<short-kebab-summary>` for a defect, with the ticket id when the task has one (e.g. `feature/DEV-1234-seo-slugs`); the repository's `CLAUDE.md` or the project notes may name another convention, and a `branch_prefix` in the project file, if present, overrides both. If the branch already exists, continue on it.
 4. **Plan.** In two to five lines: what changes, in which areas — `server`, `client` or both — and the order. If the task is ambiguous in a way that changes the outcome, stop and ask the owner all questions in one message.
@@ -22,7 +22,7 @@ Use this when the project file names it in `skill:` and the task is a change to 
    Each developer commits on the branch.
 7. **Review.** Spawn `reviewer` with the project file, the task, the branch and the paths of the convention files for the areas touched: `/data/claude/skills/go-conventions/SKILL.md` or `/data/claude/skills/php-conventions/SKILL.md` for the server (whichever matches the stack from step 5), `/data/claude/skills/typescript-conventions/SKILL.md` for the client. It answers `APPROVE` or `REQUEST CHANGES` with findings.
 8. **Fix loop.** On `REQUEST CHANGES`, route each finding to the developer of its area (the same agents as in step 5), then review again. At most three rounds in total; after that report the open findings to the owner instead of looping.
-9. **Checks.** Run every command in `checks` yourself on the final state, from the repository root. Failing checks mean the task is not done. `checks` lists only what this environment can run; when the project notes say some checks run in CI only, say so in the PR and in the report instead of claiming them.
+9. **Checks.** Run the project's checks yourself on the final state, from the repository root: the commands the project notes name, or, when they name none, the repository's own. Failing checks mean the task is not done. Run only what this environment can run; when the project notes say some checks run in CI only, say so in the PR and in the report instead of claiming them.
 10. **Push & PR.** `git push -u origin <branch>`, then `gh pr create --base <pr_base or default_branch> --title … --body …` with this body:
 
    ```
@@ -42,7 +42,7 @@ Use this when the project file names it in `skill:` and the task is a change to 
 
    Never merge.
 11. **CI.** When the project notes say some checks run in CI only, wait for them: poll `gh pr checks <number>` every one to two minutes (each call short, never one long `--watch`) until every check has a result. Green: note it in the report. Red: `gh run view <run-id> --log-failed`, hand the failing step's log to the developer of that area, let it fix and push, then poll again. At most two CI rounds; after that report the failing run's link to the owner instead of looping.
-12. **Tracker.** If the project file names a tracker and the task has a ticket id, comment with the PR link and update the ticket (status, tag, assignee) the way the project notes say; with no such rule, comment only.
+12. **Tracker.** If the project notes name a tracker and the task has a ticket id, comment with the PR link and update the ticket (status, tag, assignee) the way the project notes say; with no such rule, comment only.
 13. **Report** to the owner: PR link, CI result, three-line summary, open questions.
 
 ## Rules

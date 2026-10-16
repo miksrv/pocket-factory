@@ -161,10 +161,10 @@ export function RoutinesPage() {
                 />
             )}
             form={(fm, set) => (
-                <>
+                <div className='field wide pair'>
                     <Field
                         label='Agent'
-                        hint='Who does the work: the run is this agent, with its prompt, tools and model. Empty = the orchestrator reads the instructions and decides.'
+                        hint='Who does the run; empty = the orchestrator decides.'
                     >
                         <select
                             value={str(fm.agent)}
@@ -183,7 +183,7 @@ export function RoutinesPage() {
                     </Field>
                     <Field
                         label='Skill'
-                        hint='The procedure to follow, given to the agent in the prompt; empty = the instructions below are all.'
+                        hint='A procedure given in the prompt; empty = the instructions only.'
                     >
                         <select
                             value={str(fm.skill)}
@@ -200,7 +200,7 @@ export function RoutinesPage() {
                             ))}
                         </select>
                     </Field>
-                </>
+                </div>
             )}
             below={(fm, set, entry) => {
                 const triggers = triggersOf(fm)
@@ -220,33 +220,32 @@ export function RoutinesPage() {
                     <>
                         <div className='field wide triggers'>
                             <div className='field-head'>
-                                <span>
-                                    Triggers — when the routine runs by itself
-                                    <span className='dim'>
-                                        {' '}
-                                        · Run now (and /run in Telegram) is always there; several triggers still mean
-                                        one run at a time
-                                    </span>
-                                </span>
-                                <span className='row'>
-                                    <Button
-                                        size='sm'
-                                        onClick={() => setTriggers([...triggers, { schedule: '0 8 * * mon-fri' }])}
-                                    >
-                                        ＋ On a schedule
-                                    </Button>
-                                    <Button
-                                        size='sm'
-                                        onClick={() =>
-                                            setTriggers([
-                                                ...triggers,
-                                                { poll: '*/15 * * * *', prefilter: { kind: 'command' } }
-                                            ])
-                                        }
-                                    >
-                                        ＋ When something new appears
-                                    </Button>
-                                </span>
+                                <div>
+                                    <div>Triggers — when the routine runs by itself</div>
+                                    <div className='dim'>
+                                        Run now (and /run in Telegram) is always there; several triggers still mean one
+                                        run at a time.
+                                    </div>
+                                </div>
+                            </div>
+                            <div className='row wrap'>
+                                <Button
+                                    size='sm'
+                                    onClick={() => setTriggers([...triggers, { schedule: '0 8 * * mon-fri' }])}
+                                >
+                                    ＋ On a schedule
+                                </Button>
+                                <Button
+                                    size='sm'
+                                    onClick={() =>
+                                        setTriggers([
+                                            ...triggers,
+                                            { poll: '*/15 * * * *', prefilter: { kind: 'command' } }
+                                        ])
+                                    }
+                                >
+                                    ＋ When something new appears
+                                </Button>
                             </div>
                             {triggers.length === 0 && (
                                 <div className='dim small'>
@@ -264,10 +263,10 @@ export function RoutinesPage() {
                             ))}
                         </div>
                         {polls && (
-                            <>
+                            <div className='field wide pair'>
                                 <Field
                                     label='First poll'
-                                    hint='What the very first poll does with everything the prefilter already finds: mark it seen (start from now) or hand it all to the agent. Run now always hands over.'
+                                    hint='What the first poll does with what the prefilter already finds; Run now always hands over.'
                                 >
                                     <select
                                         value={
@@ -296,7 +295,7 @@ export function RoutinesPage() {
                                         onChange={(e) => set({ max_items: Number(e.target.value) || undefined })}
                                     />
                                 </Field>
-                            </>
+                            </div>
                         )}
                         <details
                             className='field wide more'
@@ -326,6 +325,7 @@ export function RoutinesPage() {
                                 <Field
                                     label='Project'
                                     hint='The run works in its checkout with its rules; empty = the workspaces root.'
+                                    wide
                                 >
                                     <select
                                         value={str(fm.project)}
@@ -343,7 +343,6 @@ export function RoutinesPage() {
                                     </select>
                                 </Field>
                                 <Field
-                                    label='Model'
                                     hint={
                                         str(fm.provider)
                                             ? 'The runs go to this provider, off the subscription; in light mode the agent above is the run itself (its file is the system prompt), with no sub-agents.'
@@ -403,6 +402,7 @@ export function RoutinesPage() {
                                     label='Run once'
                                     hint='Switches itself off after queueing one task: a check to do tomorrow, not every day.'
                                     group
+                                    wide
                                 >
                                     <div className='row wrap'>
                                         <label
@@ -423,6 +423,7 @@ export function RoutinesPage() {
                                         label='After saving'
                                         hint='A new routine is saved switched off unless ticked; the status bar above the form switches it later.'
                                         group
+                                        wide
                                     >
                                         <div className='row wrap'>
                                             <label
@@ -489,7 +490,10 @@ function TriggerCard({
     }
     return (
         <div className='trigger-card'>
-            <Field label='Trigger'>
+            <Field
+                label='Trigger'
+                wide
+            >
                 <select
                     value={poll ? 'poll' : 'schedule'}
                     onChange={(e) => switchKind(e.target.value === 'poll')}
@@ -642,6 +646,7 @@ function TriggerCard({
                                 label='Changes count'
                                 hint='On: a ticket comes up again when it changes (a reply, a status), so a deferred one resurfaces when there is news. Off: only new ids.'
                                 group
+                                wide
                             >
                                 <div className='row wrap'>
                                     <label
@@ -846,6 +851,8 @@ function Status({
     const last = view.last_run
     const lastTask = view.last_task
     const model = view.provider ? `${view.provider}${view.model ? `:${view.model}` : ''}` : view.model
+    // The last firing that queued a task is often the last firing itself: then one badge, not the same run twice.
+    const taskLine = lastTask && lastTask.id !== last?.id
     return (
         <div
             className='card pad0 routine-status'
@@ -870,7 +877,12 @@ function Status({
                         )}
                     </span>
                     <span className='small dim'>
-                        {[view.agent ? `as ${view.agent}` : 'the orchestrator', model, view.once ? 'once' : null]
+                        {[
+                            view.agent ? `as ${view.agent}` : 'the orchestrator',
+                            model,
+                            view.once ? 'once' : null,
+                            view.prefilter ? `${view.seen} item(s) seen` : null
+                        ]
                             .filter(Boolean)
                             .join(' · ')}
                     </span>
@@ -899,8 +911,7 @@ function Status({
                     >
                         {last ? (
                             <>
-                                <span className={`badge ${runTone(last.status)}`}>{last.status}</span>{' '}
-                                {fmt.ago(last.fired_at)}
+                                <RunBadge run={last} /> {fmt.ago(last.fired_at)}
                             </>
                         ) : (
                             'never'
@@ -920,51 +931,34 @@ function Status({
                             {last.note}
                         </span>
                     )}
-                </div>
-                <div className='stat'>
-                    <span className='label dim'>Last task</span>
-                    <span
-                        className='value small'
-                        style={{ fontSize: 13 }}
-                    >
-                        {lastTask ? (
-                            <>
-                                <RunBadge run={lastTask} /> {fmt.ago(lastTask.fired_at)}
-                            </>
-                        ) : (
-                            'none yet'
-                        )}
-                    </span>
-                    <span
-                        className='row'
-                        style={{ gap: 10 }}
-                    >
-                        {lastTask?.task_id && (
-                            <Link
-                                className='small'
-                                to={`/tasks/${lastTask.task_id}`}
-                            >
-                                open task
-                            </Link>
-                        )}
-                        {view.conversation_id && (
-                            <Link
-                                className='small'
-                                to={`/chat/${view.conversation_id}`}
-                            >
-                                open thread
-                            </Link>
-                        )}
-                    </span>
-                </div>
-                <div className='stat'>
-                    <span className='label dim'>Seen items</span>
-                    <span
-                        className='value small'
-                        style={{ fontSize: 13 }}
-                    >
-                        {view.prefilter ? view.seen : 'no poll'}
-                    </span>
+                    {taskLine && (
+                        <span className='small dim'>
+                            last task <RunBadge run={lastTask} /> {fmt.ago(lastTask.fired_at)}
+                        </span>
+                    )}
+                    {(lastTask?.task_id || view.conversation_id) && (
+                        <span
+                            className='row'
+                            style={{ gap: 10 }}
+                        >
+                            {lastTask?.task_id && (
+                                <Link
+                                    className='small'
+                                    to={`/tasks/${lastTask.task_id}`}
+                                >
+                                    open task
+                                </Link>
+                            )}
+                            {view.conversation_id && (
+                                <Link
+                                    className='small'
+                                    to={`/chat/${view.conversation_id}`}
+                                >
+                                    open thread
+                                </Link>
+                            )}
+                        </span>
+                    )}
                 </div>
             </div>
             {(view.errors.length > 0 || view.warnings.length > 0) && (

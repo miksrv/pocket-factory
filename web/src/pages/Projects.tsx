@@ -1,5 +1,3 @@
-import { useState } from 'react'
-
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
 import { ProjectToolchainField } from '../components/Toolchains'
@@ -7,34 +5,13 @@ import { Button } from '../components/ui'
 import { api, type CatalogEntry, type McpEntry, type ProjectHost } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
+// The notes are the agent's briefing: what the supervisor never reads (the checks to run, the tracker) is prose here, not a field.
 const TEMPLATE = `Notes for the agent: conventions, gotchas, what never to touch, how deploys work.
+
+Checks before a PR, from the repository root (all must pass): \`yarn lint\`, \`yarn test\`.
+
+Tracker: where the tickets live, and what to do with a ticket once its PR is open (a comment with the link; a status, tag or assignee to set).
 `
-
-const TRACKERS = ['none', 'github', 'clickup', 'trac', 'jira']
-
-/**
- * A list edited as lines. The text is kept as typed (a trailing newline or
- * space would otherwise vanish under the cursor) and parsed on the way out.
- */
-function LinesInput({ value, onChange }: { value: string[]; onChange: (lines: string[]) => void }) {
-    const [text, setText] = useState(value.join('\n'))
-    return (
-        <textarea
-            className='mono'
-            rows={4}
-            value={text}
-            onChange={(e) => {
-                setText(e.target.value)
-                onChange(
-                    e.target.value
-                        .split('\n')
-                        .map((s) => s.trim())
-                        .filter(Boolean)
-                )
-            }}
-        />
-    )
-}
 
 export function ProjectsPage() {
     const status = useAsync(() => api.status(), [])
@@ -56,9 +33,7 @@ export function ProjectsPage() {
                 default_branch: 'main',
                 pr_base: 'main',
                 skill: 'feature-to-pr',
-                tracker: { type: 'none' },
-                hosts: [],
-                checks: []
+                hosts: []
             }}
             template={TEMPLATE}
             bodyLabel='Notes for the agent (Markdown)'
@@ -66,12 +41,9 @@ export function ProjectsPage() {
             intro='A project file tells the agent where a repository lives, how to branch, what to run and which hosts it touches. Pick one from the list to edit it, or describe a new one.'
             newLabel='New project'
             form={(fm, set) => {
-                const tracker = (fm.tracker as Record<string, unknown> | undefined) ?? {}
-                const trackerType = str(tracker.type) || 'none'
                 const hosts = (Array.isArray(fm.hosts) ? fm.hosts : []).filter(
                     (h): h is ProjectHost => Boolean(h) && typeof h === 'object'
                 )
-                const checks = Array.isArray(fm.checks) ? (fm.checks as string[]) : []
                 return (
                     <>
                         <Field label='Display name'>
@@ -144,45 +116,6 @@ export function ProjectsPage() {
                                 onChange={(e) => set({ pr_base: e.target.value })}
                             />
                         </Field>
-                        <Field
-                            label='Tracker'
-                            hint='Where tickets live. A task that names a ticket gets the PR link as a comment; status rules go in the notes.'
-                        >
-                            <select
-                                value={trackerType}
-                                onChange={(e) =>
-                                    set({
-                                        tracker:
-                                            e.target.value === 'none'
-                                                ? { type: 'none' }
-                                                : { ...tracker, type: e.target.value }
-                                    })
-                                }
-                            >
-                                {TRACKERS.map((t) => (
-                                    <option
-                                        key={t}
-                                        value={t}
-                                    >
-                                        {t}
-                                    </option>
-                                ))}
-                            </select>
-                        </Field>
-                        {trackerType !== 'none' && (
-                            <>
-                                <Field
-                                    label='Tracker URL / project'
-                                    hint='Issues page, board or project the tickets belong to.'
-                                >
-                                    <input
-                                        className='mono'
-                                        value={str(tracker.url)}
-                                        onChange={(e) => set({ tracker: { ...tracker, url: e.target.value } })}
-                                    />
-                                </Field>
-                            </>
-                        )}
                         <McpField
                             slug={str(fm.slug)}
                             allowed={Array.isArray(fm.mcp) ? (fm.mcp as string[]) : null}
@@ -195,6 +128,7 @@ export function ProjectsPage() {
                                 label='Providers this project may delegate to'
                                 hint="A role on another provider (an agent file with a provider) gets this project's work only when its provider is ticked here; otherwise the orchestrator's own model runs the role. Keep work code off a box you would not give it to."
                                 wide
+                                group
                             >
                                 <div
                                     className='row wrap'
@@ -223,16 +157,6 @@ export function ProjectsPage() {
                             </Field>
                         )}
                         <ProjectToolchainField slug={str(fm.slug)} />
-                        <Field
-                            label='Checks (one per line)'
-                            hint='Run from the repository root before a PR is opened. All must pass.'
-                            wide
-                        >
-                            <LinesInput
-                                value={checks}
-                                onChange={(next) => set({ checks: next })}
-                            />
-                        </Field>
                         <ProjectHosts
                             value={hosts}
                             onChange={(next) => set({ hosts: next })}

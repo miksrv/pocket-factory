@@ -84,8 +84,8 @@ lists what is taken from each.
   agent and project), Settings (Claude Code model, MCP servers with browser-driven sign-in, SSH
   hosts with host-key trust, Security). Installs as a PWA from the phone.
 - **Factory files** — sub-agents `developer` / `reviewer`, skills `feature-to-pr` /
-  `onboard-project`, one Markdown file per project (repo, branches, checks, tracker, hosts, MCP
-  allowlist), one per routine (agent, triggers, instructions and the agent's own notes). The UI,
+  `onboard-project`, one Markdown file per project (repo, branches, hosts, MCP allowlist, notes
+  with the checks and the tracker), one per routine (agent, triggers, instructions and the agent's own notes). The UI,
   the owner and the agent edit the same files; what the agent changes shows up in the Audit log
   as file events.
 - **Toolchains** — the image carries `mise`, PHP with composer and the docker CLI. The agents

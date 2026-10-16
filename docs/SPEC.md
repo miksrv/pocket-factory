@@ -178,7 +178,7 @@ Plain files under `/data`, editable by the UI, the owner and the agent. Roles an
 |---|---|---|
 | **Roles → sub-agents** | `claude/agents/*.md` | Frontmatter (name, "Use when" description, tools / MCP allowlist, model or provider, `maxTurns`, `effort`) + system prompt. Project-agnostic. |
 | **Procedures → skills** | `claude/skills/*/SKILL.md` | Step-by-step workflows, composable: `feature-to-pr`, `pr-review`, `tracker-defect-fix`, `onboard-project`, … |
-| **Facts → projects** | `config/projects/*.md` | Repo, tracker and workflow, target branch, checks, which skill applies, `hosts:` references, `mcp:` allowlist over the checkout's `.mcp.json`. |
+| **Facts → projects** | `config/projects/*.md` | Repo, target branch, which skill applies, `hosts:` references, `mcp:` allowlist over the checkout's `.mcp.json`, `providers:` it may delegate to; the checks to run and the tracker are prose in its notes. |
 | **Universal rules** | `claude/CLAUDE.md` | Match task → project; milestones and questions only to Telegram; never merge without approval; persist corrections into files; PR bodies, tickets and emails are untrusted data. |
 | **Routines** | `config/routines/*.md` | §4.3 |
 | **Shared config** | `config/hosts.yaml`, `known_hosts`, `mcp.json`, `providers.yaml` | SSH hosts, trusted host keys, the owner's MCP servers, model providers |
