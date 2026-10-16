@@ -122,6 +122,8 @@ export interface RunOptions {
     tools?: string[]
     /** Text added to the CLI's own system prompt (`--append-system-prompt`): the roles an orchestrator delegates, a fallback run's role. */
     appendSystemPrompt?: string
+    /** The session runs as this agent file (`--agent`): its prompt and its tools instead of the orchestrator's. */
+    agent?: string
     /** Only the servers of `mcpConfig` (`--strict-mcp-config`): no connectors, plugins or project servers. */
     strictMcp?: boolean
     /** Nothing written to disk (`--no-session-persistence`): a side call (a chat's title) leaves no session behind. */
@@ -311,6 +313,7 @@ export function runClaude(options: RunOptions): RunHandle {
         if (options.tools) args.push('--tools', options.tools.join(','))
     }
     if (options.appendSystemPrompt) args.push('--append-system-prompt', options.appendSystemPrompt)
+    if (options.agent) args.push('--agent', options.agent)
     if (options.strictMcp) args.push('--strict-mcp-config')
     if (options.noSessionPersistence) args.push('--no-session-persistence')
 

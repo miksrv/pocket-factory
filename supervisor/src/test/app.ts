@@ -6,6 +6,7 @@ import type { Hono } from 'hono'
 import { vi } from 'vitest'
 
 import type { Config } from '../config.js'
+import { agentFile } from '../files/agentFiles.js'
 import { Catalog } from '../files/catalog.js'
 import { delegateAgents, projectProviders } from '../files/delegates.js'
 import { Hosts } from '../files/hosts.js'
@@ -139,8 +140,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         projectMcp: () => ({ declared: [], allowed: null }),
         agentMcp: () => [],
         sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null,
-        agentFile: (name) =>
-            catalog.exists('agents', name) ? { body: catalog.get('agents', name).body, tools: null } : null,
+        agentFile: (name) => agentFile(catalog, name),
         delegates: () => delegateAgents(catalog),
         projectProviders: (slug) => projectProviders(catalog, slug)
     }
@@ -158,6 +158,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         providerExists: (name) => providers.get(name) !== undefined,
         providerLight: (name) => providers.get(name)?.light ?? false,
         agentProvider: () => ({ provider: null, model: null }),
+        agentFile: (name) => agentFile(catalog, name),
         agentEnv: () => tasks.agentEnv()
     })
     const auth = new WebAuth(store, config.web)

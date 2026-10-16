@@ -1,8 +1,14 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { AgentFile } from '../files/agentFiles.js'
+import { createTestApp, type TestApp } from '../test/app.js'
 import { parseCron } from './cron.js'
 import type { Item } from './prefilters.js'
-import { buildPrompt, conversationKey } from './service.js'
+import { buildPrompt, conversationKey, runsAsAgent } from './service.js'
 import type { ScheduleSpec } from './spec.js'
 
 const spec = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({
@@ -92,6 +98,26 @@ describe('buildPrompt', () => {
         expect(prompt).toContain('- Mode: report (look and report; change nothing, post nothing)')
     })
 
+    it('runs a subscription agent itself: the skill by its path, no sub-agent', () => {
+        const prompt = buildPrompt(spec({ skill: 'pr-review', agent: 'reviewer' }), 'x', [], 'cron', {
+            ...paths,
+            skillsRoot: '/data/claude/skills',
+            embodied: 'agent'
+        })
+        expect(prompt).toContain('- Skill to apply: pr-review (/data/claude/skills/pr-review/SKILL.md)')
+        expect(prompt).toContain('- You run as the agent reviewer: do the work yourself, no sub-agent for it')
+        expect(prompt).not.toContain('Delegate the work')
+    })
+
+    it('leaves skill and agent to the system prompt in light mode', () => {
+        const prompt = buildPrompt(spec({ skill: 'pr-review', agent: 'reviewer' }), 'x', [], 'cron', {
+            ...paths,
+            embodied: 'light'
+        })
+        expect(prompt).not.toContain('Skill to apply')
+        expect(prompt).not.toContain('reviewer')
+    })
+
     it('names another mode without the read-only note', () => {
         const prompt = buildPrompt(spec({ action: 'fix' }), 'x', [], 'cron', paths)
         expect(prompt).toContain('- Mode: fix\n')
@@ -127,5 +153,136 @@ describe('buildPrompt', () => {
         const empty = buildPrompt(spec({ prefilter }), 'x', [], 'manual', paths)
         expect(empty).toContain('## New since the last run (0)')
         expect(empty).toContain('## Everything the prefilter sees now (0)\n\n(nothing)')
+    })
+})
+
+/** A `claude` that appends its arguments and prompt to `$CALLS` (one JSON line per run) and answers OK. */
+const RECORDING_CLAUDE = `#!/usr/bin/env node
+const fs = require('node:fs')
+if (process.argv.includes('--version')) { console.log('0.0.0 (Claude Code, fake)'); process.exit(0) }
+const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n')
+const S = '00000000-0000-0000-0000-000000000001'
+let buf = ''
+process.stdin.on('data', (chunk) => {
+    buf += chunk
+    let i
+    while ((i = buf.indexOf('\\n')) >= 0) {
+        const line = buf.slice(0, i).trim()
+        buf = buf.slice(i + 1)
+        if (!line) continue
+        const m = JSON.parse(line)
+        if (m.type === 'control_request')
+            out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } })
+        if (m.type !== 'user') continue
+        const prompt = typeof m.message.content === 'string' ? m.message.content : m.message.content.map((c) => c.text ?? '').join('')
+        fs.appendFileSync(process.env.CALLS, JSON.stringify({ argv: process.argv.slice(2), prompt }) + '\\n')
+        out({ type: 'system', subtype: 'init', session_id: S, model: 'fake', tools: [], mcp_servers: [] })
+        out({ ...m, session_id: S, parent_tool_use_id: null, isReplay: true })
+        out({ type: 'result', subtype: 'success', is_error: false, result: 'OK', session_id: S, num_turns: 1, duration_ms: 5, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } })
+        process.exit(0)
+    }
+})
+`
+
+describe('a schedule with an agent on the subscription', () => {
+    let t: TestApp
+    let calls: string
+    afterEach(() => t.cleanup())
+
+    async function run(
+        agent: { tools?: string; model?: string; maxTurns?: number },
+        schedule: { model?: string } = {}
+    ) {
+        t = createTestApp({ claude: RECORDING_CLAUDE })
+        calls = path.join(t.dataRoot, 'calls.jsonl')
+        vi.stubEnv('CALLS', calls)
+        const { catalog, store } = t.ctx
+        catalog.save('agents', 'publisher', {
+            frontmatter: { description: 'Publishes', ...agent },
+            body: 'You publish.'
+        })
+        catalog.save('skills', 'publishing', { frontmatter: { description: 'How to publish' }, body: 'Steps.' })
+        catalog.save('schedules', 'daily', {
+            frontmatter: { cron: '0 8 * * *', agent: 'publisher', skill: 'publishing', ...schedule },
+            body: 'Publish the next one.'
+        })
+        const fired = await t.ctx.schedules.fire('daily', 'manual')
+        const task = store.getTask(fired.task_id!)!
+        const start = Date.now()
+        while (store.getTask(task.id)?.status !== 'done') {
+            if (Date.now() - start > 10_000) throw new Error('timed out')
+            await new Promise((r) => setTimeout(r, 30))
+        }
+        const [call] = fs
+            .readFileSync(calls, 'utf8')
+            .trim()
+            .split('\n')
+            .map((l) => JSON.parse(l) as { argv: string[]; prompt: string })
+        return { task: store.getTask(task.id)!, call }
+    }
+
+    const flag = (argv: string[], name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined)
+
+    it('runs as the agent with its own model instead of an orchestrator spawning it', async () => {
+        const { task, call } = await run({ tools: 'Bash, Read, Edit', model: 'opus', maxTurns: 12 })
+        expect(flag(call.argv, '--max-turns')).toBe('12')
+        // Its work counts as the agent's in the Agents panel, not the orchestrator's.
+        const activity = t.ctx.store.agentActivity()
+        expect(activity.find((a) => a.agent === 'publisher')?.runs).toBe(1)
+        expect(activity.find((a) => a.agent === null)?.runs).toBe(0)
+        expect(task).toMatchObject({ agent: 'publisher', model: 'opus', provider: null })
+        expect(flag(call.argv, '--agent')).toBe('publisher')
+        expect(flag(call.argv, '--model')).toBe('opus')
+        expect(call.prompt).toContain('You run as the agent publisher')
+        expect(call.prompt).not.toContain('Delegate the work')
+        const note = t.ctx.store
+            .listEvents(task.id)
+            .find((e) => e.type === 'status' && (e.payload as { note?: string }).note)
+        expect((note?.payload as { note: string }).note).toBe('as publisher · opus')
+    })
+
+    it("keeps the schedule's model, and the orchestrator's for an agent that inherits", async () => {
+        expect((await run({ model: 'opus' }, { model: 'haiku' })).task.model).toBe('haiku')
+        await t.cleanup()
+        const { task, call } = await run({ model: 'inherit' })
+        expect(task.model).toBeNull()
+        expect(flag(call.argv, '--model')).toBe('sonnet')
+        expect(flag(call.argv, '--agent')).toBe('publisher')
+    })
+
+    it('still spawns an agent that could not edit the schedule notes', async () => {
+        const { task, call } = await run({ tools: 'Read, Grep' })
+        expect(task.agent).toBeNull()
+        expect(call.argv).not.toContain('--agent')
+        expect(call.prompt).toContain('- Delegate the work to the sub-agent: publisher')
+    })
+})
+
+describe('runsAsAgent', () => {
+    const file = (over: Partial<AgentFile> = {}): AgentFile => ({
+        body: 'x',
+        tools: null,
+        disallowed: [],
+        model: null,
+        maxTurns: null,
+        ...over
+    })
+
+    it('needs Edit or Write to keep the notes', () => {
+        expect(runsAsAgent(file(), null, 'a')).toBe(true)
+        expect(runsAsAgent(file({ tools: ['Read', 'Write'] }), null, 'a')).toBe(true)
+        expect(runsAsAgent(file({ tools: ['Read', 'Edit(/data/**)'] }), null, 'a')).toBe(true)
+        expect(runsAsAgent(file({ tools: ['Read', 'Grep'] }), null, 'a')).toBe(false)
+        expect(runsAsAgent(file({ disallowed: ['Edit', 'Write'] }), null, 'a')).toBe(false)
+        expect(runsAsAgent(file({ disallowed: ['Edit'] }), null, 'a')).toBe(true)
+    })
+
+    it("yields to a project's agent of the same name, which the CLI would run instead", () => {
+        const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-checkout-'))
+        expect(runsAsAgent(file(), checkout, 'reviewer')).toBe(true)
+        fs.mkdirSync(path.join(checkout, '.claude', 'agents'), { recursive: true })
+        fs.writeFileSync(path.join(checkout, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\n---\n')
+        expect(runsAsAgent(file(), checkout, 'reviewer')).toBe(false)
+        fs.rmSync(checkout, { recursive: true, force: true })
     })
 })

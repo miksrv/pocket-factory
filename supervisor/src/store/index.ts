@@ -349,6 +349,9 @@ const LISTED = `c.channel != 'delegate'`
  * ~95 % of the sum and drown the work itself (owner's trial, 2026-10-15).
  */
 const FRESH_TOKENS = 'input_tokens + output_tokens + cache_creation_tokens'
+/** Who made an event: the sub-agent it came from, else the agent its task runs as (a schedule's `--agent`, a delegated role); null = the orchestrator. */
+const EVENT_AGENT = 'COALESCE(e.agent, t.agent)'
+
 const LLM_FRESH_TOKENS = `json_extract(e.payload, '$.tokens') - COALESCE(json_extract(e.payload, '$.cacheReadTokens'), 0)`
 const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply, ${ACTIVE} AS active FROM conversations c`
 /** A schedule run with the status of the task it queued, if any. */
@@ -1011,9 +1014,9 @@ export class Store {
             where.push('e.ts >= ?')
             values.push(query.since)
         }
-        if (query.agent === 'orchestrator') where.push('e.agent IS NULL')
+        if (query.agent === 'orchestrator') where.push(`${EVENT_AGENT} IS NULL`)
         else if (query.agent) {
-            where.push('e.agent = ?')
+            where.push(`${EVENT_AGENT} = ?`)
             values.push(query.agent)
         }
         if (query.project) {
@@ -1032,7 +1035,8 @@ export class Store {
         const { sql, values } = this.auditWhere(query)
         const rows = this.db
             .prepare(
-                `SELECT e.*, t.project, t.conversation_id, t.session_id
+                `SELECT e.id, e.task_id, e.ts, e.type, e.payload, ${EVENT_AGENT} AS agent, e.parent_tool_use_id,
+                        t.project, t.conversation_id, t.session_id
                  FROM task_events e JOIN tasks t ON t.id = e.task_id
                  ${sql} ORDER BY e.id DESC LIMIT ?`
             )
@@ -1048,7 +1052,7 @@ export class Store {
         const row = this.db
             .prepare(
                 `SELECT COUNT(*) AS events,
-                        COUNT(DISTINCT COALESCE(e.agent, '')) AS agents,
+                        COUNT(DISTINCT COALESCE(${EVENT_AGENT}, '')) AS agents,
                         COUNT(DISTINCT e.task_id) AS tasks,
                         SUM(CASE WHEN e.type = 'llm' THEN ${LLM_FRESH_TOKENS} ELSE 0 END) AS tokens
                  FROM task_events e JOIN tasks t ON t.id = e.task_id ${sql}`
@@ -1078,8 +1082,9 @@ export class Store {
         for (const s of starts) Object.assign(row(s.agent), { runs: s.runs, last_active: s.last })
         const tokens = this.db
             .prepare(
-                `SELECT e.agent, SUM(${LLM_FRESH_TOKENS}) AS tokens, MAX(e.ts) AS last FROM task_events e
-                 WHERE e.type = 'llm' ${cond} GROUP BY e.agent`
+                `SELECT ${EVENT_AGENT} AS agent, SUM(${LLM_FRESH_TOKENS}) AS tokens, MAX(e.ts) AS last
+                 FROM task_events e JOIN tasks t ON t.id = e.task_id
+                 WHERE e.type = 'llm' ${cond} GROUP BY ${EVENT_AGENT}`
             )
             .all(...(args as never[])) as Array<{ agent: string | null; tokens: number; last: string }>
         for (const t of tokens) {
@@ -1101,11 +1106,24 @@ export class Store {
             )
             .all() as Array<{ agent: string; n: number }>
         for (const r of running) row(r.agent).running = r.n
-        // The orchestrator: tasks are its runs.
+        // A task that runs as an agent (a schedule's, a delegated role, light mode) is a run of that agent.
+        const own = this.db
+            .prepare(
+                `SELECT agent, COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks
+                 WHERE agent IS NOT NULL AND started_at IS NOT NULL ${since ? 'AND started_at >= ?' : ''} GROUP BY agent`
+            )
+            .all(...(args as never[])) as Array<{ agent: string; runs: number; last: string; running: number | null }>
+        for (const t of own) {
+            const r = row(t.agent)
+            r.runs += t.runs
+            r.running += t.running ?? 0
+            if (!r.last_active || t.last > r.last_active) r.last_active = t.last
+        }
+        // The orchestrator: the other tasks are its runs.
         const orchestrator = row(null)
         const tasks = this.db
             .prepare(
-                `SELECT COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks WHERE started_at IS NOT NULL ${since ? 'AND started_at >= ?' : ''}`
+                `SELECT COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks WHERE agent IS NULL AND started_at IS NOT NULL ${since ? 'AND started_at >= ?' : ''}`
             )
             .get(...(args as never[])) as { runs: number; last: string | null; running: number | null }
         orchestrator.runs = tasks.runs
@@ -1121,7 +1139,7 @@ export class Store {
         const args = since ? [since] : []
         const agents = this.db
             .prepare(
-                `SELECT DISTINCT e.agent FROM task_events e ${cond} ${cond ? 'AND' : 'WHERE'} e.agent IS NOT NULL ORDER BY e.agent`
+                `SELECT DISTINCT ${EVENT_AGENT} AS agent FROM task_events e JOIN tasks t ON t.id = e.task_id ${cond} ${cond ? 'AND' : 'WHERE'} ${EVENT_AGENT} IS NOT NULL ORDER BY 1`
             )
             .all(...(args as never[])) as Array<{ agent: string }>
         const projects = this.db

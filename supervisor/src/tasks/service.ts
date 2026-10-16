@@ -16,6 +16,7 @@ import {
     RunTimeout
 } from '../claude/runner.js'
 import type { Config } from '../config.js'
+import type { AgentFile } from '../files/agentFiles.js'
 import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
 import { fetchError, type Provider, type Providers } from '../files/providers.js'
 import {
@@ -59,8 +60,8 @@ export interface Workspace {
     agentMcp: () => string[]
     /** Claude Code's directory slug of the cwd a session was recorded under, or null when the transcript is unknown. */
     sessionWorkspace: (sessionId: string) => string | null
-    /** An agent file's body (its system prompt) and `tools:` list, for a task that runs *as* that agent in light mode; null when there is no such file. */
-    agentFile: (name: string) => { body: string; tools: string[] | null } | null
+    /** An agent file (its body is the system prompt), for a task that runs *as* that agent; null when there is no such file. */
+    agentFile: (name: string) => AgentFile | null
     /** Agent files with `provider:`: the roles an orchestrator hands work to through `delegate`. */
     delegates: () => DelegateAgent[]
     /** The providers a project's file allows its tasks to delegate to (`providers:`); null = none named. */
@@ -820,7 +821,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             model?: string
             /** The provider to run on; undefined = the conversation's choice, null = the subscription whatever the conversation says. */
             provider?: string | null
-            /** The agent the task runs as in light mode (a schedule's `agent:` on such a provider). */
+            /** The agent the task runs as: a schedule's `agent:` in light mode, or on the subscription (`--agent`). */
             agent?: string
             attachments?: Attachment[]
         } = {}
@@ -1764,11 +1765,21 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         const model = provider ? (task.model ?? provider.default ?? provider.models[0]) : (task.model ?? this.model())
         const light = provider?.light ? this.lightOptions(task) : null
+        // A schedule's run on the subscription that is its agent itself (`--agent`), not an orchestrator spawning it;
+        // read again at start, since a task may wait hours for a limit reset while the owner edits or deletes the file.
+        const asAgentFile = !provider && !task.parent_id && task.agent ? this.workspace.agentFile(task.agent) : null
+        const asAgent = asAgentFile ? task.agent! : undefined
         const env = provider ? this.providerEnv(provider, model) : this.agentEnv()
         // An orchestrator on the subscription may hand roles to other providers (`delegate`); the
         // roles themselves never reach the CLI's Agent tool, which would run them on Claude.
         const delegates = this.delegates()
-        const offersDelegate = !provider && !task.parent_id && delegates.length > 0
+        // Under `--agent` the session has the agent's tools only: no delegation unless it lists the tool.
+        const offersDelegate =
+            !provider &&
+            !task.parent_id &&
+            delegates.length > 0 &&
+            (!asAgentFile?.tools ||
+                asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
         const settings = this.sessionSettings(conversation.project)
         if (delegates.length && !light) {
             const permissions = (settings.permissions ?? {}) as { allow?: string[]; deny?: string[] }
@@ -1783,12 +1794,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             : task.parent_id && !light
               ? this.roleBrief(task, Boolean(provider))
               : undefined
-        if (provider)
+        if (provider || asAgent)
             this.emit(
                 'event',
                 this.store.addEvent(task.id, 'status', {
                     status: 'running',
-                    note: `on ${provider.name} · ${model}${light ? ` · light mode${task.agent ? ` as ${task.agent}` : ''}` : ''}`
+                    note: provider
+                        ? `on ${provider.name} · ${model}${light ? ` · light mode${task.agent ? ` as ${task.agent}` : ''}` : ''}`
+                        : `as ${asAgent} · ${model}`
                 })
             )
         const resuming = Boolean(conversation.session_id)
@@ -1819,9 +1832,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             ].filter((c): c is string => Boolean(c)),
             settings,
             appendSystemPrompt,
+            agent: asAgent,
             // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
             model,
-            maxTurns: this.config.claude.maxTurns,
+            // An agent's own `maxTurns:` when the session is that agent, as it had when it ran as a sub-agent.
+            maxTurns: asAgentFile?.maxTurns ?? this.config.claude.maxTurns,
             permissionMode: this.config.claude.permissionMode,
             env,
             systemPrompt: light?.systemPrompt,
