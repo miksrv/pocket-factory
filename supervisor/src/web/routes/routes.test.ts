@@ -162,6 +162,35 @@ describe('API routes (open mode)', () => {
             expect(res.status).toBe(409)
         })
 
+        it("keeps a routine's thread a log: no project, model or message of the owner's", async () => {
+            const thread = t.ctx.store.createConversation('web', 'schedule:nightly', '⏱ nightly')
+            const project = await t.request(
+                `/api/conversations/${thread.id}`,
+                json({ project: null }, { method: 'PATCH' })
+            )
+            expect(project.status).toBe(409)
+            expect(((await project.json()) as { error: string }).error).toMatch(/routine "nightly".*Project/)
+            const model = await t.request(
+                `/api/conversations/${thread.id}/model`,
+                json({ provider: null, model: 'opus' }, { method: 'PUT' })
+            )
+            expect(model.status).toBe(409)
+            expect(((await model.json()) as { error: string }).error).toMatch(/routine "nightly".*Model/)
+            const message = await t.request(`/api/conversations/${thread.id}/messages`, json({ prompt: 'and now?' }))
+            expect(message.status).toBe(409)
+            expect(((await message.json()) as { error: string }).error).toMatch(/Run now/)
+            expect(t.ctx.store.listTasks({ conversationId: thread.id })).toEqual([])
+            // The owner's own conversation still takes all three.
+            const own = await create()
+            expect(
+                (await t.request(`/api/conversations/${own.id}`, json({ project: null }, { method: 'PATCH' }))).status
+            ).toBe(200)
+            expect(
+                (await t.request(`/api/conversations/${own.id}/model`, json({ model: 'opus' }, { method: 'PUT' })))
+                    .status
+            ).toBe(200)
+        })
+
         it('pages the list with before + before_id', async () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))

@@ -2112,6 +2112,11 @@ dialog.modal[open]::backdrop {
     align-items: end;
     background: var(--surface);
 }
+.chat .composer-note {
+    display: block;
+    padding: 12px 16px;
+    line-height: 1.5;
+}
 .chat .composer.dragging {
     outline: 2px dashed var(--blue);
     outline-offset: -6px;

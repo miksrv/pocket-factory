@@ -56,6 +56,15 @@ export const PREFILTER_KINDS = ['command', 'github-prs', 'trac'] as const
  */
 export type TriggerKind = 'schedule' | 'poll'
 
+/** The web conversation every run of a routine lands in. The key predates the rename, so threads and history stay. */
+export const conversationKey = (name: string) => `schedule:${name}`
+
+/** The routine whose thread a conversation is (its name), or null for the owner's own conversations. */
+export const routineOf = (conversation: { channel: string; external_id: string | null }): string | null =>
+    conversation.channel === 'web' && conversation.external_id?.startsWith('schedule:')
+        ? conversation.external_id.slice('schedule:'.length)
+        : null
+
 export interface Trigger {
     kind: TriggerKind
     cron: Cron

@@ -30,6 +30,11 @@ section (`node scripts/release.mjs tag`).
   with its next firing.
 - `.env`: `ROUTINES_SOFT_STOP`, `ROUTINES_LATE_MIN`, `ROUTINES_ASK_TIMEOUT_MIN`; the `SCHEDULES_*`
   names are still read.
+- **A routine's chat thread is a log.** Its head links to the routine and shows the project, the
+  agent and the model of the last run as text (they are the routine file's, so the selectors are
+  gone), and the composer gives way to a note unless the run asks a question, which is still
+  answered there. The API refuses a project, provider or model change and a message of the
+  owner's in such a thread (409), and a run never takes the model the thread was once set to.
 
 ## [1.4.2] - 2026-10-16
 

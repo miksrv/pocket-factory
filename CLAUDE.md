@@ -355,6 +355,11 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   honoured but not offered. The file routes refuse a save older than the file (409 "changed on
   disk") since the agent edits routines every run. `/api/routines/*` and `/routines` only: no
   aliases or redirects for the old paths (single owner, no outside scripts).
+- **A routine's chat thread is a log** (owner's rule): project, provider and model are the routine
+  file's, so the thread's head shows them as text with a link to the routine, the API refuses to
+  change them or to take a message there (409) unless a run's question is open, and a run never
+  reads the conversation's model. Telegram still continues the thread by a reply to a run's
+  notice (that is how its questions are answered).
 - Mail has no deterministic prefilter yet (Gmail lives in the session as a connector): a mail
   routine is a schedule at a coarse cadence. Trac is polled over HTTP from the supervisor
   (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every routine with

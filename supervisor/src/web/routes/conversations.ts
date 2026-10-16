@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 
 import { type Attachment, isPreviewable, MAX_ATTACHMENTS } from '../../files/inbox.js'
+import { routineOf } from '../../routines/spec.js'
 import type { Conversation, Task, TaskEvent } from '../../store/index.js'
 import type { Env } from '../context.js'
 import { cursorOf } from './cursor.js'
@@ -30,6 +31,16 @@ export function conversationRoutes(): Hono<Env> {
         return conversation && !conversation.deleted_at ? conversation : undefined
     }
 
+    /**
+     * A routine's thread is a log of its runs: project, provider and model come from the routine
+     * file, and a message of the owner's there only answers an open question (the next run is
+     * "Run now" on the routine's page). The error names the routine so the UI can point there.
+     */
+    const routineThread = (conversation: Conversation, what: string) => {
+        const name = routineOf(conversation)
+        return name ? `this is the thread of routine "${name}": ${what}` : null
+    }
+
     /** `project` binds the conversation to a checkout from the start: its tasks run there. */
     app.post('/', async (c) => {
         const { tasks } = c.get('app')
@@ -49,6 +60,8 @@ export function conversationRoutes(): Hono<Env> {
         if (!conversation) return c.json({ error: 'conversation not found' }, 404)
         const body = (await c.req.json().catch(() => ({}))) as { project?: unknown }
         if (!isOptionalString(body.project)) return c.json({ error: 'project must be a string or null' }, 400)
+        const log = routineThread(conversation, "its project is the routine file's (Routines → More → Project)")
+        if (log) return c.json({ error: log }, 409)
         try {
             return c.json(tasks.setProject(conversation.id, body.project?.trim() || null))
         } catch (error) {
@@ -70,6 +83,11 @@ export function conversationRoutes(): Hono<Env> {
         const body = (await c.req.json().catch(() => ({}))) as { provider?: unknown; model?: unknown }
         if (!isOptionalString(body.provider) || !isOptionalString(body.model))
             return c.json({ error: 'provider and model must be strings or null' }, 400)
+        const log = routineThread(
+            conversation,
+            "its provider and model are the routine file's or its agent's (Routines → More → Model)"
+        )
+        if (log) return c.json({ error: log }, 409)
         try {
             return c.json(
                 tasks.setConversationModel(conversation.id, body.provider?.trim() || null, body.model ?? null)
@@ -149,6 +167,11 @@ export function conversationRoutes(): Hono<Env> {
         }
         const prompt = body.prompt?.trim() || (attachments.length ? 'See the attached file(s).' : '')
         if (!prompt) return c.json({ error: 'prompt is required' }, 400)
+        // The owner's message in a routine's thread is the answer to its open question, never a task of its own.
+        const log = tasks.pendingAsk(conversation.id)
+            ? null
+            : routineThread(conversation, 'runs start from its page (Run now), not from here')
+        if (log) return c.json({ error: log }, 409)
         return c.json(tasks.submit(conversation.id, 'web', prompt, { attachments }), 201)
     })
 

@@ -841,9 +841,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
-        // A routine names its provider; the owner's own message runs on what the conversation was set to.
+        // A routine names its provider and model (its file's, or its agent's); the owner's own message runs on
+        // what the conversation was set to. A routine run never reads the conversation's: its thread is a log.
         const provider = options.provider === undefined ? conversation.provider : options.provider
-        const model = options.model ?? (provider === conversation.provider ? conversation.model : null)
+        const model =
+            options.model ?? (!options.schedule && provider === conversation.provider ? conversation.model : null)
         const task = this.store.createTask(
             conversationId,
             source,

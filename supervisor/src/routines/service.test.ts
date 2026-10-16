@@ -207,7 +207,8 @@ describe('a routine with an agent on the subscription', () => {
 
     async function run(
         agent: { tools?: string; model?: string; maxTurns?: number },
-        schedule: { model?: string } = {}
+        schedule: { model?: string } = {},
+        prepare: (store: TestApp['ctx']['store']) => void = () => undefined
     ) {
         t = createTestApp({ claude: RECORDING_CLAUDE })
         calls = path.join(t.dataRoot, 'calls.jsonl')
@@ -222,6 +223,7 @@ describe('a routine with an agent on the subscription', () => {
             frontmatter: { cron: '0 8 * * *', agent: 'publisher', skill: 'publishing', ...schedule },
             body: 'Publish the next one.'
         })
+        prepare(store)
         const fired = await t.ctx.routines.fire('daily', 'manual')
         const task = store.getTask(fired.task_id!)!
         const start = Date.now()
@@ -267,6 +269,15 @@ describe('a routine with an agent on the subscription', () => {
         expect(task.model).toBeNull()
         expect(flag(call.argv, '--model')).toBe('sonnet')
         expect(flag(call.argv, '--agent')).toBe('publisher')
+    })
+
+    it('never takes the model its thread was set to: the thread is a log', async () => {
+        const { task, call } = await run({ model: 'inherit' }, {}, (store) => {
+            const thread = store.createConversation('web', conversationKey('daily'), '⏱ daily')
+            store.updateConversation(thread.id, { model: 'opus' })
+        })
+        expect(task.model).toBeNull()
+        expect(flag(call.argv, '--model')).toBe('sonnet')
     })
 
     it("gives the skill's directory for ${CLAUDE_SKILL_DIR}, and leaves a project's own skill to the CLI", async () => {

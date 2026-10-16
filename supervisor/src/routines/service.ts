@@ -10,7 +10,9 @@ import type { RoutineRun, Store, Task } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
 import { cronMatches, inWindow, localTime, nextRun } from './cron.js'
 import { type Item, PrefilterError, runPrefilter } from './prefilters.js'
-import { type ParsedRoutine, parseRoutine, type Refs, type RoutineSpec, type Trigger } from './spec.js'
+import { conversationKey, type ParsedRoutine, parseRoutine, type Refs, type RoutineSpec, type Trigger } from './spec.js'
+
+export { conversationKey }
 
 const log = createLogger('routines')
 
@@ -565,9 +567,6 @@ export function underHeading(markdown: string): string {
         })
         .join('\n')
 }
-
-/** The web conversation every run of a routine lands in. The key predates the rename, so threads and history stay. */
-export const conversationKey = (name: string) => `schedule:${name}`
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
 
