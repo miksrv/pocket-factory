@@ -9,6 +9,21 @@ Telegram in `/status`. Every version is a tag `vX.Y.Z` on `main` and a
 [GitHub release](https://github.com/miksrv/pocket-factory/releases) whose notes are this file's
 section (`node scripts/release.mjs tag`).
 
+## [1.4.2] - 2026-10-16
+
+### Changed
+
+- **The agent a schedule names always runs itself**, also when it cannot edit files (an email
+  agent with only its Gmail tools) and when the project has an agent of the same name: no
+  orchestrator in between any more. An agent without `Edit` simply keeps no notes.
+- **A schedule's skill comes in the prompt** of a run as the agent, so the agent needs no Read
+  and no extra turn to load it.
+
+### Removed
+
+- **The `devops` preset** (a read-only SSH inspector and its `devops-check` skill): never used;
+  an agent that looks at a host is a project's own role. Factories that installed it keep the files.
+
 ## [1.4.1] - 2026-10-16
 
 ### Changed

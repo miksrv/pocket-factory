@@ -13,7 +13,6 @@ For repositories laid out as `client/` (TypeScript, React) plus `server/` (Go), 
 
 - The core `reviewer` agent (shipped with the factory).
 - A project file per repository. Let `onboard-project` draft it from the repository's own docs, then set `skill: fullstack-feature` and fill `checks:` with the real commands (root `make check`, `cd client && yarn test`, …). The factory image has Node and Yarn but no Go: server lint and tests usually run in CI only — say so in the project notes so the PR states it instead of claiming green checks.
-- Host inspection lives in the *DevOps engineer* preset.
 
 **Repository-level agents.** When a conversation is bound to the project, Claude Code runs from its checkout, so the repository's `.claude/agents/` load; the skill prefers them for their area when the project notes name them. Both factory developers also read those files and follow them.
 

@@ -13,7 +13,6 @@ For repositories laid out as `client/` (TypeScript, React) plus `server/` (PHP: 
 
 - The core `reviewer` agent (shipped with the factory).
 - A project file per repository. Let `onboard-project` draft it from the repository's own docs, then set `skill: fullstack-feature` and fill `checks:` with the real commands. The factory image has Node and Yarn but no PHP: `composer`, `phpstan` and `phpunit` usually run in CI only — say so in the project notes so the PR states it instead of claiming green checks.
-- Host inspection lives in the *DevOps engineer* preset.
 
 **Usage from Telegram**
 
