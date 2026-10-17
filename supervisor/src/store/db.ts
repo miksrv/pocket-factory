@@ -224,6 +224,21 @@ const MIGRATIONS: string[] = [
     `
     ALTER TABLE tasks ADD COLUMN parent_id TEXT;
     CREATE INDEX tasks_parent ON tasks(parent_id) WHERE parent_id IS NOT NULL;
+    `,
+    // v17: Telegram topics. With topics on for the bot (BotFather), a private
+    // chat is a list of topics and every conversation gets one: the owner's
+    // chats, a routine's thread, a web chat that reached Telegram. The bot
+    // keeps which topic is which conversation and the name it gave the topic.
+    `
+    CREATE TABLE telegram_threads (
+        chat_id         INTEGER NOT NULL,
+        thread_id       INTEGER NOT NULL,
+        conversation_id TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        PRIMARY KEY (chat_id, thread_id)
+    );
+    CREATE INDEX telegram_threads_conversation ON telegram_threads(conversation_id);
     `
 ]
 

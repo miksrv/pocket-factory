@@ -54,18 +54,19 @@ function elapsed(ms: number): string {
     return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`
 }
 
-/** The draft's text (Telegram HTML). */
-export function draftText(state: DraftState, now = Date.now()): string {
-    const lines = [`${state.head} <b>${escapeHtml(state.title)}</b>`]
-    if (state.waiting) lines.push(`⏳ ${escapeHtml(state.waiting)}`)
+/** The draft's text: Telegram HTML, or plain text for the retry after Telegram rejected the markup. */
+export function draftText(state: DraftState, now = Date.now(), html = true): string {
+    const esc = html ? escapeHtml : (text: string) => text
+    const lines = [`${state.head} ${html ? `<b>${esc(state.title)}</b>` : state.title}`]
+    if (state.waiting) lines.push(`⏳ ${esc(state.waiting)}`)
     else {
         const parts = [`${state.steps} step${state.steps === 1 ? '' : 's'}`, elapsed(now - state.startedAt)]
-        if (state.step) parts.push(escapeHtml(state.step))
+        if (state.step) parts.push(esc(state.step))
         lines.push(parts.join(' · '))
     }
     if (state.prose) {
         const prose = state.prose.length > PROSE_MAX ? `…${state.prose.slice(-PROSE_MAX)}` : state.prose
-        lines.push('', markdownToTelegramHtml(prose))
+        lines.push('', html ? markdownToTelegramHtml(prose) : prose)
     }
     return lines.join('\n')
 }
@@ -76,6 +77,7 @@ export const draftId = (taskId: string): number =>
 
 interface Live {
     chatId: number
+    thread: number | undefined
     draftId: number
     state: DraftState
     lastSentAt: number
@@ -99,12 +101,20 @@ export class LiveDraft {
         private readonly onStop: (taskId: string) => void
     ) {}
 
-    start(taskId: string, chatId: number, state: DraftState): void {
+    start(taskId: string, chatId: number, state: DraftState, thread?: number): void {
         if (this.live.has(taskId)) {
             this.update(taskId, () => state)
             return
         }
-        const entry: Live = { chatId, draftId: draftId(taskId), state, lastSentAt: 0, timer: null, dirty: true }
+        const entry: Live = {
+            chatId,
+            thread,
+            draftId: draftId(taskId),
+            state,
+            lastSentAt: 0,
+            timer: null,
+            dirty: true
+        }
         this.live.set(taskId, entry)
         this.flush(taskId)
     }
@@ -188,12 +198,12 @@ export class LiveDraft {
         entry.lastSentAt = Date.now()
         const send = (text: string, parse: boolean) =>
             this.api.sendMessageDraft(entry.chatId, entry.draftId, text, {
+                message_thread_id: entry.thread,
                 parse_mode: parse ? 'HTML' : undefined,
                 can_stop: true
             })
-        const text = draftText(entry.state)
-        send(text, true)
-            .catch(() => send(text.replace(/<[^>]+>/g, ''), false))
+        send(draftText(entry.state), true)
+            .catch(() => send(draftText(entry.state, Date.now(), false), false))
             .catch((error) =>
                 log.warn(`draft for ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`)
             )

@@ -68,6 +68,8 @@ export async function withRetry<T>(call: () => Promise<T>): Promise<T> {
 }
 
 export interface SendOptions {
+    /** The topic of the chat the message goes to (private-chat topics), none for the General topic or a flat chat. */
+    thread?: number
     /** Lines under the reply (project, changes, windows): a footer block in a rich message, dashed lines in HTML. */
     footer?: string[]
     /** The owner's message this answers: Telegram shows it quoted above the reply. */
@@ -89,6 +91,7 @@ const replyParameters = (id: number | undefined): ReplyParameters | undefined =>
 /** Sends one HTML message, plain text when Telegram rejects the markup; returns its id. */
 async function sendOne(bot: Bot, chatId: number, part: string, options: SendOptions): Promise<number> {
     const other = {
+        message_thread_id: options.thread,
         reply_parameters: replyParameters(options.replyTo),
         reply_markup: options.markup,
         message_effect_id: options.effect,
@@ -129,6 +132,7 @@ export async function sendMarkdown(
         try {
             ids.push(
                 await sendOne(bot, chatId, part, {
+                    thread: options.thread,
                     replyTo: i === 0 ? options.replyTo : undefined,
                     markup: i === parts.length - 1 ? options.markup : undefined,
                     effect: i === 0 ? options.effect : undefined
@@ -167,6 +171,7 @@ export async function sendReply(
                     chatId,
                     { markdown: richMarkdown(part) + (footer ? `\n\n${richFooter(footer)}` : '') },
                     {
+                        message_thread_id: options.thread,
                         reply_parameters: replyParameters(i === 0 ? options.replyTo : undefined),
                         reply_markup: last ? options.markup : undefined,
                         message_effect_id: i === 0 ? options.effect : undefined
@@ -180,6 +185,7 @@ export async function sendReply(
             )
             ids.push(
                 ...(await sendMarkdown(bot, chatId, part, {
+                    thread: options.thread,
                     footer,
                     replyTo: i === 0 ? options.replyTo : undefined,
                     markup: last ? options.markup : undefined

@@ -72,6 +72,7 @@ async function main(): Promise<void> {
         })
     }
     const workspace: Workspace = {
+        projects: () => catalog.list('projects').map((entry) => entry.name),
         projectPath: (slug) => {
             const entry = projectEntry(slug)
             if (!entry) return null

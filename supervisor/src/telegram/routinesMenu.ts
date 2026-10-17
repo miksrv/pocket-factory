@@ -40,7 +40,7 @@ export function parseRoutineData(data: string): { action: RoutineAction; key: st
 }
 
 function escapeHtml(text: string): string {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 /** Time to or since `iso`: `5 min`, `3 h`, `2 d`. */

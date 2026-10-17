@@ -54,6 +54,8 @@ const log = createLogger('tasks')
 export interface Workspace {
     /** Checkout directory of a project slug, or null when the project or its directory does not exist. */
     projectPath: (slug: string) => string | null
+    /** Every project slug with a file, whether or not its checkout exists. */
+    projects: () => string[]
     /** MCP servers a project's checkout declares (`.mcp.json` names) and the ones its project file allows (`mcp:`), if restricted. */
     projectMcp: (slug: string) => { declared: string[]; allowed: string[] | null }
     /** Names of the servers agent files declare inline in `mcpServers:` (role-owned servers, started for that sub-agent only). */
@@ -89,6 +91,8 @@ export interface TaskServiceEvents {
     event: [event: TaskEvent]
     /** The CLI reported the subscription's rate-limit status (during a task or a probe). */
     limits: [snapshot: RateLimitSnapshot]
+    /** A conversation was named (its Haiku title landed) or deleted. */
+    conversation: [conversation: Conversation, change: 'titled' | 'deleted']
 }
 
 const fmtTokens = (n: number) =>
@@ -560,8 +564,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     deleteConversation(conversationId: string): void {
         if (this.activeTask(conversationId) || this.queuedTask(conversationId))
             throw new Error('a task of this conversation is still queued or running; stop it first')
+        const conversation = this.store.getConversation(conversationId)
         this.store.deleteConversation(conversationId)
         this.inbox.remove(conversationId)
+        if (conversation)
+            this.emit('conversation', { ...conversation, deleted_at: new Date().toISOString() }, 'deleted')
+    }
+
+    /** The project slugs a conversation can be bound to (the files in `data/config/projects`). */
+    projects(): string[] {
+        return this.workspace.projects()
     }
 
     // ---- what a task changed (the task page's Changes panel) ---------------
@@ -1153,6 +1165,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 if (!title || this.store.getConversation(conversationId)?.title !== placeholder) return
                 this.store.updateConversation(conversationId, { title })
                 log.info(`conversation ${conversationId} named "${title}"`)
+                const named = this.store.getConversation(conversationId)
+                if (named) this.emit('conversation', named, 'titled')
             } catch (error) {
                 log.warn(`naming a conversation failed: ${error instanceof Error ? error.message : String(error)}`)
             }

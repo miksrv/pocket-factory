@@ -116,6 +116,15 @@ export interface Task {
     finished_at: string | null
 }
 
+/** A topic of the owner's private chat with the bot, and the conversation it is. */
+export interface TelegramThread {
+    chat_id: number
+    thread_id: number
+    conversation_id: string
+    /** The name the bot gave the topic (the project, or the chat's title). */
+    name: string
+}
+
 export interface TaskEvent {
     id: number
     task_id: string
@@ -913,6 +922,59 @@ export class Store {
         return this.db
             .prepare('SELECT conversation_id, task_id FROM telegram_messages WHERE chat_id = ? AND message_id = ?')
             .get(chatId, messageId) as { conversation_id: string; task_id: string | null } | undefined
+    }
+
+    // ---- telegram threads (topics in the private chat) ---------------------
+
+    /** The conversation a topic of the chat is, while the conversation lives. */
+    telegramThread(chatId: number, threadId: number): TelegramThread | undefined {
+        return this.db
+            .prepare(
+                `SELECT tt.chat_id, tt.thread_id, tt.conversation_id, tt.name FROM telegram_threads tt
+                 JOIN conversations c ON c.id = tt.conversation_id
+                 WHERE tt.chat_id = ? AND tt.thread_id = ? AND c.deleted_at IS NULL`
+            )
+            .get(chatId, threadId) as TelegramThread | undefined
+    }
+
+    /** The topic of a conversation in a chat, if the bot made one. */
+    threadOf(conversationId: string, chatId: number): TelegramThread | undefined {
+        return this.db
+            .prepare(
+                'SELECT chat_id, thread_id, conversation_id, name FROM telegram_threads WHERE conversation_id = ? AND chat_id = ?'
+            )
+            .get(conversationId, chatId) as TelegramThread | undefined
+    }
+
+    setTelegramThread(chatId: number, threadId: number, conversationId: string, name: string): void {
+        this.db
+            .prepare(
+                `INSERT INTO telegram_threads (chat_id, thread_id, conversation_id, name, created_at) VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(chat_id, thread_id) DO UPDATE SET conversation_id = excluded.conversation_id, name = excluded.name`
+            )
+            .run(chatId, threadId, conversationId, name, now())
+    }
+
+    renameTelegramThread(chatId: number, threadId: number, name: string): void {
+        this.db
+            .prepare('UPDATE telegram_threads SET name = ? WHERE chat_id = ? AND thread_id = ?')
+            .run(name, chatId, threadId)
+    }
+
+    dropTelegramThread(chatId: number, threadId: number): void {
+        this.db.prepare('DELETE FROM telegram_threads WHERE chat_id = ? AND thread_id = ?').run(chatId, threadId)
+    }
+
+    /** The names of the chat's topics whose conversations still live: a new topic of the same project needs another name. */
+    telegramThreadNames(chatId: number): string[] {
+        return (
+            this.db
+                .prepare(
+                    `SELECT tt.name FROM telegram_threads tt JOIN conversations c ON c.id = tt.conversation_id
+                     WHERE tt.chat_id = ? AND c.deleted_at IS NULL`
+                )
+                .all(chatId) as Array<{ name: string }>
+        ).map((r) => r.name)
     }
 
     // ---- meta -------------------------------------------------------------

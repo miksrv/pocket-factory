@@ -136,6 +136,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         return fs.existsSync(dir) ? dir : null
     }
     const workspace: Workspace = {
+        projects: () => catalog.list('projects').map((entry) => entry.name),
         projectPath,
         projectMcp: () => ({ declared: [], allowed: null }),
         agentMcp: () => [],

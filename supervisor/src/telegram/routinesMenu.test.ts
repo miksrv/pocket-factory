@@ -130,7 +130,7 @@ describe('routineCard', () => {
 
     it('has no Run now for an invalid file, and shows the error', () => {
         const { text, keyboard } = routineCard(view({ errors: ['agent "x" not found'] }), 'UTC', { now: NOW })
-        expect(text).toContain('⚠️ agent &quot;x&quot; not found'.replace('&quot;', '"').replace('&quot;', '"'))
+        expect(text).toContain('⚠️ agent &quot;x&quot; not found')
         expect(buttons(keyboard)).toEqual(['📜 Runs', '« Routines'])
     })
 
