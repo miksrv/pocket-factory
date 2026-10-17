@@ -198,16 +198,25 @@ async function main(): Promise<void> {
     // must not take the web UI and the queue down with it: log and carry on
     // web-only; the container restart policy is not a retry loop for tasks.
     try {
-        // Registers the command menu in Telegram, so the client autocompletes them.
+        // Registers the command menu in Telegram, so the client autocompletes them, and the
+        // bot's profile text (what an empty chat and the profile page show).
         await bot.api.setMyCommands([
-            { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
-            { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
-            { command: 'mode', description: 'A new chat per message, or one thread: /mode fresh|thread' },
-            { command: 'status', description: 'What is going on' },
+            { command: 'routines', description: 'The routines on buttons: run, switch on / off, preview, last runs' },
+            { command: 'run', description: 'Fire a routine now: /run <name>' },
+            { command: 'status', description: 'What is going on, with a Stop button' },
             { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },
-            { command: 'routines', description: 'Routines and their last runs' },
-            { command: 'run', description: 'Fire a routine now: /run <name>' }
+            { command: 'model', description: "The orchestrator's model on buttons; /model <provider>:<model>" },
+            { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
+            { command: 'mode', description: 'A new chat per message, or one thread until /new' },
+            { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
+            { command: 'help', description: 'How this bot works' }
         ])
+        await bot.api.setMyShortDescription(
+            `Pocket Factory v${VERSION}: Claude Code on your own server, from this chat.`
+        )
+        await bot.api.setMyDescription(
+            'Send a task as text, voice, a photo or a file; the agent runs it in your checkouts and replies here. Routines, limits and the model are a command away.'
+        )
     } catch (error) {
         log.warn(`could not register Telegram commands: ${error instanceof Error ? error.message : String(error)}`)
     }

@@ -228,6 +228,20 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         }
     }
 
+    /**
+     * Switch a routine on or off without touching the rest of its file (the
+     * web's toggle and the Telegram card). A file whose frontmatter does not
+     * parse is left alone: `enabled:` would land in a file nobody can read.
+     */
+    setEnabled(name: string, enabled: boolean): RoutineView {
+        if (!this.catalog.exists('routines', name)) throw new Error('routine not found')
+        const entry = this.catalog.get('routines', name)
+        if (entry.frontmatter_error)
+            throw new Error(`the file has invalid YAML frontmatter (${entry.frontmatter_error}); fix it by hand first`)
+        this.catalog.save('routines', name, { frontmatter: { ...entry.frontmatter, enabled }, body: entry.body })
+        return this.get(name)!
+    }
+
     /** The routine's file was deleted or renamed: its runs and seen items go too. */
     forget(name: string): void {
         this.store.dropRoutine(name)

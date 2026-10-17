@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunk, footer, quoteReply, routeMessage, routineNotice } from './bot.js'
+import { footer, quoteReply, reactionFor, routeMessage, routineNotice } from './bot.js'
 import type { RoutineSpec } from './routines/spec.js'
 import type { RoutineRun, Task } from './store/index.js'
+import { chunk } from './telegram/send.js'
 
 const LIMIT = 4000
 
@@ -94,15 +95,15 @@ describe('footer', () => {
                 fallback: 'project work does not allow provider gpu (`providers:` in its project file)'
             }
         ])
-        expect(text.split('\n')).toEqual([
-            '— project: work',
-            '— researcher on gpu · gemma4:12b',
-            '— writer ran on the subscription (sonnet): project work does not allow provider gpu (`providers:` in its project file)'
+        expect(text).toEqual([
+            'project: work',
+            'researcher on gpu · gemma4:12b',
+            'writer ran on the subscription (sonnet): project work does not allow provider gpu (`providers:` in its project file)'
         ])
     })
 
     it('has no delegation line for a task that delegated nothing', () => {
-        expect(footer(task, undefined, null)).toBe('— project: work')
+        expect(footer(task, undefined, null)).toEqual(['project: work'])
     })
 })
 
@@ -185,5 +186,19 @@ describe('quoteReply', () => {
 
     it('cuts a long message', () => {
         expect(quoteReply('x'.repeat(5000))!.length).toBeLessThan(3100)
+    })
+})
+
+describe('reactionFor', () => {
+    it('follows the task through its states', () => {
+        const at = (status: Task['status'], ask = false, waits = false) =>
+            reactionFor({ status, ask: ask ? ({} as Task['ask']) : null, not_before: waits ? 'soon' : null })
+        expect(at('queued')).toBe('👀')
+        expect(at('queued', false, true)).toBe('😴')
+        expect(at('running')).toBe('👨‍💻')
+        expect(at('running', true)).toBe('🤔')
+        expect(at('done')).toBe('👍')
+        expect(at('failed')).toBe('💔')
+        expect(at('cancelled')).toBe('🫡')
     })
 })

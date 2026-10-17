@@ -8,6 +8,12 @@
 - Routines: the page is `/routines`, the files live in `data/config/routines/` (an old `schedules/` is moved once), Telegram says `/routines`, new tasks carry the source `routine`; run history, seen items and chat threads stay
 - Routines: the form puts Agent, Skill, Instructions and Triggers first and folds project, model, mode, report, session, once and hosts under "More"; the status panel is three columns
 - Routines: a routine's chat thread is a log — project, agent and model are shown as text, no messages or model changes there, a run never takes the thread's model
+- Telegram: `/routines` is a menu on buttons — a tap opens the routine's card with Run now, Switch on / off, Preview, last runs and a link to the web; `/run` alone opens the same menu; a routine's report and notices carry Run again and Routine buttons
+- Telegram: your message carries the task's state as a reaction (👀 seen, 👨‍💻 working, 🤔 asking, 😴 waiting for the window, 👍 done, 💔 failed, 🫡 stopped) and the reply quotes it; the "Working…" message is gone
+- Telegram: while a task runs a draft under the chat shows its steps, the tool under way and the agent's last words, with a Stop button that stops the task
+- Telegram: replies are rich messages rendered by Telegram from the agent's Markdown — headings, tables, lists, code with a language, quotes, up to 30k characters in one message; project, changes and windows go in a footer; a reply that opened a pull request gets a 🎉 effect and a PR button; Open leads to the task page
+- Telegram: `/model`, `/mode`, `/status` and `/usage` answer with buttons (the aliases and providers, the two modes, Stop, Refresh); Allow is green and Deny red; a settled question shows the answer on its button; a question without options asks the client for a reply
+- Telegram: the command menu, the bot's description and `/help` are refreshed; a voice note shows "typing" while it is transcribed
 - Projects: the Tracker and Checks fields are gone; both are prose in the project notes, which the developer agent and the skills read
 - Settings: the signed-in browsers and recent sign-ins tables scroll inside a fixed height
 - `.env`: `ROUTINES_SOFT_STOP`, `ROUTINES_LATE_MIN`, `ROUTINES_ASK_TIMEOUT_MIN`; the `SCHEDULES_*` names still work

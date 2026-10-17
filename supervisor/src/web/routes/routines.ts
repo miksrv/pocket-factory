@@ -68,22 +68,16 @@ export function routineRoutes(): Hono<Env> {
 
     /** Switch a routine on or off without touching the rest of its file. */
     app.put('/:name/enabled', async (c) => {
-        const { catalog, routines } = c.get('app')
+        const { routines } = c.get('app')
         const name = c.req.param('name')
         const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown }
         if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled must be a boolean' }, 400)
-        if (!catalog.exists('routines', name)) return c.json({ error: 'routine not found' }, 404)
-        const entry = catalog.get('routines', name)
-        if (entry.frontmatter_error)
-            return c.json(
-                { error: `the file has invalid YAML frontmatter (${entry.frontmatter_error}); fix it by hand first` },
-                409
-            )
-        catalog.save('routines', name, {
-            frontmatter: { ...entry.frontmatter, enabled: body.enabled },
-            body: entry.body
-        })
-        return c.json(routines.get(name))
+        if (!routines.get(name)) return c.json({ error: 'routine not found' }, 404)
+        try {
+            return c.json(routines.setEnabled(name, body.enabled))
+        } catch (error) {
+            return c.json({ error: error instanceof Error ? error.message : String(error) }, 409)
+        }
     })
 
     /** Forget the seen items: the next run treats everything the prefilter finds as new. */
