@@ -31,7 +31,7 @@ export interface Ask {
 export interface Task {
     id: string
     conversation_id: string
-    source: 'telegram' | 'web' | 'cron' | 'webhook' | 'delegate'
+    source: 'telegram' | 'web' | 'routine' | 'cron' | 'webhook' | 'delegate'
     prompt: string
     status: TaskStatus
     session_id: string | null
@@ -53,7 +53,7 @@ export interface Task {
     restarts: number
     /** What the task waits for from the owner; null while nothing is pending. */
     ask: Ask | null
-    /** The schedule that queued the task; null for the owner's own tasks. */
+    /** The routine that queued the task; null for the owner's own tasks. */
     schedule: string | null
     /** CLI alias (subscription) or the provider's model id the task was queued with; null = the default at start. */
     model: string | null
@@ -226,14 +226,14 @@ export interface Stats {
     /** The newest conversation in each state: where a notification click lands. */
     chat_unread_latest: { id: string; title: string | null } | null
     chat_needs_reply_latest: { id: string; title: string | null } | null
-    schedules: {
+    routines: {
         total: number
         on: number
         /** Files that cannot fire (bad cron, unknown project). */
         invalid: number
-        /** Schedules whose last firing was a prefilter error. */
+        /** Routines whose last firing was a prefilter error. */
         failing: string[]
-        /** Schedules whose last firing was a minute the factory slept through. */
+        /** Routines whose last firing was a minute the factory slept through. */
         missed: string[]
         next: { name: string; at: string } | null
     }
@@ -357,6 +357,10 @@ export interface Provider {
     concurrency: number
     /** Short system prompt and few tools instead of Claude Code's own (small models need it). */
     light: boolean
+    /** Output tokens per model call; empty = 8000. A looping small model fails at this, not at the CLI's 32k. */
+    max_output?: number
+    /** The model's context window in tokens, so the CLI compacts before a small window is full; empty = the CLI's assumption. */
+    context?: number
     mcp?: ProviderMcp[]
 }
 
@@ -367,7 +371,7 @@ export interface ProviderView extends Omit<Provider, 'mcp'> {
     token_set: boolean
     running: number
     health: { requests: number; ok: boolean | null; error: string | null; at: string | null } | null
-    /** Schedules (⏱) and agents whose file names this provider. */
+    /** Routines (⏱) and agents whose file names this provider. */
     used_by: string[]
 }
 
@@ -460,7 +464,7 @@ export interface ProjectToolchain {
     docker: { enabled: boolean }
 }
 
-export type Kind = 'agents' | 'skills' | 'projects' | 'schedules'
+export type Kind = 'agents' | 'skills' | 'projects' | 'routines'
 
 export interface CatalogEntry {
     kind: Kind
@@ -577,6 +581,8 @@ export interface McpOverview {
 export interface ToolList {
     common: string[]
     reported: string[]
+    /** Sub-agent types the CLI listed at its last session start (built-ins, agent files, a checkout's and plugins' agents); empty until a session ran. */
+    agents: string[]
     /** One entry per MCP server the factory has seen (claude.ai connectors, plugins, project servers, the owner's own); `tools` are full names, empty while the server needs authentication. */
     mcp: Array<{ server: string; label: string; source: string | null; status: string; tools: string[] }>
     source: 'cli' | 'default'
@@ -611,10 +617,10 @@ export type ProjectHost = HostRef | InlineHost
 
 export const isHostRef = (h: ProjectHost): h is HostRef => typeof (h as HostRef).host === 'string'
 
-/** A project or schedule file that refers to a shared host, with what it adds there. */
+/** A project or routine file that refers to a shared host, with what it adds there. */
 export interface HostUsage {
     project: string
-    kind: 'project' | 'schedule'
+    kind: 'project' | 'routine'
     path?: string
     notes?: string
 }
@@ -663,12 +669,12 @@ export interface HostTest {
 
 export type HostTarget = { ssh: string; key?: string } | { name: string }
 
-/** One firing of a schedule, as the scheduler recorded it. */
-export interface ScheduleRun {
+/** One firing of a routine, as the scheduler recorded it. */
+export interface RoutineRun {
     id: number
     schedule: string
     fired_at: string
-    trigger: 'cron' | 'manual'
+    trigger: 'schedule' | 'poll' | 'manual' | 'cron'
     /** `queued`: a task was created; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: the prefilter failed; `missed`: the factory was off at the minute. */
     status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed'
     note: string | null
@@ -679,18 +685,30 @@ export interface ScheduleRun {
     task_status: TaskStatus | null
 }
 
-/** What the scheduler knows about a schedule file beyond its text. */
-export interface ScheduleView {
+/** One of a routine's triggers as the scheduler reads it: a schedule (a cron) or a poll (a cron + a prefilter). */
+export interface RoutineTrigger {
+    kind: 'schedule' | 'poll'
+    cron: string
+    cron_text: string
+    tz: string
+    window: { days: number[] | null; hours: string | null }
+    prefilter: string | null
+    next_run: string | null
+}
+
+/** What the scheduler knows about a routine file beyond its text. */
+export interface RoutineView {
     name: string
     enabled: boolean
     /** What stops it from firing (bad cron, unknown project, …). */
     errors: string[]
     warnings: string[]
-    cron: string | null
-    cron_text: string | null
-    tz: string | null
-    window: { days: number[] | null; hours: string | null } | null
+    /** Empty: the routine runs only by hand (Run now). */
+    triggers: RoutineTrigger[]
     project: string | null
+    agent: string | null
+    skill: string | null
+    /** The prefilter kind Run now and the preview use (the first poll's); null = none. */
     prefilter: string | null
     notify: 'telegram' | 'none' | null
     session: 'fresh' | 'continue' | null
@@ -701,9 +719,9 @@ export interface ScheduleView {
     /** Pinned model alias for the runs; null = the factory's current one. */
     model: string | null
     next_run: string | null
-    last_run: ScheduleRun | null
+    last_run: RoutineRun | null
     /** The last firing that queued a task, with that task's status. */
-    last_task: ScheduleRun | null
+    last_task: RoutineRun | null
     active_task: { id: string; status: TaskStatus; created_at: string } | null
     conversation_id: string | null
     /** Prefilter items handed over (or seeded) so far. */
@@ -722,7 +740,7 @@ export interface PrefilterItem {
     seen_before?: string
 }
 
-export interface SchedulePreview {
+export interface RoutinePreview {
     items: PrefilterItem[]
     new_keys: string[]
     ms: number
@@ -998,7 +1016,7 @@ export const api = {
             method: 'PUT',
             body: JSON.stringify(provider)
         }),
-    /** Refused (409) while a schedule or agent names it, unless `force`. */
+    /** Refused (409) while a routine or agent names it, unless `force`. */
     deleteProvider: (name: string, force = false) =>
         request<void>(`/providers/${encodeURIComponent(name)}${force ? '?force=1' : ''}`, { method: 'DELETE' }),
     /** One tool-calling request to the endpoint: a draft from the form, or a saved provider by `{ name }`. */
@@ -1014,26 +1032,25 @@ export const api = {
             body: JSON.stringify({ provider, model })
         }),
 
-    schedules: () => request<ScheduleView[]>('/schedules/status'),
+    routines: () => request<RoutineView[]>('/routines/status'),
     /** A cron expression read back: valid or not, in words, next firing in the factory's zone. */
-    checkCron: (expr: string) => request<CronCheck>(`/schedules/cron?expr=${encodeURIComponent(expr)}`),
-    schedule: (name: string) => request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/status`),
+    checkCron: (expr: string) => request<CronCheck>(`/routines/cron?expr=${encodeURIComponent(expr)}`),
+    schedule: (name: string) => request<RoutineView>(`/routines/${encodeURIComponent(name)}/status`),
     /** The firings that mattered (a task, an error, a missed minute); `all` adds the empty polls and skips. */
-    scheduleRuns: (name: string, limit = 30, all = false) =>
-        request<ScheduleRun[]>(`/schedules/${encodeURIComponent(name)}/runs?limit=${limit}${all ? '&all=1' : ''}`),
+    routineRuns: (name: string, limit = 30, all = false) =>
+        request<RoutineRun[]>(`/routines/${encodeURIComponent(name)}/runs?limit=${limit}${all ? '&all=1' : ''}`),
     /** Fire now: ignores the cron, the window and the soft-stop; never overlaps a run in progress. */
-    runSchedule: (name: string) =>
-        request<ScheduleRun>(`/schedules/${encodeURIComponent(name)}/run`, { method: 'POST' }),
+    runRoutine: (name: string) => request<RoutineRun>(`/routines/${encodeURIComponent(name)}/run`, { method: 'POST' }),
     /** Run the prefilter and show what it finds without marking anything. */
-    previewSchedule: (name: string) =>
-        request<SchedulePreview>(`/schedules/${encodeURIComponent(name)}/preview`, { method: 'POST' }),
-    enableSchedule: (name: string, enabled: boolean) =>
-        request<ScheduleView>(`/schedules/${encodeURIComponent(name)}/enabled`, {
+    previewRoutine: (name: string) =>
+        request<RoutinePreview>(`/routines/${encodeURIComponent(name)}/preview`, { method: 'POST' }),
+    enableRoutine: (name: string, enabled: boolean) =>
+        request<RoutineView>(`/routines/${encodeURIComponent(name)}/enabled`, {
             method: 'PUT',
             body: JSON.stringify({ enabled })
         }),
-    forgetScheduleSeen: (name: string) =>
-        request<{ forgotten: number }>(`/schedules/${encodeURIComponent(name)}/seen`, { method: 'DELETE' }),
+    forgetRoutineSeen: (name: string) =>
+        request<{ forgotten: number }>(`/routines/${encodeURIComponent(name)}/seen`, { method: 'DELETE' }),
 
     presets: () => request<Preset[]>('/presets'),
     installPreset: (name: string, overwrite = false) =>

@@ -59,7 +59,7 @@ describe('API routes (open mode)', () => {
                 chat_unread: 0,
                 chat_needs_reply: 0,
                 chat_active: 0,
-                schedules: { total: 0, on: 0, invalid: 0, failing: [], missed: [], next: null }
+                routines: { total: 0, on: 0, invalid: 0, failing: [], missed: [], next: null }
             })
             expect(body).toMatchObject({
                 running: [],
@@ -88,18 +88,18 @@ describe('API routes (open mode)', () => {
             expect(body.models.removed).toEqual([{ name: 'gone', tokens_today: 10, tokens_total: 10 }])
         })
 
-        it('counts schedule files and names the next firing', async () => {
+        it('counts routine files and names the next firing', async () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))
-            t.ctx.catalog.save('schedules', 'nightly', {
+            t.ctx.catalog.save('routines', 'nightly', {
                 frontmatter: { cron: '0 9 * * *', enabled: true, action: 'report' },
                 body: 'Look around.'
             })
             const body = (await (await t.request('/api/status')).json()) as {
-                stats: { schedules: { total: number; next: { name: string; at: string } | null } }
+                stats: { routines: { total: number; next: { name: string; at: string } | null } }
             }
-            expect(body.stats.schedules.total).toBe(1)
-            expect(body.stats.schedules.next).toEqual({ name: 'nightly', at: '2026-10-07T09:00:00.000Z' })
+            expect(body.stats.routines.total).toBe(1)
+            expect(body.stats.routines.next).toEqual({ name: 'nightly', at: '2026-10-07T09:00:00.000Z' })
         })
 
         it('lists the workspaces with their git state', async () => {
@@ -160,6 +160,35 @@ describe('API routes (open mode)', () => {
             t.ctx.store.createTask(created.id, 'web', 'pending')
             const res = await t.request(`/api/conversations/${created.id}`, { method: 'DELETE' })
             expect(res.status).toBe(409)
+        })
+
+        it("keeps a routine's thread a log: no project, model or message of the owner's", async () => {
+            const thread = t.ctx.store.createConversation('web', 'schedule:nightly', '⏱ nightly')
+            const project = await t.request(
+                `/api/conversations/${thread.id}`,
+                json({ project: null }, { method: 'PATCH' })
+            )
+            expect(project.status).toBe(409)
+            expect(((await project.json()) as { error: string }).error).toMatch(/routine "nightly".*Project/)
+            const model = await t.request(
+                `/api/conversations/${thread.id}/model`,
+                json({ provider: null, model: 'opus' }, { method: 'PUT' })
+            )
+            expect(model.status).toBe(409)
+            expect(((await model.json()) as { error: string }).error).toMatch(/routine "nightly".*Model/)
+            const message = await t.request(`/api/conversations/${thread.id}/messages`, json({ prompt: 'and now?' }))
+            expect(message.status).toBe(409)
+            expect(((await message.json()) as { error: string }).error).toMatch(/Run now/)
+            expect(t.ctx.store.listTasks({ conversationId: thread.id })).toEqual([])
+            // The owner's own conversation still takes all three.
+            const own = await create()
+            expect(
+                (await t.request(`/api/conversations/${own.id}`, json({ project: null }, { method: 'PATCH' }))).status
+            ).toBe(200)
+            expect(
+                (await t.request(`/api/conversations/${own.id}/model`, json({ model: 'opus' }, { method: 'PUT' })))
+                    .status
+            ).toBe(200)
         })
 
         it('pages the list with before + before_id', async () => {
@@ -280,11 +309,11 @@ describe('API routes (open mode)', () => {
         })
     })
 
-    describe('GET /api/schedules/cron', () => {
+    describe('GET /api/routines/cron', () => {
         it('reads a valid expression back with the next firing', async () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))
-            const res = await t.request(`/api/schedules/cron?expr=${encodeURIComponent('*/15 * * * *')}`)
+            const res = await t.request(`/api/routines/cron?expr=${encodeURIComponent('*/15 * * * *')}`)
             expect(await res.json()).toEqual({
                 ok: true,
                 text: expect.stringContaining('every 15 min') as string,
@@ -297,7 +326,7 @@ describe('API routes (open mode)', () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))
             const res = await t.request(
-                `/api/schedules/cron?expr=${encodeURIComponent('0 9 * * *')}&tz=${encodeURIComponent('Europe/Warsaw')}`
+                `/api/routines/cron?expr=${encodeURIComponent('0 9 * * *')}&tz=${encodeURIComponent('Europe/Warsaw')}`
             )
             // 09:00 in Warsaw (UTC+2 in October) has passed at 12:00 local: tomorrow 07:00 UTC.
             expect(await res.json()).toMatchObject({ ok: true, next: '2026-10-07T07:00:00.000Z', tz: 'Europe/Warsaw' })
@@ -308,18 +337,18 @@ describe('API routes (open mode)', () => {
             ['61 * * * *', { ok: false }],
             ['not cron', { ok: false }]
         ])('reports %j as not ok', async (expr, expected) => {
-            const res = await t.request(`/api/schedules/cron?expr=${encodeURIComponent(expr)}`)
+            const res = await t.request(`/api/routines/cron?expr=${encodeURIComponent(expr)}`)
             expect(res.status).toBe(200)
             expect(await res.json()).toMatchObject(expected)
         })
 
         it('reports an unknown time zone', async () => {
-            const res = await t.request('/api/schedules/cron?expr=*+*+*+*+*&tz=Mars/Olympus')
+            const res = await t.request('/api/routines/cron?expr=*+*+*+*+*&tz=Mars/Olympus')
             expect(await res.json()).toMatchObject({ ok: false, error: 'unknown time zone "Mars/Olympus"' })
         })
 
-        it('is not taken for a schedule file name', async () => {
-            const res = await t.request('/api/schedules/status')
+        it('is not taken for a routine file name', async () => {
+            const res = await t.request('/api/routines/status')
             expect(res.status).toBe(200)
             expect(await res.json()).toEqual([])
         })

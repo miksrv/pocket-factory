@@ -1,7 +1,7 @@
 {
     "name": "Pocket Factory",
     "short_name": "Factory",
-    "description": "A self-hosted layer over Claude Code: tasks from Telegram and the browser, agents, audit log, schedules.",
+    "description": "A self-hosted layer over Claude Code: tasks from Telegram and the browser, agents, audit log, routines.",
     "start_url": "/",
     "scope": "/",
     "display": "standalone",

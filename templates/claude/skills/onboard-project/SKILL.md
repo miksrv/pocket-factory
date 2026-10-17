@@ -24,21 +24,17 @@ repo: https://github.com/owner/shop
 default_branch: main
 pr_base: main
 skill: feature-to-pr
-tracker:
-  type: github        # github | clickup | trac | jira | none
-  url: https://github.com/owner/shop/issues
 hosts:
   - host: staging-eu                # a shared host (connection) from /data/config/hosts.yaml
     path: /srv/shop     # this project's path on that server
     notes: compose service `web`; docker needs sudo there; restart with `docker compose up -d web`
-checks:
-  - yarn lint
-  - yarn typecheck
-  - yarn test
 ---
 
-Free-form notes for the agent: conventions, gotchas, what never to touch,
-how deploys work, where the docs are.
+Free-form notes for the agent: conventions, gotchas, what never to touch, how deploys work, where the docs are.
+
+Checks before a PR, from the repository root (all must pass): `yarn lint`, `yarn typecheck`, `yarn test`.
+
+Tracker: GitHub issues, https://github.com/owner/shop/issues. When a PR is open, comment on the ticket with its link.
 ```
 
-`path` defaults to `/data/workspaces/<slug>`. `skill` names the workflow for development tasks: `feature-to-pr` by default, or one installed from a preset (for example `fullstack-feature` for a `client/` + `server/` layout); list what exists in `/data/claude/skills/` and pick the one whose description matches. Branches are `feature/…` for features and `fix/…` for defects unless the repository says otherwise; write a convention into the notes rather than a field. The same goes for the tracker: `tracker` holds only the type and the URL; what happens to a ticket after its PR is open (the status to set, a tag, an assignee) is a sentence in the notes. `hosts` refer by name to the shared hosts in `/data/config/hosts.yaml`, which holds the connection only — the `ssh` target (user@host or user@host:port) and the `key` (a file name in `/data/secrets/ssh/`, optional) — once for every project; read that file first and reuse an existing host when the owner names the same server, otherwise add the connection there (name, ssh, key) and refer to it from the project. Everything about the project on that server — its `path` and `notes` (what runs there, how deploys work, what never to touch) — goes into the project's own entry. Keys are never copied anywhere; a key or password never goes into a project file or hosts.yaml; passwords are not supported.
+`path` defaults to `/data/workspaces/<slug>`. `skill` names the workflow for development tasks: `feature-to-pr` by default, or one installed from a preset (for example `fullstack-feature` for a `client/` + `server/` layout); list what exists in `/data/claude/skills/` and pick the one whose description matches. Branches are `feature/…` for features and `fix/…` for defects unless the repository says otherwise; write a convention into the notes rather than a field. The checks and the tracker are notes too, never fields: the commands to run before a PR (only what this environment can run; name the ones that run in CI only as such), where the tickets live, and what happens to a ticket after its PR is open (the status to set, a tag, an assignee). Skip either sentence when the repository's own `CLAUDE.md` already says it. `hosts` refer by name to the shared hosts in `/data/config/hosts.yaml`, which holds the connection only — the `ssh` target (user@host or user@host:port) and the `key` (a file name in `/data/secrets/ssh/`, optional) — once for every project; read that file first and reuse an existing host when the owner names the same server, otherwise add the connection there (name, ssh, key) and refer to it from the project. Everything about the project on that server — its `path` and `notes` (what runs there, how deploys work, what never to touch) — goes into the project's own entry. Keys are never copied anywhere; a key or password never goes into a project file or hosts.yaml; passwords are not supported.

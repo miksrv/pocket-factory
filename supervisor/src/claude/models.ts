@@ -3,7 +3,7 @@
  * `/model`, Settings), kept in `meta` under `claude.model`, never in `.env`:
  * the CLI resolves an alias to the subscription's current model of that tier,
  * so the factory follows releases by itself. Sub-agents keep the `model:` of
- * their own file (`inherit` follows this one); a schedule may pin one for its
+ * their own file (`inherit` follows this one); a routine may pin one for its
  * runs. There is no model list endpoint on purpose (SPEC §8), hence the
  * static list.
  */

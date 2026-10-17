@@ -15,7 +15,7 @@ export interface Item {
 export interface PrefilterContext {
     cwd: string
     env: NodeJS.ProcessEnv
-    /** The schedule's project, when it has one. */
+    /** The routine's project, when it has one. */
     project: { slug: string; repo: string | null } | null
 }
 

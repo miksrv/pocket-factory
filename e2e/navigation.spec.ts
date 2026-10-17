@@ -8,7 +8,7 @@ const PAGES = [
     { link: 'Agents', heading: 'Agents' },
     { link: 'Skills', heading: 'Skills' },
     { link: 'Projects', heading: 'Projects' },
-    { link: 'Schedules', heading: 'Schedules' },
+    { link: 'Routines', heading: 'Routines' },
     { link: 'Presets', heading: 'Presets' },
     { link: 'Settings', heading: 'Settings' }
 ]

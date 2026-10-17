@@ -11,6 +11,7 @@ import {
     tokenVarProblem
 } from '../../files/providers.js'
 import { fromOpenAiResponse, type OpenAiResponse, toOpenAiRequest } from '../../gateway/translate.js'
+import { mcpKey } from '../../tasks/service.js'
 import type { Env } from '../context.js'
 
 /**
@@ -21,14 +22,14 @@ import type { Env } from '../context.js'
  * when its endpoint has one.
  */
 
-/** Who refers to a provider: schedules and agents with `provider: <name>`. */
+/** Who refers to a provider: routines and agents with `provider: <name>`. */
 function usedBy(c: { get: (k: 'app') => Env['Variables']['app'] }, name: string): string[] {
     const { catalog } = c.get('app')
-    return (['schedules', 'agents'] as const).flatMap((kind) =>
+    return (['routines', 'agents'] as const).flatMap((kind) =>
         catalog
             .list(kind)
             .filter((e) => e.frontmatter.provider === name)
-            .map((e) => `${kind === 'schedules' ? '⏱ ' : ''}${e.name}`)
+            .map((e) => `${kind === 'routines' ? '⏱ ' : ''}${e.name}`)
     )
 }
 
@@ -73,6 +74,9 @@ function candidate(c: { get: (k: 'app') => Env['Variables']['app'] }, body: Body
         small: typeof body.small === 'string' ? body.small : undefined,
         concurrency: typeof body.concurrency === 'number' ? body.concurrency : 1,
         light: body.light !== false,
+        // Validated by `save`; a draft for a test or a model list only carries them along.
+        max_output: typeof body.max_output === 'number' ? body.max_output : undefined,
+        context: typeof body.context === 'number' ? body.context : undefined,
         mcp
     }
 }
@@ -144,10 +148,28 @@ export function providerRoutes(): Hono<Env> {
 
     /** Create or update; `?create=1` refuses to replace an existing name. */
     app.put('/:name', async (c) => {
-        const { providers } = c.get('app')
+        const { providers, tasks } = c.get('app')
         const body = (await c.req.json().catch(() => null)) as Body | null
         if (!body || typeof body.url !== 'string') return c.json({ error: 'url is required' }, 400)
         const before = providers.get(c.req.param('name'))
+        // One name, one server: a provider's MCP server named like a connector's, a plugin's, a project's or the
+        // owner's own would make `mcp__<name>__<tool>` ambiguous in agent files and permission rules.
+        const own = `provider:${typeof body.name === 'string' && body.name ? body.name : c.req.param('name')}`
+        const clash = (Array.isArray(body.mcp) ? (body.mcp as Array<{ name?: unknown }>) : [])
+            .map((s) => (typeof s.name === 'string' ? s.name.trim() : ''))
+            .filter(Boolean)
+            .map((name) => ({
+                name,
+                other: tasks.mcpRegistry().find((e) => e.key === mcpKey(name) && e.source !== own)
+            }))
+            .find((c) => c.other)
+        if (clash)
+            return c.json(
+                {
+                    error: `MCP server name "${clash.name}" is already the ${clash.other!.source ?? 'other'} server ${clash.other!.name}; one name, one server, or mcp__${clash.name}__<tool> names two things`
+                },
+                400
+            )
         if (before && c.req.query('create'))
             return c.json(
                 { error: `a provider named "${before.name}" already exists — open it from the list to edit it` },
@@ -167,7 +189,7 @@ export function providerRoutes(): Hono<Env> {
         }
     })
 
-    /** Remove; a provider that schedules or agents name answers 409 with their names unless `?force=1`. */
+    /** Remove; a provider that routines or agents name answers 409 with their names unless `?force=1`. */
     app.delete('/:name', (c) => {
         const { providers } = c.get('app')
         const name = c.req.param('name')

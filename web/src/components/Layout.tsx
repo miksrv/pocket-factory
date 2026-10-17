@@ -27,7 +27,7 @@ const NAV: Array<{ to: string; label: string; icon: IconName; section?: string }
     { to: '/agents', label: 'Agents', icon: 'agents', section: 'Factory' },
     { to: '/skills', label: 'Skills', icon: 'skills' },
     { to: '/projects', label: 'Projects', icon: 'projects' },
-    { to: '/schedules', label: 'Schedules', icon: 'schedules' },
+    { to: '/routines', label: 'Routines', icon: 'routines' },
     { to: '/presets', label: 'Presets', icon: 'presets' },
     { to: '/settings', label: 'Settings', icon: 'settings', section: 'System' }
 ]
@@ -56,9 +56,8 @@ export function Layout() {
     const unread = status.data?.stats.chat_unread ?? 0
     const needsReply = status.data?.stats.chat_needs_reply ?? 0
     const chatActive = status.data?.stats.chat_active ?? 0
-    // Schedules that need the owner: an invalid file or a prefilter that fails (a missed minute is told on the page and in Telegram).
-    const schedulesBad =
-        (status.data?.stats.schedules?.invalid ?? 0) + (status.data?.stats.schedules?.failing.length ?? 0)
+    // Routines that need the owner: an invalid file or a prefilter that fails (a missed minute is told on the page and in Telegram).
+    const routinesBad = (status.data?.stats.routines?.invalid ?? 0) + (status.data?.stats.routines?.failing.length ?? 0)
     // One badge per item: the Chat item shows what needs the owner first —
     // replies not seen yet, then questions waiting for an answer, then work in progress.
     const chatBadge =
@@ -215,12 +214,12 @@ export function Layout() {
                                 {item.to === '/tasks' && running > 0 && (
                                     <span className='badge running count'>{running}</span>
                                 )}
-                                {item.to === '/schedules' && schedulesBad > 0 && (
+                                {item.to === '/routines' && routinesBad > 0 && (
                                     <span
                                         className='badge ask count'
-                                        title={`${schedulesBad} schedule(s) need attention`}
+                                        title={`${routinesBad} routine(s) need attention`}
                                     >
-                                        {schedulesBad}
+                                        {routinesBad}
                                     </span>
                                 )}
                                 {item.to === '/chat' && chatBadge && (

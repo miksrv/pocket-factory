@@ -1,6 +1,8 @@
 # Plan: Schedules become Routines
 
-Status: planned for **1.5.0**, nothing built yet. Owner's call (2026-10-16): a schedule is not "a
+Status: **shipped in 1.5.0** (phases 1 and 2; phase 3, the `api` trigger, is still open). Owner's
+decisions (2026-10-16): "Рутины" in Russian, a routine may have no trigger at all (Run now only),
+no aliases or redirects for the old paths at all. Owner's call (2026-10-16): a schedule is not "a
 task at 08:10" but routine work an agent does again and again, as in Claude Code's routines (a
 saved agent + prompt + trigger). 1.4.1-1.4.2 already made the run *be* the agent the owner picked
 (`claude --agent`, the skill in the prompt), so what is left is mostly the model and the words.

@@ -7,7 +7,8 @@ import type { TaskGit } from '../git/changes.js'
 
 /** `delegate`: the hidden conversation of a task an orchestrator delegated (see `Task.parent_id`). */
 export type Channel = 'telegram' | 'web' | 'delegate'
-export type TaskSource = 'telegram' | 'web' | 'cron' | 'webhook' | 'delegate'
+/** `routine` is a routine's run; `cron` is what the rows before 1.5.0 say. */
+export type TaskSource = 'telegram' | 'web' | 'routine' | 'cron' | 'webhook' | 'delegate'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 export type TaskEventType =
     'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
@@ -92,9 +93,9 @@ export interface Task {
     restarts: number
     /** What the task waits for from the owner; null while nothing is pending (always null once finished). */
     ask: Ask | null
-    /** Name of the schedule that queued the task; null for the owner's own tasks. */
+    /** Name of the routine that queued the task; null for the owner's own tasks. */
     schedule: string | null
-    /** CLI model alias the task was queued with (a schedule's `model:`); null = the factory's current model at start. */
+    /** CLI model alias the task was queued with (a routine's `model:`); null = the factory's current model at start. */
     model: string | null
     /** The provider the task runs on (data/config/providers.yaml); null = the subscription. */
     provider: string | null
@@ -113,6 +114,15 @@ export interface Task {
     created_at: string
     started_at: string | null
     finished_at: string | null
+}
+
+/** A topic of the owner's private chat with the bot, and the conversation it is. */
+export interface TelegramThread {
+    chat_id: number
+    thread_id: number
+    conversation_id: string
+    /** The name the bot gave the topic (the project, or the chat's title). */
+    name: string
 }
 
 export interface TaskEvent {
@@ -217,17 +227,18 @@ export interface ChatRef {
 }
 
 /**
- * One firing of a schedule: what the scheduler decided at that minute.
+ * One firing of a routine: what the scheduler decided at that minute.
  * `queued` = a task was created (`task_id`), `empty` = the prefilter found
  * nothing new, `skipped` = the run was not attempted (previous run still
  * active, soft-stop), `error` = the prefilter failed, `missed` = the minute
  * passed while the factory was off (nothing was run).
  */
-export interface ScheduleRun {
+export interface RoutineRun {
     id: number
     schedule: string
     fired_at: string
-    trigger: 'cron' | 'manual'
+    /** Which trigger fired: a schedule, a poll, or the owner's Run now; `cron` in rows before 1.5.0. */
+    trigger: 'schedule' | 'poll' | 'manual' | 'cron'
     status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed'
     note: string | null
     items: number
@@ -237,8 +248,8 @@ export interface ScheduleRun {
     task_status: TaskStatus | null
 }
 
-/** Runs kept per schedule; older firings are pruned on insert. */
-const SCHEDULE_RUNS_KEPT = 1000
+/** Runs kept per routine; older firings are pruned on insert. */
+const ROUTINE_RUNS_KEPT = 1000
 /** A persisted rate-limit reading; see `RateLimits` for where it comes from. */
 export interface RateLimitSnapshot extends RateLimits {
     id: number
@@ -349,13 +360,13 @@ const LISTED = `c.channel != 'delegate'`
  * ~95 % of the sum and drown the work itself (owner's trial, 2026-10-15).
  */
 const FRESH_TOKENS = 'input_tokens + output_tokens + cache_creation_tokens'
-/** Who made an event: the sub-agent it came from, else the agent its task runs as (a schedule's `--agent`, a delegated role); null = the orchestrator. */
+/** Who made an event: the sub-agent it came from, else the agent its task runs as (a routine's `--agent`, a delegated role); null = the orchestrator. */
 const EVENT_AGENT = 'COALESCE(e.agent, t.agent)'
 
 const LLM_FRESH_TOKENS = `json_extract(e.payload, '$.tokens') - COALESCE(json_extract(e.payload, '$.cacheReadTokens'), 0)`
 const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply, ${ACTIVE} AS active FROM conversations c`
-/** A schedule run with the status of the task it queued, if any. */
-const SCHEDULE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
+/** A routine run with the status of the task it queued, if any. */
+const ROUTINE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
 
 type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply' | 'active'> & {
     unread: number
@@ -756,10 +767,10 @@ export class Store {
         }
     }
 
-    // ---- schedules --------------------------------------------------------
+    // ---- routines --------------------------------------------------------
 
-    /** The task of a schedule that is still queued or running, if any (one run at a time per schedule). */
-    activeScheduleTask(schedule: string): Task | undefined {
+    /** The task of a routine that is still queued or running, if any (one run at a time per routine). */
+    activeRoutineTask(schedule: string): Task | undefined {
         const row = this.db
             .prepare(
                 `SELECT * FROM tasks WHERE schedule = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`
@@ -768,7 +779,7 @@ export class Store {
         return row && taskOf(row)
     }
 
-    addScheduleRun(run: Omit<ScheduleRun, 'id' | 'task_status'>): ScheduleRun {
+    addRoutineRun(run: Omit<RoutineRun, 'id' | 'task_status'>): RoutineRun {
         const result = this.db
             .prepare(
                 'INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
@@ -778,32 +789,32 @@ export class Store {
             .prepare(
                 'DELETE FROM schedule_runs WHERE schedule = ? AND id NOT IN (SELECT id FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?)'
             )
-            .run(run.schedule, run.schedule, SCHEDULE_RUNS_KEPT)
+            .run(run.schedule, run.schedule, ROUTINE_RUNS_KEPT)
 
         return { ...run, task_status: null, id: Number(result.lastInsertRowid) }
     }
 
     /** Newest first. By default only the firings that mattered (a task, an error, a missed minute); `all` adds the empty polls and skips. */
-    listScheduleRuns(schedule: string, limit = 20, all = false): ScheduleRun[] {
+    listRoutineRuns(schedule: string, limit = 20, all = false): RoutineRun[] {
         const filter = all ? '' : "AND r.status NOT IN ('empty', 'skipped')"
         return this.db
-            .prepare(`SELECT ${SCHEDULE_RUN} WHERE r.schedule = ? ${filter} ORDER BY r.id DESC LIMIT ?`)
-            .all(schedule, limit) as unknown as ScheduleRun[]
+            .prepare(`SELECT ${ROUTINE_RUN} WHERE r.schedule = ? ${filter} ORDER BY r.id DESC LIMIT ?`)
+            .all(schedule, limit) as unknown as RoutineRun[]
     }
 
-    /** The last firing of every schedule, by name; with `withTask`, the last one that queued a task. */
-    lastScheduleRuns(withTask = false): Map<string, ScheduleRun> {
+    /** The last firing of every routine, by name; with `withTask`, the last one that queued a task. */
+    lastRoutineRuns(withTask = false): Map<string, RoutineRun> {
         const filter = withTask ? 'AND task_id IS NOT NULL' : ''
         const rows = this.db
             .prepare(
-                `SELECT ${SCHEDULE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`
+                `SELECT ${ROUTINE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`
             )
-            .all() as unknown as ScheduleRun[]
+            .all() as unknown as RoutineRun[]
         return new Map(rows.map((r) => [r.schedule, r]))
     }
 
     /** Every schedule name the store remembers (runs or seen items), for cleaning up after a deleted file. */
-    scheduleNames(): string[] {
+    routineNames(): string[] {
         return (
             this.db.prepare('SELECT schedule FROM schedule_runs UNION SELECT schedule FROM seen_items').all() as Array<{
                 schedule: string
@@ -813,7 +824,7 @@ export class Store {
 
     /**
      * Earlier versions of an item whose key changes with the item (`<id>@<change time>`,
-     * `<pr>@<head sha>`): the schedule handed `<base>@…` over before, so the
+     * `<pr>@<head sha>`): the routine handed `<base>@…` over before, so the
      * item is back because it changed — maybe by the agent's own doing.
      */
     seenVariants(schedule: string, base: string): Array<{ key: string; first_seen: string; task_id: string | null }> {
@@ -824,7 +835,7 @@ export class Store {
             )
             .all(schedule, `${escaped}@%`) as Array<{ key: string; first_seen: string; task_id: string | null }>
     }
-    /** Of the given keys, the ones the schedule already handed to a task (or seeded). */
+    /** Of the given keys, the ones the routine already handed to a task (or seeded). */
     seenKeys(schedule: string, keys: string[]): Set<string> {
         const seen = new Set<string>()
         const stmt = this.db.prepare('SELECT 1 FROM seen_items WHERE schedule = ? AND key = ?')
@@ -847,13 +858,13 @@ export class Store {
         for (const item of items) stmt.run(schedule, item.key, item.title, ts, taskId)
     }
 
-    /** Forget what the schedule has seen: the next run treats every item as new. */
+    /** Forget what the routine has seen: the next run treats every item as new. */
     forgetSeen(schedule: string): number {
         return Number(this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule).changes)
     }
 
-    /** A schedule was deleted or renamed: its runs, seen items and marks go with it. */
-    dropSchedule(schedule: string): void {
+    /** A routine was deleted or renamed: its runs, seen items and marks go with it. */
+    dropRoutine(schedule: string): void {
         this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule)
         this.db.prepare('DELETE FROM schedule_runs WHERE schedule = ?').run(schedule)
         this.db.prepare('DELETE FROM meta WHERE key LIKE ?').run(`schedule:${schedule}:%`)
@@ -911,6 +922,59 @@ export class Store {
         return this.db
             .prepare('SELECT conversation_id, task_id FROM telegram_messages WHERE chat_id = ? AND message_id = ?')
             .get(chatId, messageId) as { conversation_id: string; task_id: string | null } | undefined
+    }
+
+    // ---- telegram threads (topics in the private chat) ---------------------
+
+    /** The conversation a topic of the chat is, while the conversation lives. */
+    telegramThread(chatId: number, threadId: number): TelegramThread | undefined {
+        return this.db
+            .prepare(
+                `SELECT tt.chat_id, tt.thread_id, tt.conversation_id, tt.name FROM telegram_threads tt
+                 JOIN conversations c ON c.id = tt.conversation_id
+                 WHERE tt.chat_id = ? AND tt.thread_id = ? AND c.deleted_at IS NULL`
+            )
+            .get(chatId, threadId) as TelegramThread | undefined
+    }
+
+    /** The topic of a conversation in a chat, if the bot made one. */
+    threadOf(conversationId: string, chatId: number): TelegramThread | undefined {
+        return this.db
+            .prepare(
+                'SELECT chat_id, thread_id, conversation_id, name FROM telegram_threads WHERE conversation_id = ? AND chat_id = ?'
+            )
+            .get(conversationId, chatId) as TelegramThread | undefined
+    }
+
+    setTelegramThread(chatId: number, threadId: number, conversationId: string, name: string): void {
+        this.db
+            .prepare(
+                `INSERT INTO telegram_threads (chat_id, thread_id, conversation_id, name, created_at) VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(chat_id, thread_id) DO UPDATE SET conversation_id = excluded.conversation_id, name = excluded.name`
+            )
+            .run(chatId, threadId, conversationId, name, now())
+    }
+
+    renameTelegramThread(chatId: number, threadId: number, name: string): void {
+        this.db
+            .prepare('UPDATE telegram_threads SET name = ? WHERE chat_id = ? AND thread_id = ?')
+            .run(name, chatId, threadId)
+    }
+
+    dropTelegramThread(chatId: number, threadId: number): void {
+        this.db.prepare('DELETE FROM telegram_threads WHERE chat_id = ? AND thread_id = ?').run(chatId, threadId)
+    }
+
+    /** The names of the chat's topics whose conversations still live: a new topic of the same project needs another name. */
+    telegramThreadNames(chatId: number): string[] {
+        return (
+            this.db
+                .prepare(
+                    `SELECT tt.name FROM telegram_threads tt JOIN conversations c ON c.id = tt.conversation_id
+                     WHERE tt.chat_id = ? AND c.deleted_at IS NULL`
+                )
+                .all(chatId) as Array<{ name: string }>
+        ).map((r) => r.name)
     }
 
     // ---- meta -------------------------------------------------------------
@@ -1106,7 +1170,7 @@ export class Store {
             )
             .all() as Array<{ agent: string; n: number }>
         for (const r of running) row(r.agent).running = r.n
-        // A task that runs as an agent (a schedule's, a delegated role, light mode) is a run of that agent.
+        // A task that runs as an agent (a routine's, a delegated role, light mode) is a run of that agent.
         const own = this.db
             .prepare(
                 `SELECT agent, COUNT(*) AS runs, MAX(started_at) AS last, SUM(status = 'running') AS running FROM tasks

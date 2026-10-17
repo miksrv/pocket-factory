@@ -11,7 +11,7 @@ import { BadName, NotFound } from './catalog.js'
  * Model providers besides the subscription — `<config>/providers.yaml`, one
  * entry per endpoint: a self-hosted model (Ollama, llama.cpp, vLLM on any
  * machine) or a cloud API (OpenRouter, Gemini, OpenAI, Groq …). A provider is
- * chosen per task (a schedule, a chat, an agent that a task runs as); the
+ * chosen per task (a routine, a chat, an agent that a task runs as); the
  * `claude` CLI then talks to it instead of Anthropic, through the factory's
  * gateway, which holds the key. A `kind: anthropic` endpoint speaks the
  * Messages API itself (`/v1/messages`); a `kind: openai` one speaks the chat
@@ -48,6 +48,17 @@ export interface Provider {
     concurrency: number
     /** Light mode: a short system prompt and few tools instead of Claude Code's full prompt (small models need it). */
     light: boolean
+    /**
+     * Output tokens a single model call may produce (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`); absent = the factory's
+     * default for a provider, `MAX_OUTPUT_DEFAULT`. A small model that loops then fails in a minute, not at the
+     * CLI's 32k ceiling after five.
+     */
+    max_output?: number
+    /**
+     * The model's context window in tokens (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`): the CLI assumes a Claude-sized one
+     * and compacts by it, so a 64k box overflows silently without this. Absent = the CLI's assumption.
+     */
+    context?: number
     /** MCP servers for the tasks on this provider only (a subscription task never connects to them). */
     mcp?: ProviderMcp[]
 }
@@ -79,6 +90,13 @@ export interface ProvidersOverview {
 
 /** The built-in provider: the owner's Claude subscription through the CLI's own login. */
 export const CLAUDE_PROVIDER = 'claude'
+
+/** Output tokens per call for a provider without `max_output`: enough for a long file, a looping model fails fast. */
+export const MAX_OUTPUT_DEFAULT = 8000
+/** The CLI's own ceiling on output tokens per call; `CLAUDE_CODE_MAX_OUTPUT_TOKENS` cannot raise it. */
+const MAX_OUTPUT_CEILING = 32_000
+/** The smallest context window worth running an agent in. */
+const CONTEXT_MIN = 8000
 
 /** Provider names are keys in files (`provider:`) and URL segments: letters, digits, dot, dash, underscore. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -332,11 +350,32 @@ const list = (v: unknown): string[] =>
                 .filter(Boolean)
           : []
 
+/** A number field as written (a number, or a numeric string); undefined when absent or not a number. */
+const num = (v: unknown): number | undefined => {
+    const n = typeof v === 'number' ? v : Number(str(v) ?? NaN)
+    return Number.isFinite(n) ? n : undefined
+}
+
+/** `max_output` / `context` within their bounds, as a whole number; undefined otherwise (lenient) or `BadName` (strict). */
+function tokenBound(
+    value: unknown,
+    field: 'max_output' | 'context',
+    min: number,
+    max: number,
+    strict: boolean
+): number | undefined {
+    if (value === undefined || value === null || value === '') return undefined
+    const n = num(value)
+    if (n !== undefined && n >= min && n <= max) return Math.floor(n)
+    if (strict) throw new BadName(`${field} must be a number from ${min} to ${max} tokens`)
+    return undefined
+}
+
 /** A file entry as read: lenient, so one bad field does not hide the provider. */
 function normalize(p: Record<string, unknown>): Provider {
     const kind = str(p.kind)
     const models = list(p.models)
-    const concurrency = typeof p.concurrency === 'number' ? p.concurrency : Number(str(p.concurrency) ?? NaN)
+    const concurrency = num(p.concurrency)
     return clean({
         name: String(p.name),
         kind: kind === 'openai' ? 'openai' : 'anthropic',
@@ -345,8 +384,10 @@ function normalize(p: Record<string, unknown>): Provider {
         models,
         default: str(p.default),
         small: str(p.small),
-        concurrency: Number.isFinite(concurrency) && concurrency >= 0 ? Math.floor(concurrency) : 1,
+        concurrency: concurrency !== undefined && concurrency >= 0 ? Math.floor(concurrency) : 1,
         light: typeof p.light === 'boolean' ? p.light : true,
+        max_output: tokenBound(p.max_output, 'max_output', 1, MAX_OUTPUT_CEILING, false),
+        context: tokenBound(p.context, 'context', CONTEXT_MIN, Number.MAX_SAFE_INTEGER, false),
         mcp: mcpList(p.mcp, false)
     })
 }
@@ -397,13 +438,8 @@ function validate(input: Partial<Provider> & { name: string }): Provider {
     if (models.some((m) => /\s/.test(m))) throw new BadName('model ids must not contain spaces')
     const fallback = str(input.default)
     const small = str(input.small)
-    const concurrency =
-        input.concurrency === undefined || input.concurrency === null
-            ? 1
-            : typeof input.concurrency === 'number'
-              ? input.concurrency
-              : Number(str(input.concurrency) ?? NaN)
-    if (!Number.isFinite(concurrency) || concurrency < 0 || concurrency > 64)
+    const concurrency = input.concurrency === undefined || input.concurrency === null ? 1 : num(input.concurrency)
+    if (concurrency === undefined || concurrency < 0 || concurrency > 64)
         throw new BadName('concurrency must be a number from 0 (no limit) to 64')
     return clean({
         name: input.name,
@@ -415,6 +451,8 @@ function validate(input: Partial<Provider> & { name: string }): Provider {
         small,
         concurrency: Math.floor(concurrency),
         light: input.light !== false,
+        max_output: tokenBound(input.max_output, 'max_output', 1, MAX_OUTPUT_CEILING, true),
+        context: tokenBound(input.context, 'context', CONTEXT_MIN, Number.MAX_SAFE_INTEGER, true),
         mcp: mcpList(input.mcp, true)
     })
 }

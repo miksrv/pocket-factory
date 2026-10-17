@@ -212,7 +212,7 @@ describe('nextRun', () => {
         expect(exact?.toISOString()).toBe('2026-10-06T11:00:00.000Z')
     })
 
-    it('jumps days for a weekly schedule', () => {
+    it('jumps days for a weekly routine', () => {
         // Tuesday → the next Monday 08:00
         const next = nextRun(parseCron('0 8 * * mon'), {}, 'UTC', utc('2026-10-06T12:00:00'))
         expect(next?.toISOString()).toBe('2026-10-12T08:00:00.000Z')

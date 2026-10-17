@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunk, quoteReply, routeMessage, scheduleNotice } from './bot.js'
-import type { ScheduleSpec } from './schedules/spec.js'
-import type { ScheduleRun } from './store/index.js'
+import { footer, quoteReply, reactionFor, routeMessage, routineNotice } from './bot.js'
+import type { RoutineSpec } from './routines/spec.js'
+import type { RoutineRun, Task } from './store/index.js'
+import { chunk } from './telegram/send.js'
 
 const LIMIT = 4000
 
@@ -70,14 +71,50 @@ describe('chunk', () => {
     })
 })
 
-describe('scheduleNotice', () => {
+describe('footer', () => {
+    const task = {
+        id: 't1',
+        project: 'work',
+        provider: null,
+        model: null,
+        window_5h_delta: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        git: null
+    } as unknown as Task
+
+    it('names every delegated role once, and says when one ran on the subscription instead', () => {
+        const text = footer(task, undefined, null, [
+            { task_id: 'c1', agent: 'researcher', provider: 'gpu', model: 'gemma4:12b', fallback: null },
+            {
+                task_id: 'c2',
+                agent: 'writer',
+                provider: null,
+                model: 'sonnet',
+                fallback: 'project work does not allow provider gpu (`providers:` in its project file)'
+            }
+        ])
+        expect(text).toEqual([
+            'project: work',
+            'researcher on gpu · gemma4:12b',
+            'writer ran on the subscription (sonnet): project work does not allow provider gpu (`providers:` in its project file)'
+        ])
+    })
+
+    it('has no delegation line for a task that delegated nothing', () => {
+        expect(footer(task, undefined, null)).toEqual(['project: work'])
+    })
+})
+
+describe('routineNotice', () => {
     const resets = new Date(Date.now() + 26 * 3_600_000).toISOString()
     const softStop = `soft stop: weekly window at 90% (limit 85%), resets ${resets}`
-    const run = (status: ScheduleRun['status'], note: string | null): ScheduleRun => ({
+    const run = (status: RoutineRun['status'], note: string | null): RoutineRun => ({
         id: 1,
         schedule: 'inbox',
         fired_at: new Date().toISOString(),
-        trigger: 'cron',
+        trigger: 'schedule',
         status,
         note,
         items: 0,
@@ -85,28 +122,28 @@ describe('scheduleNotice', () => {
         duration_ms: 0,
         task_status: null
     })
-    const spec = (notify?: string) => ({ notify }) as unknown as ScheduleSpec
+    const spec = (notify?: string) => ({ notify }) as unknown as RoutineSpec
 
     it('tells every firing skipped for the soft-stop, with the reason and the reset', () => {
         const seen = new Map<string, string>()
-        const first = scheduleNotice(run('skipped', softStop), spec(), seen, 'UTC')
+        const first = routineNotice(run('skipped', softStop), spec(), seen, 'UTC')
         expect(first).toContain('**inbox** skipped this run: subscription weekly window at 90% (limit 85%)')
         expect(first).toContain('resume after the reset')
         expect(first).toContain('/run inbox')
         expect(first).not.toContain(resets)
-        expect(scheduleNotice(run('skipped', softStop), spec(), seen, 'UTC')).toBe(first)
+        expect(routineNotice(run('skipped', softStop), spec(), seen, 'UTC')).toBe(first)
     })
 
-    it('keeps quiet about the soft-stop for a schedule with notify: none', () => {
-        expect(scheduleNotice(run('skipped', softStop), spec('none'), new Map(), 'UTC')).toBeNull()
+    it('keeps quiet about the soft-stop for a routine with notify: none', () => {
+        expect(routineNotice(run('skipped', softStop), spec('none'), new Map(), 'UTC')).toBeNull()
     })
 
     it('tells an error once per distinct note and nothing about a queued run', () => {
         const seen = new Map<string, string>()
-        expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
-        expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toBeNull()
-        expect(scheduleNotice(run('queued', null), spec(), seen, 'UTC')).toBeNull()
-        expect(scheduleNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
+        expect(routineNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
+        expect(routineNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toBeNull()
+        expect(routineNotice(run('queued', null), spec(), seen, 'UTC')).toBeNull()
+        expect(routineNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
     })
 })
 
@@ -149,5 +186,19 @@ describe('quoteReply', () => {
 
     it('cuts a long message', () => {
         expect(quoteReply('x'.repeat(5000))!.length).toBeLessThan(3100)
+    })
+})
+
+describe('reactionFor', () => {
+    it('follows the task through its states', () => {
+        const at = (status: Task['status'], ask = false, waits = false) =>
+            reactionFor({ status, ask: ask ? ({} as Task['ask']) : null, not_before: waits ? 'soon' : null })
+        expect(at('queued')).toBe('👀')
+        expect(at('queued', false, true)).toBe('😴')
+        expect(at('running')).toBe('👨‍💻')
+        expect(at('running', true)).toBe('🤔')
+        expect(at('done')).toBe('👍')
+        expect(at('failed')).toBe('💔')
+        expect(at('cancelled')).toBe('🫡')
     })
 })

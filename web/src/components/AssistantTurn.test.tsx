@@ -62,6 +62,8 @@ describe('AssistantTurn', () => {
             />
         )
         expect(screen.getByText(/subscription · sonnet/)).toBeInTheDocument()
-        expect(screen.getByText('Not on its provider: gpu unreachable: fetch failed')).toBeInTheDocument()
+        expect(
+            screen.getByText('Ran on the subscription, not on its provider: gpu unreachable: fetch failed')
+        ).toBeInTheDocument()
     })
 })

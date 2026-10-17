@@ -18,7 +18,7 @@ import {
 import type { Config } from '../config.js'
 import type { AgentFile } from '../files/agentFiles.js'
 import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
-import { fetchError, type Provider, type Providers } from '../files/providers.js'
+import { fetchError, MAX_OUTPUT_DEFAULT, type Provider, type Providers } from '../files/providers.js'
 import {
     type ChangedFile,
     createPullRequest,
@@ -54,6 +54,8 @@ const log = createLogger('tasks')
 export interface Workspace {
     /** Checkout directory of a project slug, or null when the project or its directory does not exist. */
     projectPath: (slug: string) => string | null
+    /** Every project slug with a file, whether or not its checkout exists. */
+    projects: () => string[]
     /** MCP servers a project's checkout declares (`.mcp.json` names) and the ones its project file allows (`mcp:`), if restricted. */
     projectMcp: (slug: string) => { declared: string[]; allowed: string[] | null }
     /** Names of the servers agent files declare inline in `mcpServers:` (role-owned servers, started for that sub-agent only). */
@@ -89,6 +91,8 @@ export interface TaskServiceEvents {
     event: [event: TaskEvent]
     /** The CLI reported the subscription's rate-limit status (during a task or a probe). */
     limits: [snapshot: RateLimitSnapshot]
+    /** A conversation was named (its Haiku title landed) or deleted. */
+    conversation: [conversation: Conversation, change: 'titled' | 'deleted']
 }
 
 const fmtTokens = (n: number) =>
@@ -147,6 +151,17 @@ export interface DelegateOutcome {
     text: string
     /** The task that ran the role; absent when nothing ran. */
     task?: Task
+}
+
+/** What a task's thread recorded when its orchestrator handed a role its work (the `delegate` payload of a `status` event). */
+export interface Delegation {
+    task_id: string
+    agent: string
+    /** The provider the role ran on; null = the subscription. */
+    provider: string | null
+    model: string | null
+    /** Why the role did not run on its provider (a setting, or a dead box); null when it did. */
+    fallback: string | null
 }
 
 /** The liveness of a provider as the gateway last saw it. */
@@ -549,8 +564,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     deleteConversation(conversationId: string): void {
         if (this.activeTask(conversationId) || this.queuedTask(conversationId))
             throw new Error('a task of this conversation is still queued or running; stop it first')
+        const conversation = this.store.getConversation(conversationId)
         this.store.deleteConversation(conversationId)
         this.inbox.remove(conversationId)
+        if (conversation)
+            this.emit('conversation', { ...conversation, deleted_at: new Date().toISOString() }, 'deleted')
+    }
+
+    /** The project slugs a conversation can be bound to (the files in `data/config/projects`). */
+    projects(): string[] {
+        return this.workspace.projects()
     }
 
     // ---- what a task changed (the task page's Changes panel) ---------------
@@ -821,7 +844,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             model?: string
             /** The provider to run on; undefined = the conversation's choice, null = the subscription whatever the conversation says. */
             provider?: string | null
-            /** The agent the task runs as: a schedule's `agent:` in light mode, or on the subscription (`--agent`). */
+            /** The agent the task runs as: a routine's `agent:` in light mode, or on the subscription (`--agent`). */
             agent?: string
             attachments?: Attachment[]
         } = {}
@@ -841,9 +864,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
-        // A schedule names its provider; the owner's own message runs on what the conversation was set to.
+        // A routine names its provider and model (its file's, or its agent's); the owner's own message runs on
+        // what the conversation was set to. A routine run never reads the conversation's: its thread is a log.
         const provider = options.provider === undefined ? conversation.provider : options.provider
-        const model = options.model ?? (provider === conversation.provider ? conversation.model : null)
+        const model =
+            options.model ?? (!options.schedule && provider === conversation.provider ? conversation.model : null)
         const task = this.store.createTask(
             conversationId,
             source,
@@ -955,7 +980,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     /**
-     * A scheduled run must not hold its schedule (one run at a time) and a
+     * A routine run must not hold its routine (one run at a time) and a
      * session slot for days because nobody answered: after
      * `SCHEDULES_ASK_TIMEOUT_MIN` a permission is denied and a question gets
      * "no answer", and the agent decides by the file's instructions.
@@ -963,7 +988,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * never hears of it, and its parent waits): its question is answered at once.
      */
     private answerLater(taskId: string, ask: Ask, role = false): void {
-        const ms = role ? 0 : this.config.schedules.askTimeoutMs
+        const ms = role ? 0 : this.config.routines.askTimeoutMs
         if (!role && ms <= 0) return
         const minutes = Math.round(ms / 60_000)
         const timer = setTimeout(() => {
@@ -972,12 +997,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const reason = role
                 ? 'a delegated role has nobody to ask'
                 : `no answer from the owner within ${minutes} min`
-            const guide = role ? "the orchestrator's brief" : "the schedule's instructions"
+            const guide = role ? "the orchestrator's brief" : "the routine's instructions"
             try {
                 if (ask.kind === 'permission')
                     this.answer(taskId, {
                         behavior: 'deny',
-                        message: `${reason}; the ${role ? 'role' : 'scheduled run'} goes on without it, or reports what it needed and stops`
+                        message: `${reason}; the ${role ? 'role' : 'routine run'} goes on without it, or reports what it needed and stops`
                     })
                 else {
                     const text = `(${reason}: decide by ${guide}, or report what you needed and stop)`
@@ -1095,6 +1120,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             onEvent: (event) => {
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
+                    this.rememberAgents(event.agents)
                     this.rememberMcp('.', event.mcpServers)
                 }
             }
@@ -1139,6 +1165,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 if (!title || this.store.getConversation(conversationId)?.title !== placeholder) return
                 this.store.updateConversation(conversationId, { title })
                 log.info(`conversation ${conversationId} named "${title}"`)
+                const named = this.store.getConversation(conversationId)
+                if (named) this.emit('conversation', named, 'titled')
             } catch (error) {
                 log.warn(`naming a conversation failed: ${error instanceof Error ? error.message : String(error)}`)
             }
@@ -1211,6 +1239,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             ANTHROPIC_DEFAULT_SONNET_MODEL: model,
             ANTHROPIC_DEFAULT_HAIKU_MODEL: small,
             CLAUDE_CODE_SUBAGENT_MODEL: model,
+            // A small model that loops writes until this, not until the CLI's 32k ceiling five minutes later.
+            CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(provider.max_output ?? MAX_OUTPUT_DEFAULT),
+            // The CLI assumes a Claude-sized window and compacts by it: a 64k box needs its real one to compact in time.
+            ...(provider.context ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(provider.context) } : {}),
             // No telemetry, no update checks, no Anthropic calls besides the model: the endpoint is not Anthropic.
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
             DISABLE_AUTOUPDATER: '1'
@@ -1461,6 +1493,21 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return task
     }
 
+    /**
+     * The roles a task handed work to, in order, each once (a resumed parent records the same
+     * hand-over again): the Telegram footer names them, so a role that ran on the subscription
+     * because of a setting is seen with the reply, not found later in the Audit log.
+     */
+    delegationsOf(taskId: string): Delegation[] {
+        const seen = new Map<string, Delegation>()
+        for (const event of this.store.listEvents(taskId)) {
+            if (event.type !== 'status') continue
+            const delegate = (event.payload as { delegate?: Delegation } | null)?.delegate
+            if (delegate?.task_id && delegate.agent) seen.set(delegate.task_id, delegate)
+        }
+        return [...seen.values()]
+    }
+
     /** Resolves with the task once it is done, failed or cancelled; `progress` hears about it every half minute meanwhile. */
     private settled(taskId: string, progress?: (note: string) => void): Promise<Task> {
         return new Promise((resolve) => {
@@ -1619,6 +1666,34 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         log.info(`claude tools: ${tools.length} (${tools.slice(0, 6).join(', ')}…)`)
     }
 
+    /**
+     * An MCP tool a session called that no init listed (the server connected after the session
+     * start): remembered under its full name, so the tool picker and the Providers page can show it.
+     */
+    private rememberMcpTool(name: string): void {
+        if (!name.startsWith('mcp__') || name.startsWith(`mcp__${FACTORY_MCP}__`)) return
+        const known = this.tools()
+        if (known.includes(name)) return
+        this.store.setMeta('claude.tools', [...known, name])
+    }
+
+    /**
+     * The sub-agent types the CLI listed at its last session start: Claude Code's built-ins (Explore,
+     * Plan, general-purpose), the factory's agent files, a checkout's `.claude/agents`, plugins' agents.
+     * Replaced on every start: a deleted agent file drops off the list with the next session, so the
+     * Agents page can tell a built-in from a name that only the Audit log still remembers.
+     */
+    agents(): string[] {
+        return this.store.getMeta<string[]>('claude.agents') ?? []
+    }
+
+    private rememberAgents(reported: string[]): void {
+        if (!reported.length) return
+        const known = this.agents()
+        if (known.length === reported.length && known.every((a, i) => a === reported[i])) return
+        this.store.setMeta('claude.agents', reported)
+    }
+
     private recordLimits(limits: RateLimits, taskId: string | null): RateLimitSnapshot {
         const snapshot = this.store.recordRateLimits(limits, taskId)
         this.emit('limits', snapshot)
@@ -1765,9 +1840,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         const model = provider ? (task.model ?? provider.default ?? provider.models[0]) : (task.model ?? this.model())
         const light = provider?.light ? this.lightOptions(task) : null
-        // A schedule's run on the subscription that is its agent itself (`--agent`), not an orchestrator spawning it;
-        // read again at start, since a task may wait hours for a limit reset while the owner edits or deletes the file.
-        const asAgentFile = !provider && !task.parent_id && task.agent ? this.workspace.agentFile(task.agent) : null
+        // The agent the task runs as, read again at start, since a task may wait hours for a limit reset while
+        // the owner edits or deletes the file. Its `maxTurns:` bounds the run wherever it happens: a routine's
+        // run as that agent, a delegated role on its provider, the role fallen back to the subscription.
+        const agentFile = task.agent ? this.workspace.agentFile(task.agent) : null
+        // A routine's run on the subscription that is its agent itself (`--agent`), not an orchestrator spawning it.
+        const asAgentFile = !provider && !task.parent_id ? agentFile : null
         const asAgent = asAgentFile ? task.agent! : undefined
         const env = provider ? this.providerEnv(provider, model) : this.agentEnv()
         // An orchestrator on the subscription may hand roles to other providers (`delegate`); the
@@ -1833,10 +1911,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             settings,
             appendSystemPrompt,
             agent: asAgent,
-            // A schedule's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
+            // A routine's own `model:` wins; otherwise the alias the owner picked, read at start so a switch applies to the next task everywhere.
             model,
-            // An agent's own `maxTurns:` when the session is that agent, as it had when it ran as a sub-agent.
-            maxTurns: asAgentFile?.maxTurns ?? this.config.claude.maxTurns,
+            // An agent's own `maxTurns:`, as it had when it ran as a sub-agent; a small model ignores the limits in its prompt.
+            maxTurns: agentFile?.maxTurns ?? this.config.claude.maxTurns,
             permissionMode: this.config.claude.permissionMode,
             env,
             systemPrompt: light?.systemPrompt,
@@ -1849,6 +1927,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
+                    this.rememberAgents(event.agents)
                     // A provider's servers are its own in the registry, not the factory's mcp.json.
                     const own = new Set(provider?.mcp?.map((s) => s.name))
                     this.rememberMcp(
@@ -1929,6 +2008,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 // used to follow any mention of another checkout, so one `git status` across the
                 // fence moved the thread, dropped its session and the next reply was about the
                 // other repository). Later tasks of a bound conversation never leave it.
+                if (event.type === 'tool_use') this.rememberMcpTool(event.name)
                 if (event.type === 'tool_use' && !project && !task.parent_id) {
                     project = detectProject(
                         event.input,

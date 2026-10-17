@@ -44,6 +44,8 @@ export function toolRoutes(): Hono<Env> {
         return c.json({
             common: COMMON_TOOLS,
             reported: reported.filter((t) => !COMMON_TOOLS.includes(t) && !t.startsWith('mcp__')),
+            // The sub-agent types of the last session start: the Agents page tells a built-in from a deleted file by it.
+            agents: tasks.agents(),
             // Connected servers first: those are the ones a role can pick tools from.
             mcp: tasks
                 .mcpRegistry()

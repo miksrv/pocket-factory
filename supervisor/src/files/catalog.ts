@@ -8,10 +8,10 @@ import { type MarkdownDoc, parseMarkdown, serializeMarkdown } from './markdown.j
  *   agents   → <claude>/agents/<name>.md          (Claude Code sub-agents)
  *   skills   → <claude>/skills/<name>/SKILL.md    (Claude Code skills)
  *   projects → <config>/projects/<slug>.md        (knowledge base)
- *   schedules → <config>/schedules/<name>.md      (recurring tasks: cron, prefilter, instructions)
+ *   routines → <config>/routines/<name>.md      (recurring tasks: cron, prefilter, instructions)
  * The UI, the owner and the agent itself edit the same files.
  */
-export type Kind = 'agents' | 'skills' | 'projects' | 'schedules'
+export type Kind = 'agents' | 'skills' | 'projects' | 'routines'
 
 export interface CatalogEntry {
     kind: Kind
@@ -31,6 +31,34 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 export class BadName extends Error {}
 export class NotFound extends Error {}
 
+/**
+ * 1.5.0 renamed `<config>/schedules` to `<config>/routines`: a factory whose
+ * data predates it gets its files moved on start, once. Both directories
+ * present: the files move one by one, and one that exists under both names
+ * stays where it was and is reported (routines/ wins; the owner merges by hand).
+ * Returns what the owner should hear about.
+ */
+export function migrateSchedulesDir(configDir: string): { moved: number; kept: string[] } {
+    const old = path.join(configDir, 'schedules')
+    const next = path.join(configDir, 'routines')
+    if (!fs.existsSync(old) || !fs.statSync(old).isDirectory()) return { moved: 0, kept: [] }
+    if (!fs.existsSync(next)) {
+        fs.renameSync(old, next)
+        return { moved: fs.readdirSync(next).length, kept: [] }
+    }
+    let moved = 0
+    const kept: string[] = []
+    for (const name of fs.readdirSync(old)) {
+        if (fs.existsSync(path.join(next, name))) kept.push(name)
+        else {
+            fs.renameSync(path.join(old, name), path.join(next, name))
+            moved++
+        }
+    }
+    if (!kept.length) fs.rmdirSync(old)
+    return { moved, kept }
+}
+
 export class Catalog {
     constructor(
         private readonly claudeDir: string,
@@ -45,8 +73,8 @@ export class Catalog {
                 return path.join(this.claudeDir, 'skills')
             case 'projects':
                 return path.join(this.configDir, 'projects')
-            case 'schedules':
-                return path.join(this.configDir, 'schedules')
+            case 'routines':
+                return path.join(this.configDir, 'routines')
         }
     }
 
@@ -100,7 +128,7 @@ export class Catalog {
         const file = this.fileFor(kind, name)
         fs.mkdirSync(path.dirname(file), { recursive: true })
         const frontmatter = { ...doc.frontmatter }
-        // Claude Code requires `name` in agent and skill frontmatter and it must match the file; a schedule is named the same way.
+        // Claude Code requires `name` in agent and skill frontmatter and it must match the file; a routine is named the same way.
         if (kind !== 'projects') frontmatter.name = name
         if (kind === 'projects' && !frontmatter.slug) frontmatter.slug = name
         fs.writeFileSync(file, serializeMarkdown({ frontmatter, body: doc.body }))

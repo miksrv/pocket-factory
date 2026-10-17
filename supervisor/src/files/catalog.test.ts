@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { BadName, Catalog, NotFound } from './catalog.js'
+import { BadName, Catalog, migrateSchedulesDir, NotFound } from './catalog.js'
 
 describe('Catalog', () => {
     let dir: string
@@ -27,7 +27,7 @@ describe('Catalog', () => {
         expect(catalog.fileFor('agents', 'reviewer')).toBe(path.join(claude, 'agents', 'reviewer.md'))
         expect(catalog.fileFor('skills', 'pr-review')).toBe(path.join(claude, 'skills', 'pr-review', 'SKILL.md'))
         expect(catalog.fileFor('projects', 'shop')).toBe(path.join(config, 'projects', 'shop.md'))
-        expect(catalog.fileFor('schedules', 'nightly')).toBe(path.join(config, 'schedules', 'nightly.md'))
+        expect(catalog.fileFor('routines', 'nightly')).toBe(path.join(config, 'routines', 'nightly.md'))
     })
 
     it.each(['', '../etc/passwd', 'a/b', '.hidden', '-dash', 'a b', 'x'.repeat(65), 'a\\b', '..'])(
@@ -101,13 +101,13 @@ describe('Catalog', () => {
     })
 
     it('reports invalid frontmatter instead of hiding the file', () => {
-        fs.mkdirSync(path.join(config, 'schedules'), { recursive: true })
-        fs.writeFileSync(path.join(config, 'schedules', 'broken.md'), '---\ncron: [0 8\n---\nbody\n')
-        const entry = catalog.get('schedules', 'broken')
+        fs.mkdirSync(path.join(config, 'routines'), { recursive: true })
+        fs.writeFileSync(path.join(config, 'routines', 'broken.md'), '---\ncron: [0 8\n---\nbody\n')
+        const entry = catalog.get('routines', 'broken')
         expect(entry.frontmatter).toEqual({})
         expect(entry.body).toBe('body\n')
         expect(entry.frontmatter_error).toEqual(expect.any(String))
-        expect(catalog.list('schedules').map((e) => e.name)).toEqual(['broken'])
+        expect(catalog.list('routines').map((e) => e.name)).toEqual(['broken'])
     })
 
     it('throws NotFound for a missing file', () => {
@@ -124,5 +124,38 @@ describe('Catalog', () => {
         catalog.remove('skills', 's')
         expect(fs.existsSync(path.join(claude, 'agents', 'a.md'))).toBe(false)
         expect(fs.existsSync(path.join(claude, 'skills', 's'))).toBe(false)
+    })
+
+    describe('migrateSchedulesDir (schedules/ → routines/, 1.5.0)', () => {
+        const write = (dir: string, name: string) => {
+            fs.mkdirSync(dir, { recursive: true })
+            fs.writeFileSync(path.join(dir, name), '---\ncron: "0 8 * * *"\n---\nx\n')
+        }
+
+        it('does nothing without an old directory', () => {
+            expect(migrateSchedulesDir(config)).toEqual({ moved: 0, kept: [] })
+            expect(fs.existsSync(path.join(config, 'routines'))).toBe(false)
+        })
+
+        it('renames the directory when routines/ does not exist yet', () => {
+            write(path.join(config, 'schedules'), 'nightly.md')
+            write(path.join(config, 'schedules'), 'inbox.md')
+            expect(migrateSchedulesDir(config)).toEqual({ moved: 2, kept: [] })
+            expect(fs.existsSync(path.join(config, 'schedules'))).toBe(false)
+            expect(catalog.list('routines').map((e) => e.name)).toEqual(['inbox', 'nightly'])
+        })
+
+        it('moves file by file when both exist, and leaves a name present in both', () => {
+            write(path.join(config, 'schedules'), 'nightly.md')
+            write(path.join(config, 'schedules'), 'inbox.md')
+            write(path.join(config, 'routines'), 'nightly.md')
+            expect(migrateSchedulesDir(config)).toEqual({ moved: 1, kept: ['nightly.md'] })
+            expect(fs.readdirSync(path.join(config, 'schedules'))).toEqual(['nightly.md'])
+            expect(catalog.list('routines').map((e) => e.name)).toEqual(['inbox', 'nightly'])
+            // Nothing left behind once the clash is resolved by hand.
+            fs.rmSync(path.join(config, 'schedules', 'nightly.md'))
+            expect(migrateSchedulesDir(config)).toEqual({ moved: 0, kept: [] })
+            expect(fs.existsSync(path.join(config, 'schedules'))).toBe(false)
+        })
     })
 })

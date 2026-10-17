@@ -88,7 +88,7 @@ function AgentGrid() {
     const entries = useAsync(() => api.list('agents'), [], 30_000)
     const activity = useAsync(() => api.agentActivity('7d'), [], 5_000)
     const known = useAsync(() => api.tools(), [])
-    const rows = rosterOf(entries.data, activity.data)
+    const rows = rosterOf(entries.data, activity.data, 0, known.data?.agents)
         .filter((r) => r.name !== 'orchestrator')
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 
@@ -117,7 +117,7 @@ function AgentGrid() {
                     const tools = allowed.filter((t) => !t.startsWith('mcp__'))
                     const servers = mcpServersOf(allowed, known.data?.mcp ?? [])
                     const model = str(r.entry?.frontmatter.model)
-                    // A provider-bound role: shown as provider:model (what a schedule naming it runs on).
+                    // A provider-bound role: shown as provider:model (what a routine naming it runs on).
                     const provider = str(r.entry?.frontmatter.provider)
                     const providerModel = str(r.entry?.frontmatter.provider_model)
                     return (
@@ -420,11 +420,10 @@ function AgentEditor() {
                 return (
                     <>
                         <Field
-                            label='Model'
                             hint={
                                 provider
-                                    ? 'A role on another model: a Claude orchestrator hands it work with the delegate tool (never as its own sub-agent), and a schedule naming it runs on this provider. In light mode the body below is its whole system prompt.'
-                                    : 'An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file. A provider (Settings → Providers) takes the role off the subscription for schedules that name it.'
+                                    ? 'A role on another model: a Claude orchestrator hands it work with the delegate tool (never as its own sub-agent), and a routine naming it runs on this provider. In light mode the body below is its whole system prompt.'
+                                    : 'An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file. A provider (Settings → Providers) takes the role off the subscription for routines that name it.'
                             }
                             group
                             wide

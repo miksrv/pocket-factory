@@ -3,7 +3,6 @@ import {
     Bell,
     BellOff,
     Bot,
-    CalendarClock,
     ClipboardList,
     Eye,
     EyeOff,
@@ -18,6 +17,7 @@ import {
     MessageSquare,
     Moon,
     Package,
+    Repeat,
     Send,
     Server,
     Settings,
@@ -47,7 +47,7 @@ export const ICONS = {
     projects: FolderGit2,
     presets: Package,
     /** Recurring tasks: a calendar with a clock, in the sidebar, the tile and the Chat list alike. */
-    schedules: CalendarClock,
+    routines: Repeat,
     settings: Settings,
     control: Activity,
     limits: Gauge,
@@ -88,15 +88,15 @@ export function Icon({ name, size, className }: { name: IconName; size?: number;
     )
 }
 
-/** Inline "icon + word" for a conversation's channel; a schedule's conversation says so instead of "web". */
-export function Channel({ channel, schedule }: { channel: 'telegram' | 'web'; schedule?: boolean }) {
+/** Inline "icon + word" for a conversation's channel; a routine's conversation says so instead of "web". */
+export function Channel({ channel, routine }: { channel: 'telegram' | 'web'; routine?: boolean }) {
     return (
         <span className='channel'>
             <Icon
-                name={schedule ? 'schedules' : channel}
+                name={routine ? 'routines' : channel}
                 size={12}
             />
-            {schedule ? 'schedule' : channel}
+            {routine ? 'routine' : channel}
         </span>
     )
 }

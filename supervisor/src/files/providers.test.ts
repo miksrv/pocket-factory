@@ -167,4 +167,31 @@ describe('Providers', () => {
             { name: 'x', kind: 'anthropic', url: 'http://x', models: ['one', 'two'], concurrency: 1, light: true }
         ])
     })
+
+    it('keeps max_output and context within their bounds: saved as whole numbers, out of range refused or dropped', () => {
+        const saved = providers.save('box', {
+            url: 'http://x',
+            models: ['m'],
+            max_output: 4000.7,
+            context: '65536' as never
+        })
+        expect(saved).toMatchObject({ max_output: 4000, context: 65536 })
+        expect(() => providers.save('box', { url: 'http://x', models: ['m'], max_output: 0 })).toThrow(BadName)
+        expect(() => providers.save('box', { url: 'http://x', models: ['m'], context: 4096 })).toThrow(BadName)
+        // Hand-written nonsense is dropped on read, not fatal.
+        fs.writeFileSync(
+            path.join(dir, 'config', 'providers.yaml'),
+            YAML.stringify({
+                providers: [{ name: 'x', url: 'http://x', models: ['m'], max_output: 'lots', context: 10 }]
+            })
+        )
+        expect(providers.all()[0]).toEqual({
+            name: 'x',
+            kind: 'anthropic',
+            url: 'http://x',
+            models: ['m'],
+            concurrency: 1,
+            light: true
+        })
+    })
 })

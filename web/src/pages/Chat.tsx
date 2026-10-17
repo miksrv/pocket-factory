@@ -114,7 +114,7 @@ export function ChatPage() {
                                 <div className='desc'>
                                     <Channel
                                         channel={c.channel}
-                                        schedule={Boolean(c.external_id?.startsWith('schedule:'))}
+                                        routine={routineOf(c) !== null}
                                     />
                                     {c.project ? ` · ${c.project}` : ''} · {fmt.ago(c.updated_at)}
                                 </div>
@@ -390,6 +390,10 @@ function Thread({
     const active = Boolean(running)
     // The agent asked a question: the next message answers it (the "Other" choice) instead of queueing a task.
     const answering = running?.status === 'running' && running.ask?.kind === 'question'
+    // A routine's thread is a log of its runs: project, agent and model are the routine file's (shown, not
+    // picked), and the only message the owner sends here is the answer to an open question.
+    const routine = routineOf(conversation)
+    const last = ordered.at(-1)
 
     const loadEarlier = async () => {
         const oldest = ordered[0]
@@ -492,29 +496,51 @@ function Thread({
                             className='dim small row wrap'
                             style={{ gap: 6, rowGap: 4 }}
                         >
-                            {conversation && (
-                                <Channel
-                                    channel={conversation.channel}
-                                    schedule={Boolean(conversation.external_id?.startsWith('schedule:'))}
-                                />
+                            {conversation &&
+                                (routine ? (
+                                    <Link
+                                        to={`/routines/${encodeURIComponent(routine)}`}
+                                        title='Open the routine'
+                                    >
+                                        <Channel
+                                            channel={conversation.channel}
+                                            routine
+                                        />
+                                    </Link>
+                                ) : (
+                                    <Channel channel={conversation.channel} />
+                                ))}
+                            <span>·</span>
+                            {routine ? (
+                                <>
+                                    <span title='The project of the routine file'>
+                                        {conversation?.project ?? 'no project'}
+                                    </span>
+                                    <span>·</span>
+                                    <span title='The agent and model of the last run, from the routine file'>
+                                        {last ? runsAs(last) : 'no runs yet'}
+                                    </span>
+                                </>
+                            ) : (
+                                <>
+                                    <ProjectSelect
+                                        value={conversation?.project ?? ''}
+                                        onChange={rebind}
+                                        projects={projects}
+                                        disabled={!conversation || active}
+                                    />
+                                    <span>·</span>
+                                    <ModelPicker
+                                        provider={conversation?.provider ?? ''}
+                                        model={conversation?.model ?? ''}
+                                        providers={providers.data?.providers}
+                                        onChange={(p, m) => void remodel(p, m)}
+                                        disabled={!conversation || active}
+                                        inherit='factory model'
+                                        compact
+                                    />
+                                </>
                             )}
-                            <span>·</span>
-                            <ProjectSelect
-                                value={conversation?.project ?? ''}
-                                onChange={rebind}
-                                projects={projects}
-                                disabled={!conversation || active}
-                            />
-                            <span>·</span>
-                            <ModelPicker
-                                provider={conversation?.provider ?? ''}
-                                model={conversation?.model ?? ''}
-                                providers={providers.data?.providers}
-                                onChange={(p, m) => void remodel(p, m)}
-                                disabled={!conversation || active}
-                                inherit='factory model'
-                                compact
-                            />
                             <span className='nowrap'>
                                 · session{' '}
                                 {conversation?.session_id ? (
@@ -559,7 +585,11 @@ function Thread({
                         />
                     )}
                     {ordered.length === 0 && conversation && (
-                        <Empty>Nothing here yet. Describe the first task below.</Empty>
+                        <Empty>
+                            {routine
+                                ? "No runs yet. Run now on the routine's page starts one."
+                                : 'Nothing here yet. Describe the first task below.'}
+                        </Empty>
                     )}
                     {ordered.map((task) => (
                         <div
@@ -599,94 +629,114 @@ function Thread({
                     </Button>
                 )}
             </div>
-            <form
-                className={`composer${dragging ? ' dragging' : ''}`}
-                onSubmit={send}
-                onDragOver={(e: DragEvent) => {
-                    if (!e.dataTransfer.types.includes('Files')) return
-                    e.preventDefault()
-                    setDragging(true)
-                }}
-                onDragLeave={(e: DragEvent) => {
-                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
-                }}
-                onDrop={(e: DragEvent) => {
-                    if (!e.dataTransfer.files.length) return
-                    e.preventDefault()
-                    setDragging(false)
-                    files.add([...e.dataTransfer.files])
-                }}
-            >
-                <PendingUploads
-                    uploads={files.uploads}
-                    onRemove={files.remove}
-                />
-                <input
-                    ref={picker}
-                    type='file'
-                    multiple
-                    hidden
-                    onChange={(e) => {
-                        files.add([...(e.target.files ?? [])])
-                        e.target.value = '' // the same file can be picked again after removing it
-                    }}
-                />
-                <Button
-                    className='attach'
-                    variant='ghost'
-                    onClick={() => picker.current?.click()}
-                    disabled={files.uploads.length >= MAX_FILES}
-                    title='Attach photos or files (or paste / drop them here)'
-                    aria-label='Attach files'
-                >
-                    <Paperclip size={16} />
-                </Button>
-                <textarea
-                    onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
-                        // A screenshot from the clipboard; text pasted along with it (some apps send both) still lands as text.
-                        const pasted = [...e.clipboardData.files]
-                        if (!pasted.length) return
-                        if (!e.clipboardData.getData('text')) e.preventDefault()
-                        files.add(pasted)
-                    }}
-                    ref={composer}
-                    value={prompt}
-                    placeholder={
-                        answering
-                            ? 'Type your answer to the question above…'
-                            : active
-                              ? 'Queued after the running task…'
-                              : 'Describe the task…'
-                    }
-                    onChange={(e) => setPrompt(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                            e.preventDefault()
-                            void send()
-                        }
-                    }}
-                    rows={1}
-                    autoFocus
-                />
-                <Button
-                    variant='primary'
-                    className='send'
-                    type='submit'
-                    disabled={(!prompt.trim() && !files.names.length) || sending || files.busy}
-                    title={files.busy ? 'Waiting for the upload…' : 'Send (Enter)'}
-                    aria-label='Send'
-                >
-                    <SendHorizontal size={16} />
-                </Button>
-                <div className='composer-hint dim'>
-                    Enter to send · Shift+Enter for a new line · paste or drop files
-                    {answering
-                        ? ' · the agent is waiting: your message is the answer'
-                        : active
-                          ? ' · a task is running, yours will queue'
-                          : ''}
+            {routine && !answering ? (
+                <div className='composer composer-note dim small'>
+                    A routine's thread is the log of its runs. The next run starts from{' '}
+                    <Link to={`/routines/${encodeURIComponent(routine)}`}>the routine's page</Link> (Run now); a
+                    question it asks is answered here.
                 </div>
-            </form>
+            ) : (
+                <form
+                    className={`composer${dragging ? ' dragging' : ''}`}
+                    onSubmit={send}
+                    onDragOver={(e: DragEvent) => {
+                        if (!e.dataTransfer.types.includes('Files')) return
+                        e.preventDefault()
+                        setDragging(true)
+                    }}
+                    onDragLeave={(e: DragEvent) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+                    }}
+                    onDrop={(e: DragEvent) => {
+                        if (!e.dataTransfer.files.length) return
+                        e.preventDefault()
+                        setDragging(false)
+                        files.add([...e.dataTransfer.files])
+                    }}
+                >
+                    <PendingUploads
+                        uploads={files.uploads}
+                        onRemove={files.remove}
+                    />
+                    <input
+                        ref={picker}
+                        type='file'
+                        multiple
+                        hidden
+                        onChange={(e) => {
+                            files.add([...(e.target.files ?? [])])
+                            e.target.value = '' // the same file can be picked again after removing it
+                        }}
+                    />
+                    <Button
+                        className='attach'
+                        variant='ghost'
+                        onClick={() => picker.current?.click()}
+                        disabled={files.uploads.length >= MAX_FILES}
+                        title='Attach photos or files (or paste / drop them here)'
+                        aria-label='Attach files'
+                    >
+                        <Paperclip size={16} />
+                    </Button>
+                    <textarea
+                        onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
+                            // A screenshot from the clipboard; text pasted along with it (some apps send both) still lands as text.
+                            const pasted = [...e.clipboardData.files]
+                            if (!pasted.length) return
+                            if (!e.clipboardData.getData('text')) e.preventDefault()
+                            files.add(pasted)
+                        }}
+                        ref={composer}
+                        value={prompt}
+                        placeholder={
+                            answering
+                                ? 'Type your answer to the question above…'
+                                : active
+                                  ? 'Queued after the running task…'
+                                  : 'Describe the task…'
+                        }
+                        onChange={(e) => setPrompt(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                                e.preventDefault()
+                                void send()
+                            }
+                        }}
+                        rows={1}
+                        autoFocus
+                    />
+                    <Button
+                        variant='primary'
+                        className='send'
+                        type='submit'
+                        disabled={(!prompt.trim() && !files.names.length) || sending || files.busy}
+                        title={files.busy ? 'Waiting for the upload…' : 'Send (Enter)'}
+                        aria-label='Send'
+                    >
+                        <SendHorizontal size={16} />
+                    </Button>
+                    <div className='composer-hint dim'>
+                        Enter to send · Shift+Enter for a new line · paste or drop files
+                        {answering
+                            ? ' · the agent is waiting: your message is the answer'
+                            : active
+                              ? ' · a task is running, yours will queue'
+                              : ''}
+                    </div>
+                </form>
+            )}
         </div>
     )
+}
+
+/** The routine a conversation is the thread of (its name), or null for the owner's own conversations. */
+const routineOf = (conversation: Conversation | null): string | null =>
+    conversation?.channel === 'web' && conversation.external_id?.startsWith('schedule:')
+        ? conversation.external_id.slice('schedule:'.length)
+        : null
+
+/** "as publisher · opus": who a routine's run ran as and on what, for the thread's head. */
+const runsAs = (task: Task): string => {
+    const model = task.provider ? `${task.provider}:${task.model ?? 'default'}` : (task.model ?? 'factory model')
+    return task.agent ? `as ${task.agent} · ${model}` : model
 }

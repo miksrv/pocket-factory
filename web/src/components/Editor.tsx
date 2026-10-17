@@ -29,8 +29,10 @@ export interface EditorProps {
     /** What the empty form pane says before an entry is picked, and the label of its create button. */
     intro?: string
     newLabel?: string
-    /** Rendered above the form for an existing entry: live state that is not in the file (a schedule's runs). */
+    /** Rendered above the form for an existing entry: live state that is not in the file (a routine's runs). */
     aside?: (entry: CatalogEntry) => ReactNode
+    /** More of the frontmatter form, rendered under the body (a routine's triggers come after its instructions). */
+    below?: EditorProps['form']
     /** Why the frontmatter must not be saved as it is (an invalid cron), or null. The field itself shows the reason (aria-invalid + an .error line); the header shows only an Invalid badge with it as the tooltip, and Save is disabled meanwhile. */
     validate?: (fm: Record<string, unknown>) => string | null
 }
@@ -59,6 +61,7 @@ export function Editor({
     intro = 'Select an entry or create a new one.',
     newLabel = 'New',
     aside,
+    below,
     validate
 }: EditorProps) {
     const { name } = useParams()
@@ -160,6 +163,7 @@ export function Editor({
                         defaults={defaults}
                         template={template}
                         form={form}
+                        below={below}
                         aside={aside}
                         validate={validate}
                         bodyLabel={bodyLabel}
@@ -201,6 +205,7 @@ function Form({
     defaults,
     template,
     form,
+    below,
     aside,
     validate,
     bodyLabel,
@@ -215,6 +220,7 @@ function Form({
     defaults: Record<string, unknown>
     template: string
     form: EditorProps['form']
+    below?: EditorProps['below']
     aside?: EditorProps['aside']
     validate?: EditorProps['validate']
     bodyLabel: string
@@ -350,6 +356,7 @@ function Form({
     }
 
     const lines = body.split('\n').length
+    const set = (patch: Record<string, unknown>) => setFm((prev) => ({ ...prev, ...patch }))
 
     return (
         <div className='card pad0 form-pane'>
@@ -437,7 +444,7 @@ function Form({
                     </div>
                 )}
                 {entry && aside?.(entry)}
-                <div className='form-grid'>{form(fm, (patch) => setFm((prev) => ({ ...prev, ...patch })), entry)}</div>
+                <div className='form-grid'>{form(fm, set, entry)}</div>
                 <div className='field-head'>
                     <div>
                         <div>{bodyLabel}</div>
@@ -480,6 +487,7 @@ function Form({
                         )}
                     </div>
                 )}
+                {below && <div className='form-grid form-below'>{below(fm, set, entry)}</div>}
             </div>
         </div>
     )
@@ -489,6 +497,9 @@ function Form({
  * A labelled control. `group` for a set of controls (a list of checkboxes):
  * a <label> around several inputs would forward every click on the caption,
  * the hint or the gaps to its first input, so a group is a <div>.
+ * No `label` when the control says what it is itself (a provider + model
+ * pair); only for a `wide` field, since the grid lines up label, control and
+ * hint across a row and would shift a caption-less one.
  */
 export function Field({
     label,
@@ -497,7 +508,7 @@ export function Field({
     group,
     children
 }: {
-    label: string
+    label?: string
     hint?: ReactNode
     wide?: boolean
     group?: boolean
@@ -506,7 +517,7 @@ export function Field({
     const className = `field${wide ? ' wide' : ''}${group ? ' group' : ''}`
     const body = (
         <>
-            <span>{label}</span>
+            {label && <span>{label}</span>}
             {children}
             {hint && <span className='dim'>{hint}</span>}
         </>

@@ -94,10 +94,10 @@ describe('Hosts', () => {
         expect(() => hosts.save(name, host)).toThrow(message)
     })
 
-    it('shows which projects and schedules use a host, and dangling references', () => {
+    it('shows which projects and routines use a host, and dangling references', () => {
         hosts.save('prod', { ssh: 'deploy@prod.example.com' })
         project('shop', [{ host: 'prod', path: '/srv/shop', notes: 'careful' }, { host: 'gone' }])
-        catalog.save('schedules', 'nightly', { frontmatter: { hosts: ['prod', '', 5] }, body: 'b' })
+        catalog.save('routines', 'nightly', { frontmatter: { hosts: ['prod', '', 5] }, body: 'b' })
         const { hosts: views } = hosts.list()
         expect(views).toEqual([
             {
@@ -105,7 +105,7 @@ describe('Hosts', () => {
                 ssh: 'deploy@prod.example.com',
                 projects: [
                     { project: 'shop', kind: 'project', path: '/srv/shop', notes: 'careful' },
-                    { project: 'nightly', kind: 'schedule' }
+                    { project: 'nightly', kind: 'routine' }
                 ]
             },
             { name: 'gone', ssh: '', projects: [{ project: 'shop', kind: 'project' }] }
@@ -118,7 +118,7 @@ describe('Hosts', () => {
             { name: 'inline', ssh: ' deploy@prod.example.com ', key: 'k', path: '/srv' },
             { ssh: 'other@host' }
         ])
-        catalog.save('schedules', 'nightly', { frontmatter: { hosts: [{ ssh: 'x@y' }] }, body: 'b' })
+        catalog.save('routines', 'nightly', { frontmatter: { hosts: [{ ssh: 'x@y' }] }, body: 'b' })
         expect(hosts.list().inline).toEqual([
             {
                 project: 'shop',
@@ -133,7 +133,7 @@ describe('Hosts', () => {
     it('renames a host and every reference follows', () => {
         hosts.save('prod', { ssh: 'deploy@prod.example.com' })
         project('shop', [{ host: 'prod', path: '/srv/shop' }, { ssh: 'x@y' }])
-        catalog.save('schedules', 'nightly', { frontmatter: { cron: '0 8 * * *', hosts: ['prod'] }, body: 'b' })
+        catalog.save('routines', 'nightly', { frontmatter: { cron: '0 8 * * *', hosts: ['prod'] }, body: 'b' })
         const view = hosts.save('prod', { name: 'production', ssh: 'deploy@prod.example.com' })
         expect(view.name).toBe('production')
         expect(hosts.get('prod')).toBeUndefined()
@@ -141,7 +141,7 @@ describe('Hosts', () => {
             { host: 'production', path: '/srv/shop' },
             { ssh: 'x@y' }
         ])
-        expect(catalog.get('schedules', 'nightly').frontmatter).toMatchObject({
+        expect(catalog.get('routines', 'nightly').frontmatter).toMatchObject({
             cron: '0 8 * * *',
             hosts: [{ host: 'production' }]
         })

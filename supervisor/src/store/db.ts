@@ -114,11 +114,11 @@ const MIGRATIONS: string[] = [
     `
     ALTER TABLE tasks ADD COLUMN ask TEXT;
     `,
-    // v9: schedules (Phase 5). A schedule is a Markdown file in
-    // data/config/schedules; the store keeps what a file cannot: each firing
+    // v9: routines (Phase 5). A routine is a Markdown file in
+    // data/config/routines; the store keeps what a file cannot: each firing
     // (skipped, empty, queued, error) and the prefilter items already handed
     // to the agent, so an empty poll costs no tokens and a ticket is not
-    // brought up twice. A task remembers the schedule that queued it.
+    // brought up twice. A task remembers the routine that queued it.
     `
     ALTER TABLE tasks ADD COLUMN schedule TEXT;
     CREATE INDEX tasks_schedule ON tasks(schedule, created_at);
@@ -147,7 +147,7 @@ const MIGRATIONS: string[] = [
     `,
     // v10: Telegram topics. A Telegram chat talks to one conversation at a
     // time (its topic): its own by default, or any conversation the owner
-    // switched to by replying to a message of the bot — a schedule's report,
+    // switched to by replying to a message of the bot — a routine's report,
     // a question. The bot remembers which conversation (and task) each
     // message it sent belongs to, so a reply can be resolved.
     `
@@ -166,7 +166,7 @@ const MIGRATIONS: string[] = [
     );
     CREATE INDEX telegram_messages_sent ON telegram_messages(sent_at);
     `,
-    // v11: the model a task was queued with (a schedule's `model:`); null =
+    // v11: the model a task was queued with (a routine's `model:`); null =
     // the factory's current model, kept in `meta` (`claude.model`) since the
     // owner picks it from Telegram or Settings, not from .env.
     `ALTER TABLE tasks ADD COLUMN model TEXT`,
@@ -224,6 +224,21 @@ const MIGRATIONS: string[] = [
     `
     ALTER TABLE tasks ADD COLUMN parent_id TEXT;
     CREATE INDEX tasks_parent ON tasks(parent_id) WHERE parent_id IS NOT NULL;
+    `,
+    // v17: Telegram topics. With topics on for the bot (BotFather), a private
+    // chat is a list of topics and every conversation gets one: the owner's
+    // chats, a routine's thread, a web chat that reached Telegram. The bot
+    // keeps which topic is which conversation and the name it gave the topic.
+    `
+    CREATE TABLE telegram_threads (
+        chat_id         INTEGER NOT NULL,
+        thread_id       INTEGER NOT NULL,
+        conversation_id TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        PRIMARY KEY (chat_id, thread_id)
+    );
+    CREATE INDEX telegram_threads_conversation ON telegram_threads(conversation_id);
     `
 ]
 

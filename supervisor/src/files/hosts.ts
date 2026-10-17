@@ -43,11 +43,11 @@ export type ProjectHost = HostRef | InlineHost
 
 export const isHostRef = (h: ProjectHost): h is HostRef => typeof (h as HostRef).host === 'string'
 
-/** Who refers to a shared host: a project or a schedule file, with what it adds to the host. */
+/** Who refers to a shared host: a project or a routine file, with what it adds to the host. */
 export interface HostUsage {
-    /** The file's name (a project slug or a schedule name). */
+    /** The file's name (a project slug or a routine name). */
     project: string
-    kind: 'project' | 'schedule'
+    kind: 'project' | 'routine'
     path?: string
     notes?: string
 }
@@ -118,12 +118,12 @@ export class Hosts {
     }
 
     /**
-     * Every project's and schedule's `hosts:` list, as written. A schedule
+     * Every project's and routine's `hosts:` list, as written. A schedule
      * may still hold bare names (the first form of 2026-09-30): read as
      * references, written back as `- host: <name>` when rewritten.
      */
-    private projectHosts(): Array<{ kind: 'projects' | 'schedules'; slug: string; hosts: ProjectHost[] }> {
-        return (['projects', 'schedules'] as const).flatMap((kind) =>
+    private projectHosts(): Array<{ kind: 'projects' | 'routines'; slug: string; hosts: ProjectHost[] }> {
+        return (['projects', 'routines'] as const).flatMap((kind) =>
             this.catalog.list(kind).map((entry) => ({
                 kind,
                 slug: entry.name,
@@ -131,7 +131,7 @@ export class Hosts {
                     (h): ProjectHost[] =>
                         h && typeof h === 'object'
                             ? [h as ProjectHost]
-                            : kind === 'schedules' && typeof h === 'string' && h.trim()
+                            : kind === 'routines' && typeof h === 'string' && h.trim()
                               ? [{ host: h.trim() }]
                               : []
                 )
@@ -144,7 +144,7 @@ export class Hosts {
         const views: HostView[] = hosts.map((h) => ({ ...h, projects: [] }))
         const inline: InlineHostView[] = []
         for (const { kind, slug, hosts: list } of this.projectHosts()) {
-            const usageKind = kind === 'projects' ? 'project' : 'schedule'
+            const usageKind = kind === 'projects' ? 'project' : 'routine'
             list.forEach((h, index) => {
                 if (isHostRef(h)) {
                     const view = views.find((v) => v.name === h.host)
@@ -156,7 +156,7 @@ export class Hosts {
                     else views.push({ name: h.host, ssh: '', projects: [{ project: slug, kind: usageKind }] })
                     return
                 }
-                // Only a project file may carry a host written out; anything else in a schedule is ignored.
+                // Only a project file may carry a host written out; anything else in a routine is ignored.
                 if (kind !== 'projects') return
                 const twin = hosts.find((s) => s.ssh === (h.ssh ?? '').trim() && (s.key ?? '') === (h.key ?? ''))
                 inline.push({ project: slug, index, host: h, same_as: twin?.name ?? null })
@@ -204,7 +204,7 @@ export class Hosts {
         this.write(hosts.filter((h) => h.name !== name))
     }
 
-    /** Rewrite every project's and schedule's reference to `name`: a replacement entry, or null to drop it. */
+    /** Rewrite every project's and routine's reference to `name`: a replacement entry, or null to drop it. */
     private rewriteRefs(name: string, map: (ref: HostRef) => HostRef | null): void {
         for (const { kind, slug, hosts } of this.projectHosts()) {
             if (!hosts.some((h) => isHostRef(h) && h.host === name)) continue

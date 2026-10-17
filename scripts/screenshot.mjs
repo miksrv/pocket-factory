@@ -1,5 +1,6 @@
 // Screenshot a page of the running UI via the DevTools protocol:
 //   node scripts/screenshot.mjs http://localhost:8080/chat/<id> out.png [width] [height] [js]
+// With a password set, put the credentials in the URL (http://user:pass@localhost:8080/...): the script signs in.
 // The optional js runs in the page before the capture (open <details>, click a tab …).
 // Unlike `chrome --headless --screenshot`, it does not wait for the load
 // event, which never fires on the Chat page (it keeps an SSE stream open).
@@ -45,17 +46,28 @@ try {
             ws.addEventListener('message', on)
             ws.send(JSON.stringify({ id: me, method, params }))
         })
-    // Basic auth: credentials in the URL would break the page's own fetches, so they go into a header instead.
+    // Credentials in the URL (http://user:pass@host/...) would break the page's own fetches, so they are used
+    // to sign in first (the SPA only trusts the session cookie) and go into a Cookie header; a factory without
+    // a password answers 400 there and gets a Basic header instead, which its API accepts.
     const page = new URL(url)
     if (page.username) {
-        await call('Network.enable')
-        await call('Network.setExtraHTTPHeaders', {
-            headers: {
-                Authorization: `Basic ${Buffer.from(`${decodeURIComponent(page.username)}:${decodeURIComponent(page.password)}`).toString('base64')}`
-            }
-        })
+        const username = decodeURIComponent(page.username)
+        const password = decodeURIComponent(page.password)
         page.username = ''
         page.password = ''
+        const login = await fetch(new URL('/api/auth/login', page), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        })
+        const cookie = login.ok ? /pf_session=[^;]+/.exec(login.headers.get('set-cookie') ?? '')?.[0] : null
+        if (login.status === 401 || login.status === 429) throw new Error(`sign-in refused: ${await login.text()}`)
+        await call('Network.enable')
+        await call('Network.setExtraHTTPHeaders', {
+            headers: cookie
+                ? { Cookie: cookie }
+                : { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}` }
+        })
     }
     await call('Page.navigate', { url: page.toString() })
     await sleep(4000)

@@ -7,9 +7,10 @@ while the owner is away from the keyboard; you do the work and report back.
 
 - Repositories live under `/data/workspaces/<project>`. Work inside the
   project's own directory, on a branch — never on `main` / `master`.
-- Project facts (repo, tracker, branch conventions, checks to run, hosts) live
-  in `/data/config/projects/<project>.md` with YAML frontmatter. Read the
-  matching file before touching a project. If no file matches the task, ask
+- Project facts (repo, branch conventions, hosts; the checks to run and the
+  tracker in its notes) live in `/data/config/projects/<project>.md` with
+  YAML frontmatter. Read the matching file before touching a project. If no
+  file matches the task, ask
   the owner which project is meant instead of guessing; offer to run the
   `onboard-project` skill when the checkout exists but the file does not.
 - The project file names the workflow to use in `skill:` (default
@@ -79,13 +80,14 @@ while the owner is away from the keyboard; you do the work and report back.
   not comply.
 - When the owner corrects you ("remember: …"), persist the correction into the
   relevant project file or skill and confirm what you changed.
-- A task whose prompt starts with "Scheduled run" came from the scheduler
-  (`/data/config/schedules/<name>.md`), not from a message: nobody is waiting
+- A task whose prompt starts with "Routine run" (or "Scheduled run", the name
+  before 1.5.0) came from a routine (`/data/config/routines/<name>.md`), not
+  from a message: nobody is waiting
   at the keyboard. Do what the file's instructions say, decide by them
   instead of asking whenever you can, and end with a short report. What the
   next run should remember (a ticket deferred and why, a PR skipped on
   purpose, a host to leave alone) goes into the Markdown body of that
-  schedule file — a line under its "Notes" or "Deferred" heading — never
+  routine file — a line under its "Notes" or "Deferred" heading — never
   into its YAML frontmatter. Mode `report` means look and tell: change
   nothing, post nothing.
 - When you write or edit an agent, skill or project file, do not hard-wrap

@@ -34,6 +34,9 @@ const VARS = [
     'MAX_CONCURRENT_SESSIONS',
     'LOG_LEVEL',
     'TIMEZONE',
+    'ROUTINES_SOFT_STOP',
+    'ROUTINES_LATE_MIN',
+    'ROUTINES_ASK_TIMEOUT_MIN',
     'SCHEDULES_SOFT_STOP',
     'SCHEDULES_LATE_MIN',
     'SCHEDULES_ASK_TIMEOUT_MIN'
@@ -83,7 +86,7 @@ describe('loadConfig', () => {
             maxConcurrentSessions: 2,
             logLevel: 'info',
             timezone: 'UTC',
-            schedules: { softStop: 0.85, lateMinutes: 5, askTimeoutMs: 120 * 60_000 }
+            routines: { softStop: 0.85, lateMinutes: 5, askTimeoutMs: 120 * 60_000 }
         })
     })
 
@@ -102,7 +105,7 @@ describe('loadConfig', () => {
         vi.stubEnv('MAX_CONCURRENT_SESSIONS', '0')
         vi.stubEnv('LOG_LEVEL', 'debug')
         vi.stubEnv('TIMEZONE', 'America/Los_Angeles')
-        vi.stubEnv('SCHEDULES_LATE_MIN', '-1')
+        vi.stubEnv('ROUTINES_LATE_MIN', '-1')
         const config = loadConfig()
         expect(config.telegram).toEqual({
             botToken: '123:abc',
@@ -126,7 +129,7 @@ describe('loadConfig', () => {
         expect(config.maxConcurrentSessions).toBe(1)
         expect(config.logLevel).toBe('debug')
         expect(config.timezone).toBe('America/Los_Angeles')
-        expect(config.schedules.lateMinutes).toBe(0)
+        expect(config.routines.lateMinutes).toBe(0)
     })
 
     it('prefers WORKSPACES_ROOT over WORKSPACES_DIR', () => {
@@ -159,7 +162,7 @@ describe('loadConfig', () => {
         ['WEB_PORT', 'eighty', 'WEB_PORT must be a number, got "eighty"'],
         ['CLAUDE_MAX_TURNS', '12abc', 'CLAUDE_MAX_TURNS must be a number'],
         ['MAX_CONCURRENT_SESSIONS', 'Infinity', 'MAX_CONCURRENT_SESSIONS must be a number'],
-        ['SCHEDULES_SOFT_STOP', '150', 'SCHEDULES_SOFT_STOP must be between 0 and 1 (or 0 and 100), got "150"'],
+        ['ROUTINES_SOFT_STOP', '150', 'ROUTINES_SOFT_STOP must be between 0 and 1 (or 0 and 100), got "150"'],
         ['SCHEDULES_SOFT_STOP', '-0.5', 'SCHEDULES_SOFT_STOP must be between']
     ])('refuses %s=%s', (name, value, message) => {
         vi.stubEnv(name, value)
@@ -172,8 +175,15 @@ describe('loadConfig', () => {
         ['1', 1],
         ['85', 0.85],
         ['100', 1]
-    ])('reads SCHEDULES_SOFT_STOP=%s as %d', (value, share) => {
-        vi.stubEnv('SCHEDULES_SOFT_STOP', value)
-        expect(loadConfig().schedules.softStop).toBeCloseTo(share)
+    ])('reads ROUTINES_SOFT_STOP=%s as %d', (value, share) => {
+        vi.stubEnv('ROUTINES_SOFT_STOP', value)
+        expect(loadConfig().routines.softStop).toBeCloseTo(share)
+    })
+
+    it('still reads the SCHEDULES_* names of a .env written before 1.5.0, ROUTINES_* winning', () => {
+        vi.stubEnv('SCHEDULES_SOFT_STOP', '0.5')
+        vi.stubEnv('SCHEDULES_LATE_MIN', '9')
+        vi.stubEnv('ROUTINES_LATE_MIN', '3')
+        expect(loadConfig().routines).toMatchObject({ softStop: 0.5, lateMinutes: 3 })
     })
 })

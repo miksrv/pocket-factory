@@ -44,8 +44,8 @@ export type RunnerEvent = EventOrigin &
               durationMs?: number
           }
         | { type: 'rate_limit'; limits: RateLimits }
-        /** The CLI's session setup: which tools this run has and which MCP servers it connected. */
-        | { type: 'init'; tools: string[]; model: string; mcpServers: McpServerStatus[] }
+        /** The CLI's session setup: which tools and sub-agent types this run has and which MCP servers it connected. */
+        | { type: 'init'; tools: string[]; agents: string[]; model: string; mcpServers: McpServerStatus[] }
         /**
          * The CLI paused a tool call and asks the supervisor (`can_use_tool`): the agent's
          * `AskUserQuestion`, or a permission request for another tool. The run waits until
@@ -215,6 +215,8 @@ interface StreamEvent {
     parent_tool_use_id?: string | null
     // system/init
     tools?: Array<string | { name?: string }>
+    /** Sub-agent types the session may spawn: the built-ins, the user's and the cwd's agent files, plugins' agents. */
+    agents?: string[]
     mcp_servers?: Array<{ name?: string; status?: string; source?: string }>
     model?: string
     subagent_type?: string
@@ -503,6 +505,7 @@ export function runClaude(options: RunOptions): RunHandle {
                         agent: null,
                         parentToolUseId: null,
                         tools,
+                        agents: (event.agents ?? []).filter((a): a is string => typeof a === 'string' && a.length > 0),
                         model: event.model ?? '',
                         mcpServers
                     })

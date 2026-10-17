@@ -299,6 +299,10 @@ p {
 .dim {
     color: var(--text-dim);
 }
+/* A line the owner should notice but that is not an error: a role that ran somewhere else than its file says. */
+.warn-text {
+    color: var(--amber);
+}
 .small {
     font-size: 11.5px;
 }
@@ -1392,18 +1396,22 @@ label.row > input[type='checkbox'] {
     accent-color: var(--ink);
 }
 /* The schedule's live state above its form: the pane's flex column must not squeeze it under the growing textarea. */
-.schedule-status {
+.routine-status {
     flex-shrink: 0;
 }
-.schedule-status .stat .value .badge {
+/* Three columns, never more: the triggers and the last firing carry several lines, so they get the room. */
+.routine-status .stat-row {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.3fr);
+}
+.routine-status .stat .badge {
     vertical-align: middle;
 }
 /* The on / off badge leads the button row; a wider gap keeps it from reading as one of the buttons. */
-.schedule-status .state-gap {
+.routine-status .state-gap {
     width: 8px;
 }
 /* Show runs scrolls inside the card on a desktop; on a phone the page scrolls as a whole (see the media query). */
-.schedule-runs {
+.routine-runs {
     border-top: 1px solid var(--border);
     max-height: 320px;
 }
@@ -1429,6 +1437,13 @@ label.row > input[type='checkbox'] {
 .form-grid > .field.wide {
     grid-column: 1 / -1;
 }
+/* Two fields that belong together (Agent + Skill, First poll + Max items): half the row each, whatever the grid's column count. */
+.form-grid > .field.pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+    grid-row: auto;
+}
 /* A full-width field has no neighbours to line up with, and a group may hold more than three lines
    (a TLS badge row, one row per MCP server): the three-row subgrid would stack the extra ones on top of each other. */
 .form-grid > label.field.wide,
@@ -1436,6 +1451,11 @@ label.row > input[type='checkbox'] {
     display: flex;
     flex-direction: column;
     grid-row: auto;
+}
+/* In that flex column the subgrid's `align-self: end` would push the caption to the right edge. */
+.form-grid > label.field.wide > span:first-child,
+.form-grid > div.field.wide.group > span:first-child {
+    align-self: auto;
 }
 .tool-picker {
     display: flex;
@@ -2112,6 +2132,11 @@ dialog.modal[open]::backdrop {
     align-items: end;
     background: var(--surface);
 }
+.chat .composer-note {
+    display: block;
+    padding: 12px 16px;
+    line-height: 1.5;
+}
 .chat .composer.dragging {
     outline: 2px dashed var(--blue);
     outline-offset: -6px;
@@ -2785,6 +2810,9 @@ dialog.modal[open]::backdrop {
     .form-grid {
         grid-template-columns: 1fr;
     }
+    .form-grid > .field.pair {
+        grid-template-columns: 1fr;
+    }
     .host-card {
         grid-template-columns: 1fr 1fr;
     }
@@ -2794,6 +2822,9 @@ dialog.modal[open]::backdrop {
     }
     .stat-row {
         grid-template-columns: repeat(2, 1fr);
+    }
+    .routine-status .stat-row {
+        grid-template-columns: 1fr;
     }
     .overview-grid {
         grid-template-columns: 1fr;
@@ -2810,7 +2841,7 @@ dialog.modal[open]::backdrop {
     .card-scroll {
         overflow: visible;
     }
-    .schedule-runs {
+    .routine-runs {
         max-height: none;
     }
     th,
@@ -3041,7 +3072,15 @@ dialog.modal[open]::backdrop {
     margin: 6px 0 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+    /* Dozens of browsers or attempts scroll inside the box instead of stretching the page; the header stays put. */
+    max-height: 300px;
     overflow: auto;
+}
+.security-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    box-shadow: inset 0 -1px 0 var(--border);
 }
 .security-table th,
 .security-table td {
@@ -3068,4 +3107,62 @@ dialog.modal[open]::backdrop {
     margin: 0;
     font-size: 12.5px;
     font-weight: 600;
+}
+
+/* Routines: the form continues under the body (triggers, then the folded rest); the same grid, a rule between. */
+.form-below {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+.form-grid > .field.triggers {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    grid-row: auto;
+}
+.field.triggers > .field-head {
+    color: var(--text-2);
+}
+.field.triggers > .field-head > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* One trigger: its own small grid of fields, like a host card. */
+.trigger-card {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+.trigger-card > .wide {
+    grid-column: 1 / -1;
+}
+.trigger-foot {
+    display: flex;
+    justify-content: flex-end;
+}
+/* The rest of the form folded under "More"; its fields keep the grid. */
+details.more > summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-2);
+    list-style: none;
+}
+details.more > summary::-webkit-details-marker {
+    display: none;
+}
+details.more > summary::before {
+    content: '▸ ';
+    color: var(--text-dim);
+}
+details.more[open] > summary::before {
+    content: '▾ ';
+}
+details.more > .form-grid {
+    margin-top: 12px;
 }

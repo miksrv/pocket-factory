@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 
 import { Hono } from 'hono'
 
-import { startOfDay } from '../../schedules/cron.js'
+import { startOfDay } from '../../routines/cron.js'
 import { VERSION } from '../../version.js'
 import type { AppContext, Env } from '../context.js'
 
@@ -118,21 +118,21 @@ export function statusRoutes(): Hono<Env> {
             needs_auth: mcpServers.filter((s) => s.status === 'needs-auth').map((s) => s.label),
             failed: mcpServers.filter((s) => s.status === 'failed').map((s) => s.label)
         }
-        const schedules = c.get('app').schedules.list()
-        const upcoming = schedules.filter((s) => s.next_run).sort((a, b) => a.next_run!.localeCompare(b.next_run!))[0]
+        const routines = c.get('app').routines.list()
+        const upcoming = routines.filter((s) => s.next_run).sort((a, b) => a.next_run!.localeCompare(b.next_run!))[0]
         return c.json({
             version: VERSION,
             stats: {
                 ...store.stats(startOfDay(new Date(), config.timezone).toISOString()),
-                schedules: {
-                    total: schedules.length,
-                    on: schedules.filter((s) => s.enabled && !s.errors.length).length,
+                routines: {
+                    total: routines.length,
+                    on: routines.filter((s) => s.enabled && !s.errors.length).length,
                     // What needs the owner: an invalid file, a prefilter that fails, a run the factory slept through.
-                    invalid: schedules.filter((s) => s.errors.length).length,
-                    failing: schedules
+                    invalid: routines.filter((s) => s.errors.length).length,
+                    failing: routines
                         .filter((s) => !s.errors.length && s.last_run?.status === 'error')
                         .map((s) => s.name),
-                    missed: schedules.filter((s) => s.last_run?.status === 'missed').map((s) => s.name),
+                    missed: routines.filter((s) => s.last_run?.status === 'missed').map((s) => s.name),
                     next: upcoming ? { name: upcoming.name, at: upcoming.next_run } : null
                 }
             },

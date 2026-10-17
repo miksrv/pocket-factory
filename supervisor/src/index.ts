@@ -4,14 +4,14 @@ import path from 'node:path'
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
 import { agentFile } from './files/agentFiles.js'
-import { Catalog } from './files/catalog.js'
+import { Catalog, migrateSchedulesDir } from './files/catalog.js'
 import { delegateAgents, projectProviders } from './files/delegates.js'
 import { Hosts } from './files/hosts.js'
 import { KnownHosts } from './files/knownHosts.js'
 import { Providers } from './files/providers.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
-import { Schedules } from './schedules/service.js'
+import { Routines } from './routines/service.js'
 import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
@@ -40,6 +40,13 @@ async function main(): Promise<void> {
     log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns}`)
 
     const store = new Store(openDatabase(config.paths.dbFile))
+    // Files of a factory from before 1.5.0 move from schedules/ to routines/, once.
+    const migrated = migrateSchedulesDir(config.paths.configRoot)
+    if (migrated.moved) log.info(`moved ${migrated.moved} file(s) from config/schedules to config/routines`)
+    if (migrated.kept.length)
+        log.warn(
+            `config/schedules still has ${migrated.kept.join(', ')}: a routine of the same name exists; merge by hand and delete the old file`
+        )
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)
     const hosts = new Hosts(path.join(config.paths.configRoot, 'hosts.yaml'), catalog)
     const knownHosts = new KnownHosts(
@@ -65,6 +72,7 @@ async function main(): Promise<void> {
         })
     }
     const workspace: Workspace = {
+        projects: () => catalog.list('projects').map((entry) => entry.name),
         projectPath: (slug) => {
             const entry = projectEntry(slug)
             if (!entry) return null
@@ -115,8 +123,8 @@ async function main(): Promise<void> {
         }
     }
     const tasks = new TaskService(store, config, workspace, providers)
-    // Recurring tasks: files in data/config/schedules, fired by the scheduler through the same queue.
-    const schedules = new Schedules(store, catalog, tasks, config, {
+    // Routines: an agent's recurring work, files in data/config/routines, fired by their triggers through the same queue.
+    const routines = new Routines(store, catalog, tasks, config, {
         projectExists: (slug) => workspace.projectPath(slug) !== null,
         projectPath: workspace.projectPath,
         projectRepo: (slug) => {
@@ -152,7 +160,7 @@ async function main(): Promise<void> {
         projects: () => catalog.list('projects').map((entry) => entry.name)
     })
     tasks.docker = toolchains.docker
-    const bot = config.telegram.botToken ? createBot(config, tasks, store, schedules, auth) : null
+    const bot = config.telegram.botToken ? createBot(config, tasks, store, routines, auth) : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({
@@ -165,7 +173,7 @@ async function main(): Promise<void> {
         providers,
         transcripts,
         presets: new Presets(config.presetsDir),
-        schedules,
+        routines,
         auth,
         toolchains
     })
@@ -173,7 +181,7 @@ async function main(): Promise<void> {
 
     const shutdown = (signal: string) => {
         log.info(`${signal} received, stopping`)
-        schedules.stop()
+        routines.stop()
         auth.stop()
         void bot?.stop()
         void tasks.shutdown().then(() => process.exit(0))
@@ -183,7 +191,7 @@ async function main(): Promise<void> {
 
     // Now that the channels listen, tell them about tasks lost to the restart.
     tasks.announceOrphans()
-    schedules.start()
+    routines.start()
 
     if (!bot) return
 
@@ -191,16 +199,25 @@ async function main(): Promise<void> {
     // must not take the web UI and the queue down with it: log and carry on
     // web-only; the container restart policy is not a retry loop for tasks.
     try {
-        // Registers the command menu in Telegram, so the client autocompletes them.
+        // Registers the command menu in Telegram, so the client autocompletes them, and the
+        // bot's profile text (what an empty chat and the profile page show).
         await bot.api.setMyCommands([
-            { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
-            { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
-            { command: 'mode', description: 'A new chat per message, or one thread: /mode fresh|thread' },
-            { command: 'status', description: 'What is going on' },
+            { command: 'routines', description: 'The routines on buttons: run, switch on / off, preview, last runs' },
+            { command: 'run', description: 'Fire a routine now: /run <name>' },
+            { command: 'status', description: 'What is going on, with a Stop button' },
             { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },
-            { command: 'schedules', description: 'Recurring tasks and their last runs' },
-            { command: 'run', description: 'Fire a schedule now: /run <name>' }
+            { command: 'model', description: "The orchestrator's model on buttons; /model <provider>:<model>" },
+            { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
+            { command: 'mode', description: 'A new chat per message, or one thread until /new' },
+            { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
+            { command: 'help', description: 'How this bot works' }
         ])
+        await bot.api.setMyShortDescription(
+            `Pocket Factory v${VERSION}: Claude Code on your own server, from this chat.`
+        )
+        await bot.api.setMyDescription(
+            'Send a task as text, voice, a photo or a file; the agent runs it in your checkouts and replies here. Routines, limits and the model are a command away.'
+        )
     } catch (error) {
         log.warn(`could not register Telegram commands: ${error instanceof Error ? error.message : String(error)}`)
     }
