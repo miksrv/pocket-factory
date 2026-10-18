@@ -77,12 +77,16 @@ function triggersOf(fm: Record<string, unknown>): RawTrigger[] {
     return cron ? [{ schedule: cron }] : []
 }
 
-/** The 1.5.0 `prefilter:` shape as a step. */
+/** The 1.5.0 `prefilter:` shape as a step, read as the server reads it (`parseStep` in routines/spec.ts). */
 function stepOfPrefilter(p: unknown): RawStep | null {
-    if (!p || typeof p !== 'object') return typeof p === 'string' && p.trim() ? { run: p, items: true } : null
+    if (!p || typeof p !== 'object') return typeof p === 'string' && p.trim() ? { run: p } : null
     const { kind, ...rest } = p as RawStep
-    if (kind === 'command') return { ...rest, items: true }
-    if (kind === 'github-prs' || kind === 'trac') return { [kind]: rest }
+    if (kind === undefined) return rest
+    if (kind === 'command') return { ...rest, run: rest.run ?? '', items: true }
+    if (kind === 'github-prs' || kind === 'trac') {
+        const { name, ...options } = rest
+        return name === undefined ? { [kind]: options } : { name, [kind]: options }
+    }
     return null
 }
 
@@ -92,9 +96,14 @@ function stepOfPrefilter(p: unknown): RawStep | null {
  * step, `agent:` / `skill:` as the agent step). A file without `steps:`
  * always has the agent step: that was the only way to run.
  */
-function stepsOf(fm: Record<string, unknown>): RawStep[] {
+export function stepsOf(fm: Record<string, unknown>): RawStep[] {
     const steps: RawStep[] = []
-    const prefilters = [fm.prefilter, ...triggersOf(fm).map((t) => t.prefilter)]
+    // As on the server: a top-level prefilter counts only without `triggers:`, and under a trigger only a `poll:` has one.
+    const prefilters = Array.isArray(fm.triggers)
+        ? triggersOf(fm)
+              .filter((t) => t.poll !== undefined)
+              .map((t) => t.prefilter)
+        : [fm.prefilter]
     for (const p of prefilters) {
         const step = stepOfPrefilter(p)
         if (step) steps.push(step)
@@ -154,7 +163,9 @@ export function RoutinesPage() {
                 for (const [i, s] of steps.entries()) {
                     const kind = kindOf(s)
                     if (kind === 'run' && !str(s.run).trim()) return `step ${i + 1}: a command is required`
-                    if (kind === 'trac' && !str((s.trac as RawStep | undefined)?.query).trim())
+                    // As on the server: the query is `query:` or the part of `url:` after `?`.
+                    const trac = s.trac as RawStep | undefined
+                    if (kind === 'trac' && !str(trac?.query).trim() && !/\?./s.test(str(trac?.url)))
                         return `step ${i + 1}: a Trac query is required`
                     if (kind === 'agent' && i !== steps.length - 1) return 'the agent must be the last step'
                 }
@@ -293,8 +304,8 @@ export function RoutinesPage() {
                                         prefilter: undefined,
                                         agent: undefined,
                                         skill: undefined,
-                                        triggers:
-                                            expr.trim() || rest.length ? [{ ...first, schedule: expr }, ...rest] : [],
+                                        // Clearing the first schedule leaves the others the file has, not an empty one.
+                                        triggers: expr.trim() ? [{ ...first, schedule: expr }, ...rest] : rest,
                                         cron: undefined
                                     })
                                 }}

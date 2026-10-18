@@ -173,6 +173,9 @@ function hostList(raw: unknown): RoutineHost[] {
     })
 }
 
+/** A repository's GitHub address (https, ssh or scp-like), as opposed to owner/name. */
+const GITHUB_ADDRESS = /^(?:(?:https?|ssh|git):\/\/)?(?:[^@/\s]+@)?(?:www\.)?github\.com[/:]/i
+
 const KINDS = ['run', 'github-prs', 'trac', 'agent'] as const
 
 /**
@@ -236,7 +239,7 @@ function parseStep(raw: unknown, errors: string[], at: string, index: number): S
             const given = (Array.isArray(p.repo) ? (p.repo as unknown[]) : [p.repo])
                 .map(str)
                 .filter((r) => r !== undefined)
-            const repos = [...new Set(given.map((r) => (/github\.com[/:]/.test(r) ? (repoSlug(r) ?? r) : r)))]
+            const repos = [...new Set(given.map((r) => (GITHUB_ADDRESS.test(r) ? (repoSlug(r) ?? r) : r)))]
             for (const repo of repos)
                 if (!/^[\w.-]+\/[\w.-]+$/.test(repo))
                     errors.push(`${at}.repo "${repo}" must be owner/name or the repository's GitHub address`)
@@ -384,7 +387,10 @@ function parseTriggers(
     warnings: string[]
 ): { triggers: Trigger[]; legacySources: unknown[] } {
     const legacySources: unknown[] = []
-    if (fm.prefilter !== undefined && fm.prefilter !== null && fm.prefilter !== '' && fm.prefilter !== false) {
+    const topPrefilter =
+        fm.prefilter !== undefined && fm.prefilter !== null && fm.prefilter !== '' && fm.prefilter !== false
+    // As in 1.5.0, a top-level prefilter counts only without `triggers:` (there it was ignored, with a warning).
+    if (topPrefilter && (fm.triggers === undefined || fm.triggers === null)) {
         warnings.push('prefilter: is read as the first step; move it under steps:')
         legacySources.push(fm.prefilter)
     }
@@ -398,6 +404,7 @@ function parseTriggers(
         return { triggers: [], legacySources }
     }
     if (fm.cron !== undefined) warnings.push('cron: is ignored when triggers: is set; move it under a trigger')
+    if (topPrefilter) warnings.push('prefilter: is ignored when triggers: is set; move it under steps:')
     const triggers: Trigger[] = []
     fm.triggers.forEach((raw, i) => {
         const at = `triggers[${i + 1}]`

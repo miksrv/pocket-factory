@@ -88,7 +88,10 @@ export function routineNotice(
         return null
     }
     if (run.status === 'done') {
-        if (spec?.notify === 'none') return null
+        // A good run ends an error streak, so the same error later is told again.
+        lastNotice.delete(run.schedule)
+        // Run now was pressed where its result shows (the card in Telegram, the page in the web): no second notice.
+        if (spec?.notify === 'none' || run.trigger === 'manual') return null
         return `✅ Routine **${run.schedule}** ran its steps${run.items ? ` (${run.items} new item(s))` : ''}:\n\n${note || '(no output)'}`
     }
     if (lastNotice.get(run.schedule) === note) return null

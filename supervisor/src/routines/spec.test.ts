@@ -202,6 +202,13 @@ describe('parseRoutine', () => {
             ])
         })
 
+        it('takes only a github.com address as an address, not a host that merely contains it', () => {
+            const parsed = parse({ steps: [{ 'github-prs': { repo: 'https://evil.example/github.com/a/b' } }] })
+            expect(parsed.errors).toEqual([
+                'steps[1].repo "https://evil.example/github.com/a/b" must be owner/name or the repository\'s GitHub address'
+            ])
+        })
+
         it('lets a github step use the project instead of a repo', () => {
             const parsed = parse({ project: 'shop', steps: [{ 'github-prs': {} }, { agent: 'reviewer' }] })
             expect(parsed.errors).toEqual([])
@@ -224,6 +231,13 @@ describe('parseRoutine', () => {
                 { kind: 'run', run: 'ls', items: true, new_only: true },
                 { kind: 'agent', agent: null }
             ])
+        })
+
+        it('ignores a top-level prefilter: next to triggers:, as 1.5.0 did, and warns', () => {
+            const parsed = parse({ triggers: [], prefilter: { kind: 'command', run: 'ls' } })
+            expect(parsed.errors).toEqual([])
+            expect(parsed.warnings).toContain('prefilter: is ignored when triggers: is set; move it under steps:')
+            expect(parsed.spec?.steps).toMatchObject([{ kind: 'agent' }])
         })
 
         it('reads a poll: trigger as a schedule and its prefilter as a step, with the file defaults for zone and window', () => {

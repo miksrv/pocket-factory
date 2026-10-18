@@ -57,6 +57,22 @@ describe('Store', () => {
         throw new Error('paging did not end')
     }
 
+    it('masks secret values in task results, errors, questions and chat titles', () => {
+        store.setRedactor({ redact: (text) => text.split('hunter22').join('••••'), active: () => true })
+        const c = store.createConversation('web', null, 'deploy with hunter22')
+        expect(store.getConversation(c.id)?.title).toBe('deploy with ••••')
+        store.updateConversation(c.id, { title: 'again hunter22' })
+        expect(store.getConversation(c.id)?.title).toBe('again ••••')
+        const task = store.createTask(c.id, 'web', 'use hunter22')
+        const updated = store.updateTask(task.id, {
+            result: 'the key is hunter22',
+            error: 'failed with hunter22',
+            ask: { ...ASK, input: { questions: [{ question: 'Is hunter22 right?' }] } }
+        })
+        expect(updated).toMatchObject({ prompt: 'use ••••', result: 'the key is ••••', error: 'failed with ••••' })
+        expect(JSON.stringify(updated.ask)).not.toContain('hunter22')
+    })
+
     describe('conversations', () => {
         it('creates, finds and reads a conversation', () => {
             const created = store.createConversation('telegram', '42', 'Hello', null)

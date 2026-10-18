@@ -23,6 +23,8 @@ export interface Button {
     style?: ButtonStyle
     /** Shown but inert: the current value, the answer already given. */
     disabled?: boolean
+    /** The label in the classic form, where every row sits in one keyboard under the text (a list's row names its item). */
+    plain?: string
 }
 
 export type Block =
@@ -113,9 +115,10 @@ export function richButtonRows(buttonRows: Button[][]): string {
 
 function inlineButton(b: Button): InlineKeyboardButton {
     const style = b.style && b.style !== 'link' ? { style: b.style } : {}
-    if (b.disabled || (!b.data && !b.url)) return { text: b.text, disabled: {}, ...style }
-    if (b.url) return { text: b.text, url: b.url, ...style }
-    return { text: b.text, callback_data: b.data!, ...style }
+    const label = b.plain ?? b.text
+    if (b.disabled || (!b.data && !b.url)) return { text: label, disabled: {}, ...style }
+    if (b.url) return { text: label, url: b.url, ...style }
+    return { text: label, callback_data: b.data!, ...style }
 }
 
 /** The buttons of a view (or of button rows) as an inline keyboard under the message; undefined without any. */

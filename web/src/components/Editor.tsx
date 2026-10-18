@@ -330,6 +330,8 @@ function Form({
     // ⌘S / Ctrl+S saves from anywhere on the page.
     useEffect(() => {
         const onKey = (e: globalThis.KeyboardEvent) => {
+            // A code editor on the page saved its own file with it already.
+            if (e.defaultPrevented) return
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
                 e.preventDefault()
                 void save()

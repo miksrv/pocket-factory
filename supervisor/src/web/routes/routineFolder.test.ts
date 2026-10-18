@@ -41,6 +41,29 @@ describe('routine folders and secrets', () => {
         expect((await put('/api/routines/geo/files/..%2Fescape.sh', { text: 'x' })).status).toBe(400)
     })
 
+    it('keeps the path of a routine named files, and refuses a broken escape as a bad name', async () => {
+        flat('files', '  - run: echo hi')
+        expect((await put('/api/routines/files/files/scripts/a.sh', { text: 'echo a\n' })).status).toBe(200)
+        expect(fs.existsSync(path.join(routines, 'files', 'scripts', 'a.sh'))).toBe(true)
+        const read = (await (await t.request('/api/routines/files/files/scripts/a.sh')).json()) as { text: string }
+        expect(read.text).toBe('echo a\n')
+        expect((await t.request('/api/routines/files/files/scripts/%E0%A4%A.sh')).status).toBe(400)
+    })
+
+    it('masks secret values in what Preview returns', async () => {
+        flat('geo', '  - name: hello\n    run: echo "token=$GEO_TOKEN"')
+        await put('/api/secrets/GEO_TOKEN', {
+            value: 'geo-secret-42',
+            secret: true,
+            scope: { all: false, routines: ['geo'], projects: [] }
+        })
+        const res = await t.request('/api/routines/geo/preview', { method: 'POST' })
+        expect(res.status).toBe(200)
+        const body = JSON.stringify(await res.json())
+        expect(body).toContain('token=••••')
+        expect(body).not.toContain('geo-secret-42')
+    })
+
     it('refuses a save over a file a run changed since it was opened, renames and deletes', async () => {
         flat('geo', '  - run: echo hi')
         await put('/api/routines/geo/files/data/queue.csv', { text: 'id,name\n1,a\n' })

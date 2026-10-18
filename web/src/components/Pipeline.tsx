@@ -82,6 +82,42 @@ function splitTracQuery(text: string): { url: string | undefined; query: string 
     }
 }
 
+/**
+ * The address of a Trac step as typed: the field keeps its own text (`https://` half typed, a
+ * trailing `/query?`) and hands the parts over on every change; it reads the parts again only when
+ * they change from outside.
+ */
+function TracAddress({
+    url,
+    query,
+    onChange
+}: {
+    url: string
+    query: string
+    onChange: (parts: { url: string | undefined; query: string }) => void
+}) {
+    const joined = joinTracQuery(url, query)
+    const [text, setText] = useState(joined)
+    const [synced, setSynced] = useState(joined)
+    if (joined !== synced) {
+        setSynced(joined)
+        const own = splitTracQuery(text)
+        if (joinTracQuery(own.url ?? '', own.query) !== joined) setText(joined)
+    }
+    return (
+        <input
+            className='mono'
+            value={text}
+            onChange={(e) => {
+                setText(e.target.value)
+                onChange(splitTracQuery(e.target.value))
+            }}
+            placeholder='https://trac.example.com/query?status=new&component=Foo'
+            title='The login is shared by every Trac step: TRAC_USER + TRAC_PASSWORD (or TRAC_COOKIE), in Settings → Secrets and variables'
+        />
+    )
+}
+
 /** `https://github.com/owner/name(.git)` or a page under it → `owner/name`; null for anything else. */
 function repoSlug(text: string): string | null {
     const m = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#].*)?$/.exec(text.trim())
@@ -334,7 +370,7 @@ function StepNode({
         kind === 'run'
             ? facts?.script?.description || str(step.run) || 'no command yet'
             : kind === 'trac'
-              ? str(options.query) || 'no query yet'
+              ? joinTracQuery(str(options.url), str(options.query)) || 'no query yet'
               : kind === 'github-prs'
                 ? `${repoList(options.repo).join(', ') || "the project's repository"} · ${str(options.filter) || 'open'}`
                 : str(step.skill)
@@ -431,16 +467,35 @@ function StepWindow({
     const [draft, setDraft] = useState(step)
     const kind = kindOf(draft)
     const changed = JSON.stringify(draft) !== JSON.stringify(step)
+    // Unsaved edits in the script's editor: the file is saved on its own, so closing the window would lose them.
+    const [scriptDirty, setScriptDirty] = useState(false)
     const confirm = useConfirm()
     const cancel = () => {
-        if (!changed) return onCancel()
+        if (!changed && !scriptDirty) return onCancel()
         void confirm({
-            title: 'Drop the changes to this step?',
-            message: 'The step stays as it was; edits to its script file are saved already.',
+            title: changed
+                ? scriptDirty
+                    ? 'Drop the changes to this step and its script?'
+                    : 'Drop the changes to this step?'
+                : 'Drop the unsaved edits to the script?',
+            message: scriptDirty
+                ? `${changed ? 'The step stays as it was; the' : 'The'} script's unsaved edits are lost (Save file keeps them).`
+                : 'The step stays as it was; edits to its script file are saved already.',
             action: 'Drop',
             danger: true,
             icon: 'warning',
             onConfirm: onCancel
+        })
+    }
+    const apply = () => {
+        if (!scriptDirty) return onApply(draft)
+        void confirm({
+            title: 'Drop the unsaved edits to the script?',
+            message: 'The step is applied; the script file stays as it was last saved (Save file keeps the edits).',
+            action: 'Drop',
+            danger: true,
+            icon: 'warning',
+            onConfirm: () => onApply(draft)
         })
     }
     const name = str(draft.name) || (kind === 'agent' ? 'Agent' : `step ${index + 1}`)
@@ -466,6 +521,7 @@ function StepWindow({
                     lastRun={lastRun}
                     onChange={setDraft}
                     onChanged={onChanged}
+                    onScriptDirty={setScriptDirty}
                 />
             }
             footer={
@@ -504,7 +560,7 @@ function StepWindow({
                     <Button onClick={cancel}>Cancel</Button>
                     <Button
                         variant='primary'
-                        onClick={() => onApply(draft)}
+                        onClick={apply}
                     >
                         {changed || fresh ? 'Apply' : 'Done'}
                     </Button>
@@ -648,7 +704,8 @@ function StepCard({
     needs: envNeeds,
     lastRun,
     onChange,
-    onChanged
+    onChanged,
+    onScriptDirty
 }: {
     index: number
     step: RawStep
@@ -664,6 +721,8 @@ function StepCard({
     lastRun?: RoutineView['last_run']
     onChange: (next: RawStep) => void
     onChanged: () => void
+    /** Whether the script's editor holds unsaved edits (the window asks before closing). */
+    onScriptDirty?: (dirty: boolean) => void
 }) {
     const kind = kindOf(step)
     const options = (kind === 'github-prs' || kind === 'trac' ? step[kind] : {}) as RawStep
@@ -895,6 +954,7 @@ function StepCard({
                         target={ref}
                         description={str(step.name) || KIND_LABEL.run}
                         onSaved={onChanged}
+                        onDirty={onScriptDirty}
                     />
                 )}
                 {ref ? (
@@ -980,12 +1040,10 @@ function StepCard({
                 label='Query'
                 hint='A custom query’s address, from the browser.'
             >
-                <input
-                    className='mono'
-                    value={joinTracQuery(str(options.url), str(options.query))}
-                    onChange={(e) => setOptions(splitTracQuery(e.target.value))}
-                    placeholder='https://trac.example.com/query?status=new&component=Foo'
-                    title='The login is shared by every Trac step: TRAC_USER + TRAC_PASSWORD (or TRAC_COOKIE), in Settings → Secrets and variables'
+                <TracAddress
+                    url={str(options.url)}
+                    query={str(options.query)}
+                    onChange={setOptions}
                 />
             </Field>
             <Field
@@ -1018,11 +1076,13 @@ function StepCard({
 function ScriptEditor({
     target,
     description,
-    onSaved
+    onSaved,
+    onDirty
 }: {
     target: { kind: FolderKind; name: string; path: string }
     description: string
     onSaved: () => void
+    onDirty?: (dirty: boolean) => void
 }) {
     const files = useAsync(() => api.folderFiles(target.kind, target.name), [target.kind, target.name])
     const [error, setError] = useState<string | null>(null)
@@ -1044,10 +1104,12 @@ function ScriptEditor({
             <ErrorBox error={files.error ?? error} />
             {file ? (
                 <FileEditor
+                    key={file.path}
                     kind={target.kind}
                     name={target.name}
                     file={file}
                     compact
+                    onDirty={onDirty}
                     onSaved={() => {
                         files.reload()
                         onSaved()

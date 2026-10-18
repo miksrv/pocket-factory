@@ -163,6 +163,8 @@ export function mountEditor(
                     {
                         key: 'Mod-s',
                         preventDefault: true,
+                        // The file's own save: the page's form around the editor must not save too.
+                        stopPropagation: true,
                         run: () => {
                             options.onSave?.()
                             return true

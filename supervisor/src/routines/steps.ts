@@ -143,8 +143,8 @@ export function runScript(step: RunStep, ctx: StepContext): Promise<ScriptRun> {
         )
         // `close` waits for stdio, which a child left in the background (`server &`) holds open:
         // once bash itself exits, the pipes get a moment to drain and the step ends without them.
+        // Also after a timeout: a child that left the group (`setsid`) outlives the kill and keeps them open.
         child.on('exit', (code, signal) => {
-            if (killed) return
             setTimeout(() => {
                 if (settled) return
                 child.stdout.destroy()

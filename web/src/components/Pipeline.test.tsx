@@ -12,7 +12,7 @@ const STEPS: RawStep[] = [
     { agent: 'orchestrator' }
 ]
 
-function renderGraph(onChange = vi.fn(), steps = STEPS) {
+function renderGraph(onChange = vi.fn(), steps = STEPS, routine: string | null = null) {
     renderWithProviders(
         <StepsField
             model={null}
@@ -20,7 +20,7 @@ function renderGraph(onChange = vi.fn(), steps = STEPS) {
             onChange={onChange}
             agents={['geometki']}
             skills={[]}
-            routine={null}
+            routine={routine}
             saved={steps}
             onChanged={vi.fn()}
         />
@@ -59,6 +59,42 @@ describe('StepsField', () => {
         await user.type(within(dialog).getByLabelText(/Command/), 'echo 43')
         await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
         expect(onChange).toHaveBeenCalledWith([{ name: 'Stats', run: 'echo 43' }, STEPS[1], STEPS[2]])
+    })
+
+    it('keeps a Trac address as typed and stores it as the site and the query', async () => {
+        const onChange = renderGraph(vi.fn(), [{ trac: { url: '' } }, STEPS[2]])
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /no query yet/ }))
+        const dialog = await screen.findByRole('dialog')
+        const input = within(dialog).getByLabelText(/Query/)
+        await user.type(input, 'https://trac.example.com/query?')
+        expect(input).toHaveValue('https://trac.example.com/query?')
+        await user.type(input, 'status=new')
+        await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
+        expect(onChange).toHaveBeenCalledWith([
+            { trac: { url: 'https://trac.example.com', query: 'status=new' } },
+            STEPS[2]
+        ])
+    })
+
+    it('asks before closing a step window over unsaved script edits', async () => {
+        const file = { path: 'scripts/stats.sh', size: 8, text: true, exec: true, updated_at: 't1' }
+        mockFetch({
+            'GET /api/routines/geo/files': [file],
+            'GET /api/routines/geo/files/scripts/stats.sh': { path: file.path, text: 'echo 1\n', updated_at: 't1' }
+        })
+        const step = { name: 'Stats', run: '"${ROUTINE_DIR}/scripts/stats.sh"' }
+        const onChange = renderGraph(vi.fn(), [step, STEPS[2]], 'geo')
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Stats/ }))
+        const dialog = await screen.findByRole('dialog')
+        await user.type(await within(dialog).findByLabelText('scripts/stats.sh'), 'x')
+        await user.click(within(dialog).getByRole('button', { name: 'Done' }))
+        const question = (await screen.findByText('Drop the unsaved edits to the script?')).closest('dialog')!
+        await user.click(within(question).getByRole('button', { name: 'Cancel' }))
+        expect(onChange).not.toHaveBeenCalled()
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+        expect(await screen.findByText('Drop the unsaved edits to the script?')).toBeInTheDocument()
     })
 
     it('adds a source before the agent and opens it', async () => {

@@ -55,19 +55,58 @@ const TEXT_MAX = 1024 * 1024
 /** The most a file uploaded through the UI may weigh (the API's body limit, base64 included, is the real cap). */
 export const UPLOAD_MAX = 1500 * 1024
 
-/** A file is text when its first bytes carry no NUL and decode as UTF-8. */
-function isText(file: string): boolean {
-    const fd = fs.openSync(file, 'r')
+/** Whether `child` is `dir` itself or lies under it (a sibling sharing the prefix does not). */
+function isInside(child: string, dir: string): boolean {
+    return child === dir || child.startsWith(dir + path.sep)
+}
+
+/** Bytes are text when their head carries no NUL and decodes as UTF-8. */
+function isTextBytes(bytes: Buffer): boolean {
+    const head = bytes.subarray(0, 4096)
+    if (head.includes(0)) return false
     try {
-        const buffer = Buffer.alloc(4096)
-        const n = fs.readSync(fd, buffer, 0, buffer.length, 0)
-        const head = buffer.subarray(0, n)
-        if (head.includes(0)) return false
         // `stream` forgives a multi-byte character cut at the end of the sample.
         new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true })
         return true
     } catch {
         return false
+    }
+}
+
+/** A file is text when its first bytes carry no NUL and decode as UTF-8. */
+function isText(file: string): boolean {
+    let fd: number
+    try {
+        fd = fs.openSync(file, 'r')
+    } catch {
+        return false
+    }
+    try {
+        const buffer = Buffer.alloc(4096)
+        const n = fs.readSync(fd, buffer, 0, buffer.length, 0)
+        return isTextBytes(buffer.subarray(0, n))
+    } catch {
+        return false
+    } finally {
+        fs.closeSync(fd)
+    }
+}
+
+/**
+ * Open a folder's file without following a link, and hand its descriptor and facts to `use`:
+ * what is checked is what is read (no window between a stat and the read). Null when there is
+ * no such regular file.
+ */
+function withRegularFile<T>(full: string, use: (fd: number, stat: fs.Stats) => T): T | null {
+    let fd: number
+    try {
+        fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+    } catch {
+        return null
+    }
+    try {
+        const stat = fs.fstatSync(fd)
+        return stat.isFile() ? use(fd, stat) : null
     } finally {
         fs.closeSync(fd)
     }
@@ -197,7 +236,7 @@ export class Catalog {
         // A symlink inside the folder that points elsewhere must not be read or written through.
         let parent = path.dirname(full)
         while (!fs.existsSync(parent) && parent.startsWith(dir + path.sep)) parent = path.dirname(parent)
-        if (fs.existsSync(parent) && fs.existsSync(dir) && !fs.realpathSync(parent).startsWith(fs.realpathSync(dir)))
+        if (fs.existsSync(parent) && fs.existsSync(dir) && !isInside(fs.realpathSync(parent), fs.realpathSync(dir)))
             throw new BadName(`"${rel}" leaves the ${kind.slice(0, -1)} through a link`)
         if (fs.existsSync(full) && fs.lstatSync(full).isSymbolicLink())
             throw new BadName(`"${rel}" is a link; edit the file it points to`)
@@ -239,31 +278,40 @@ export class Catalog {
         } catch {
             return null
         }
-        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null
-        const stat = fs.statSync(full)
-        return {
-            path: rel,
-            size: stat.size,
-            text: stat.size <= TEXT_MAX && isText(full),
-            exec: (stat.mode & 0o111) !== 0,
-            updated_at: stat.mtime.toISOString()
-        }
+        return withRegularFile(full, (fd, stat) => {
+            let text = false
+            if (stat.size <= TEXT_MAX) {
+                const buffer = Buffer.alloc(4096)
+                text = isTextBytes(buffer.subarray(0, fs.readSync(fd, buffer, 0, buffer.length, 0)))
+            }
+            return {
+                path: rel,
+                size: stat.size,
+                text,
+                exec: (stat.mode & 0o111) !== 0,
+                updated_at: stat.mtime.toISOString()
+            }
+        })
     }
 
     readFolderFile(kind: FolderKind, name: string, rel: string): { text: string; updated_at: string } {
         const full = this.folderFilePath(kind, name, rel)
-        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) throw new NotFound(`${kind}/${name}/${rel} not found`)
-        const stat = fs.statSync(full)
-        if (stat.size > TEXT_MAX || !isText(full))
+        const read = withRegularFile(full, (fd, stat) => {
+            if (stat.size > TEXT_MAX) return { bytes: null, stat }
+            return { bytes: fs.readFileSync(fd), stat }
+        })
+        if (!read) throw new NotFound(`${kind}/${name}/${rel} not found`)
+        if (!read.bytes || !isTextBytes(read.bytes))
             throw new BadName(`${kind}/${name}/${rel} is not a text file the editor can show`)
-        return { text: fs.readFileSync(full, 'utf8'), updated_at: stat.mtime.toISOString() }
+        return { text: read.bytes.toString('utf8'), updated_at: read.stat.mtime.toISOString() }
     }
 
     /** The raw bytes, for a download (a binary file the editor does not show). */
     readFolderBytes(kind: FolderKind, name: string, rel: string): Buffer {
         const full = this.folderFilePath(kind, name, rel)
-        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) throw new NotFound(`${kind}/${name}/${rel} not found`)
-        return fs.readFileSync(full)
+        const bytes = withRegularFile(full, (fd) => fs.readFileSync(fd))
+        if (!bytes) throw new NotFound(`${kind}/${name}/${rel} not found`)
+        return bytes
     }
 
     /**
@@ -284,15 +332,33 @@ export class Catalog {
         const bytes = typeof content === 'string' ? Buffer.byteLength(content) : content.length
         const max = typeof content === 'string' ? TEXT_MAX : UPLOAD_MAX
         if (bytes > max) throw new BadName(`the file is larger than ${Math.round(max / 1024)} KB`)
-        const existed = fs.existsSync(full)
-        if (existed && options.updatedAt && fs.statSync(full).mtime.toISOString() !== options.updatedAt)
-            throw new Conflict(
-                `${rel} changed on disk since you opened it (maybe by a run): reload it and apply your edit again`
-            )
         fs.mkdirSync(path.dirname(full), { recursive: true })
-        fs.writeFileSync(full, content)
-        if (options.exec !== undefined) fs.chmodSync(full, options.exec ? 0o755 : 0o644)
-        else if (!existed && /\.(sh|bash|py|mjs|js|rb|pl)$/.test(full)) fs.chmodSync(full, 0o755)
+        // One descriptor from the check to the write: a new file is created exclusively, an
+        // existing one is opened (never through a link), compared and only then truncated.
+        const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants
+        let existed = false
+        let fd: number
+        try {
+            fd = fs.openSync(full, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+            existed = true
+            fd = fs.openSync(full, O_WRONLY | O_NOFOLLOW)
+        }
+        try {
+            const stat = fs.fstatSync(fd)
+            if (!stat.isFile()) throw new BadName(`"${rel}" is not a file`)
+            if (existed && options.updatedAt && stat.mtime.toISOString() !== options.updatedAt)
+                throw new Conflict(
+                    `${rel} changed on disk since you opened it (maybe by a run): reload it and apply your edit again`
+                )
+            fs.ftruncateSync(fd, 0)
+            fs.writeSync(fd, typeof content === 'string' ? Buffer.from(content) : content, 0, bytes, 0)
+            if (options.exec !== undefined) fs.fchmodSync(fd, options.exec ? 0o755 : 0o644)
+            else if (!existed && /\.(sh|bash|py|mjs|js|rb|pl)$/.test(full)) fs.fchmodSync(fd, 0o755)
+        } finally {
+            fs.closeSync(fd)
+        }
         return this.folderFile(kind, name, rel)!
     }
 

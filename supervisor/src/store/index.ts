@@ -383,8 +383,8 @@ function routineRunOf(row: RoutineRunRow): RoutineRun {
     }
 }
 
-/** The task fields that carry text from the agent or the owner, masked when stored. */
-const TEXT_FIELDS = new Set(['prompt', 'result', 'error'])
+/** The task and conversation fields that carry text from the agent or the owner, masked when stored. */
+const TEXT_FIELDS = new Set(['prompt', 'result', 'error', 'title'])
 
 type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply' | 'active'> & {
     unread: number
@@ -425,8 +425,8 @@ export class Store {
         this.masking = redactor.active
     }
 
-    /** Every string inside a value, masked. */
-    private redactDeep<T>(value: T): T {
+    /** Every string inside a value, masked (also for what an API returns without storing it). */
+    redactDeep<T>(value: T): T {
         if (!this.masking()) return value
         if (typeof value === 'string') return this.redact(value) as T
         if (Array.isArray(value)) return value.map((v) => this.redactDeep(v as unknown)) as T
@@ -464,7 +464,7 @@ export class Store {
             id: randomUUID(),
             channel,
             external_id: externalId,
-            title,
+            title: title && this.redact(title),
             session_id: null,
             project,
             provider: null,
@@ -482,7 +482,7 @@ export class Store {
                 `INSERT INTO conversations (id, channel, external_id, title, session_id, project, created_at, updated_at)
                  VALUES (?, ?, ?, ?, NULL, ?, ?, ?)`
             )
-            .run(conversation.id, channel, externalId, title, project, ts, ts)
+            .run(conversation.id, channel, externalId, conversation.title, project, ts, ts)
         return conversation
     }
 
@@ -623,7 +623,13 @@ export class Store {
     updateTask(id: string, patch: Partial<Omit<Task, 'id'>>): Task {
         const sets: string[] = []
         const values: unknown[] = []
-        for (const [key, value] of Object.entries(patch)) {
+        for (const [key, raw] of Object.entries(patch)) {
+            const value =
+                typeof raw === 'string' && TEXT_FIELDS.has(key)
+                    ? this.redact(raw)
+                    : key === 'ask' && raw
+                      ? this.redactDeep(raw)
+                      : raw
             sets.push(`${key} = ?`)
             values.push(
                 (key === 'ask' || key === 'attachments' || key === 'git') && value !== null

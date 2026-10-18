@@ -75,6 +75,15 @@ describe('runPipeline', () => {
         ).rejects.toThrow('step "stats" exited with 3: nope')
     })
 
+    it('ends a timed-out step even when a child left its process group and holds the pipes', async () => {
+        const started = Date.now()
+        const escapee = `python3 -c "import os,time; os.setsid(); time.sleep(20)" & sleep 30`
+        await expect(runPipeline([script(escapee, { name: 'stuck', timeout_s: 5 })], ctx)).rejects.toThrow(
+            /timed out after 5 s/
+        )
+        expect(Date.now() - started).toBeLessThan(9000)
+    }, 15_000)
+
     it('names the step whose items do not parse', async () => {
         await expect(
             runPipeline([script("echo '[not json'", { name: 'bad', items: true, new_only: true })], ctx)

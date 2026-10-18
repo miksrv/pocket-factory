@@ -56,6 +56,33 @@ describe('FileEditor', () => {
         })
     })
 
+    it('keeps the saved text in the editor and sends its new version with the next save', async () => {
+        const fetch = mockFetch({
+            'GET /api/routines/geo/files/scripts/a.sh': { path: 'scripts/a.sh', text: 'echo 1\n', updated_at: 't1' },
+            'PUT /api/routines/geo/files/scripts/a.sh': { ...file, path: 'scripts/a.sh', updated_at: 't2' }
+        })
+        renderWithProviders(
+            <FileEditor
+                kind='routines'
+                name='geo'
+                file={{ ...file, path: 'scripts/a.sh' }}
+            />
+        )
+        const user = userEvent.setup()
+        const editor = await screen.findByLabelText('scripts/a.sh')
+        await user.type(editor, 'x')
+        await user.click(screen.getByRole('button', { name: 'Save file' }))
+        expect(screen.getByLabelText('scripts/a.sh')).toHaveValue('echo 1\nx')
+        await user.type(screen.getByLabelText('scripts/a.sh'), 'y')
+        await user.click(screen.getByRole('button', { name: 'Save file' }))
+        const puts = fetch.requests().filter((r) => r.method === 'PUT')
+        expect(puts.map((r) => r.body)).toEqual([
+            { text: 'echo 1\nx', updated_at: 't1' },
+            { text: 'echo 1\nxy', updated_at: 't2' }
+        ])
+        expect(fetch.requests().filter((r) => r.method === 'GET')).toHaveLength(1)
+    })
+
     it('offers a reload when a run changed the file since it was opened', async () => {
         mockFetch({
             'GET /api/routines/geo/files/scripts/a.sh': { path: 'scripts/a.sh', text: 'echo 1\n', updated_at: 't1' },

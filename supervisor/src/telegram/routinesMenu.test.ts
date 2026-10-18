@@ -12,6 +12,7 @@ import {
     routinesList,
     runsText
 } from './routinesMenu.js'
+import { renderPlain } from './view.js'
 import { type Button, type View } from './view.js'
 
 const NOW = Date.parse('2026-10-16T12:00:00Z')
@@ -126,6 +127,12 @@ describe('routinesList', () => {
         // The buttons of a routine sit right under its line.
         expect(v[1]).toMatchObject({ kind: 'text' })
         expect(v[2]).toMatchObject({ kind: 'buttons' })
+    })
+
+    it('names the routine on its run button in the classic form, where every row is in one keyboard', () => {
+        const { markup } = renderPlain(routinesList([view(), view({ name: 'nightly' })], null, NOW))
+        const firsts = markup!.inline_keyboard.slice(0, 2).map((r) => r[0].text)
+        expect(firsts).toEqual(['▶️ daily', '▶️ nightly'])
     })
 
     it('says so when there are none', () => {

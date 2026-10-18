@@ -652,13 +652,13 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         })
     }
 
-    /** `once`: the file switches itself off after queueing its task (the body stays as it is). */
+    /**
+     * `once`: the file switches itself off after queueing its task. The file is read again: the
+     * pipeline may have run for long, and an edit saved meanwhile (by the owner, by a step) stays.
+     */
     private switchOff(parsed: ParsedRoutine): boolean {
         try {
-            this.catalog.save('routines', parsed.name, {
-                frontmatter: { ...parsed.entry.frontmatter, enabled: false },
-                body: parsed.entry.body
-            })
+            this.setEnabled(parsed.name, false)
             return true
         } catch (error) {
             log.error(`${parsed.name}: could not switch off after its one run`, error)

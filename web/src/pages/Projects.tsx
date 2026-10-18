@@ -1,3 +1,5 @@
+import { type ReactNode, useState } from 'react'
+
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
 import { ProjectToolchainField } from '../components/Toolchains'
@@ -43,7 +45,7 @@ export function ProjectsPage() {
             describe={(e) => str(e.frontmatter.repo).replace(/^https?:\/\/(www\.)?github\.com\//, '')}
             intro='A project file tells the agent which repository it is, how work becomes a PR, what to run and which hosts it touches. Pick one from the list to edit it, or describe a new one.'
             newLabel='New project'
-            form={(fm, set) => {
+            form={(fm, set, entry) => {
                 const hosts = (Array.isArray(fm.hosts) ? fm.hosts : []).filter(
                     (h): h is ProjectHost => Boolean(h) && typeof h === 'object'
                 )
@@ -91,13 +93,10 @@ export function ProjectsPage() {
                             onSharedChanged={sharedHosts.reload}
                             keys={keys.data}
                         />
-                        <details
-                            className='field wide more'
-                            open={Boolean(str(fm.path)) && !str(fm.path).endsWith(`/${str(fm.slug)}`)}
+                        <MoreDetails
+                            key={entry?.name ?? 'new'}
+                            initiallyOpen={Boolean(str(fm.path)) && !str(fm.path).endsWith(`/${str(fm.slug)}`)}
                         >
-                            <summary>
-                                More<span className='dim'> · checkout folder, delegation to providers</span>
-                            </summary>
                             <div className='form-grid'>
                                 <Field
                                     label='Checkout'
@@ -161,11 +160,31 @@ export function ProjectsPage() {
                                     </Field>
                                 )}
                             </div>
-                        </details>
+                        </MoreDetails>
                     </>
                 )
             }}
         />
+    )
+}
+
+/**
+ * "More" opens by itself when the project's file uses it (a checkout not named like the project),
+ * decided once per project: the field inside must not fold it away while it is typed in.
+ */
+function MoreDetails({ initiallyOpen, children }: { initiallyOpen: boolean; children: ReactNode }) {
+    const [open, setOpen] = useState(initiallyOpen)
+    return (
+        <details
+            className='field wide more'
+            open={open}
+            onToggle={(e) => setOpen(e.currentTarget.open)}
+        >
+            <summary>
+                More<span className='dim'> · checkout folder, delegation to providers</span>
+            </summary>
+            {children}
+        </details>
     )
 }
 

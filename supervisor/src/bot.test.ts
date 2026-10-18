@@ -135,6 +135,14 @@ describe('routineNotice', () => {
         expect(routineNotice(run('skipped', softStop), spec(), seen, 'UTC')).toBe(first)
     })
 
+    it('tells a scripts-only run done on a schedule, not one started by hand, and a later error again', () => {
+        const seen = new Map<string, string>()
+        expect(routineNotice(run('error', 'host down'), spec(), seen, 'UTC')).toContain('could not run: host down')
+        expect(routineNotice(run('done', 'all fine'), spec(), seen, 'UTC')).toContain('ran its steps')
+        expect(routineNotice(run('error', 'host down'), spec(), seen, 'UTC')).toContain('could not run: host down')
+        expect(routineNotice({ ...run('done', 'all fine'), trigger: 'manual' }, spec(), seen, 'UTC')).toBeNull()
+    })
+
     it('keeps quiet about the soft-stop for a routine with notify: none', () => {
         expect(routineNotice(run('skipped', softStop), spec('none'), new Map(), 'UTC')).toBeNull()
     })

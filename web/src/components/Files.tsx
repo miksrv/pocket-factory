@@ -314,9 +314,13 @@ export function FileEditor({
         setError(null)
         setConflict(false)
         try {
-            await api.saveFolderFile(kind, name, file.path, { text: shown, updated_at: content.data?.updated_at })
+            const saved = await api.saveFolderFile(kind, name, file.path, {
+                text: shown,
+                updated_at: content.data?.updated_at
+            })
+            // The saved text becomes what is loaded before the draft goes: the editor keeps its cursor and undo.
+            content.setData({ path: file.path, text: shown, updated_at: saved.updated_at })
             setText(null)
-            content.reload()
             onSaved?.()
         } catch (e) {
             setError((e as Error).message)

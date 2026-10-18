@@ -97,13 +97,24 @@ export function describeScript(text: string): {
     }
 }
 
+/** A regular file's text when it weighs at most `max` bytes, else null; one descriptor from the check to the read. */
+function readSmallFile(full: string, max: number): string | null {
+    const fd = fs.openSync(full, 'r')
+    try {
+        const stat = fs.fstatSync(fd)
+        return stat.isFile() && stat.size <= max ? fs.readFileSync(fd, 'utf8') : null
+    } finally {
+        fs.closeSync(fd)
+    }
+}
+
 export function scriptInfo(ref: ScriptRef): ScriptInfo {
     let text = ''
     let exists = false
     try {
-        const stat = fs.statSync(ref.full)
-        if (stat.isFile() && stat.size <= 1024 * 1024) {
-            text = fs.readFileSync(ref.full, 'utf8')
+        const read = readSmallFile(ref.full, 1024 * 1024)
+        if (read !== null) {
+            text = read
             exists = true
         }
     } catch {
@@ -147,13 +158,13 @@ export function folderNeeds(dir: string): FolderNeed[] {
             }
             if (!entry.isFile()) continue
             const full = path.join(dir, rel)
-            let text: string
+            let text: string | null
             try {
-                if (fs.statSync(full).size > 256 * 1024) continue
-                text = fs.readFileSync(full, 'utf8')
+                text = readSmallFile(full, 256 * 1024)
             } catch {
                 continue
             }
+            if (text === null) continue
             if (!SCRIPT_EXT.test(entry.name) && !text.startsWith('#!')) continue
             const info = describeScript(text)
             const add = (name: string, declared?: 'secret' | 'variable') => {

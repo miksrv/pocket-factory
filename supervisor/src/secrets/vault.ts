@@ -79,7 +79,28 @@ const RESERVED = new Set([
     'PERL5OPT',
     'RUBYOPT',
     'GIT_SSH_COMMAND',
+    'GIT_SSH',
+    'GIT_ASKPASS',
+    'GIT_EXEC_PATH',
+    'GIT_PROXY_COMMAND',
+    'GIT_EXTERNAL_DIFF',
+    'GIT_PAGER',
+    'GIT_EDITOR',
+    'SSH_ASKPASS',
     'SSH_AUTH_SOCK',
+    'PROMPT_COMMAND',
+    'PS4',
+    'SHELLOPTS',
+    'BASHOPTS',
+    'PAGER',
+    'EDITOR',
+    'VISUAL',
+    'JAVA_TOOL_OPTIONS',
+    'PERL5LIB',
+    'RUBYLIB',
+    'GCONV_PATH',
+    'OPENSSL_CONF',
+    'TMPDIR',
     'ROUTINE',
     'ROUTINE_FILE',
     'ROUTINE_DIR',
@@ -96,6 +117,8 @@ const RESERVED = new Set([
     'GROQ_API_KEY'
 ])
 const RESERVED_PREFIXES = [
+    'LD_',
+    'DYLD_',
     'CLAUDE_',
     'ANTHROPIC_',
     'MISE_',
@@ -234,17 +257,32 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
     // ---- the file -----------------------------------------------------------
 
     private read(): Record<string, Stored> {
-        let stat: fs.Stats
+        let fd: number
         try {
-            stat = fs.statSync(this.file)
+            fd = fs.openSync(this.file, 'r')
         } catch {
             this.cache = { mtime: 0, data: {} }
             return this.cache.data
         }
-        if (this.cache && this.cache.mtime === stat.mtimeMs) return this.cache.data
-        const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8')) as { entries?: Record<string, Stored> }
-        this.cache = { mtime: stat.mtimeMs, data: parsed.entries ?? {} }
-        return this.cache.data
+        try {
+            // The descriptor's own stat: the version compared is the version read.
+            const stat = fs.fstatSync(fd)
+            if (this.cache && this.cache.mtime === stat.mtimeMs) return this.cache.data
+            let parsed: { entries?: Record<string, Stored> }
+            try {
+                parsed = JSON.parse(fs.readFileSync(fd, 'utf8')) as { entries?: Record<string, Stored> }
+            } catch (error) {
+                // Nothing is masked without the file, so nothing goes on: the error names the file to fix.
+                throw new Error(
+                    `${this.file} is not valid JSON (${error instanceof Error ? error.message : String(error)}): fix or remove it`,
+                    { cause: error }
+                )
+            }
+            this.cache = { mtime: stat.mtimeMs, data: parsed.entries ?? {} }
+            return this.cache.data
+        } finally {
+            fs.closeSync(fd)
+        }
     }
 
     /** Atomically, owner-only: a temporary file in the same directory, renamed over the old one. */

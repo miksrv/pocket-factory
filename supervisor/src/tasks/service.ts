@@ -609,7 +609,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         const pr =
             git.branch && git.branch !== git.default_branch
-                ? await findPullRequest(cwd, git.branch, this.agentEnv())
+                ? await findPullRequest(cwd, git.branch, this.agentEnv(this.scopeOf(task, task.project)))
                 : null
         if (pr && (pr.url !== git.pr?.url || pr.state !== git.pr?.state || pr.isDraft !== git.pr?.isDraft))
             this.store.updateTask(task.id, { git: { ...git, pr } })
@@ -631,7 +631,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             throw new Error('the repository has no default branch to open the pull request against')
         if (git.branch === git.default_branch)
             throw new Error(`the changes are on ${git.branch} itself; a pull request needs a branch of its own`)
-        const pr = await createPullRequest(cwd, git.branch, git.default_branch, this.agentEnv())
+        const pr = await createPullRequest(
+            cwd,
+            git.branch,
+            git.default_branch,
+            this.agentEnv(this.scopeOf(task, task.project))
+        )
         // No 'task' event: the task finished long ago, and listeners treat one as news (the bot would deliver its report again).
         this.store.updateTask(task.id, { git: { ...git, pr } })
         log.info(`${task.id}: pull request ${pr.url}`)
@@ -879,14 +884,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             options.agent ?? null
         )
         if (!conversation.title) {
-            const first = titleFrom(prompt)
+            const first = titleFrom(task.prompt)
             this.store.updateConversation(conversationId, { title: first })
             // The owner's own chats get a title that says what they are about; a provider chat stays off the subscription.
             if ((source === 'web' || source === 'telegram') && !provider && this.config.claude.chatTitles)
                 this.nameConversation(conversationId, prompt, first)
         }
         log.info(
-            `queued ${task.id} (${source}): ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${attachments.length ? ` +${attachments.length} file(s)` : ''}`
+            `queued ${task.id} (${source}): ${task.prompt.slice(0, 80)}${task.prompt.length > 80 ? '…' : ''}${attachments.length ? ` +${attachments.length} file(s)` : ''}`
         )
         this.emit('task', task)
         queueMicrotask(() => this.tick())
@@ -2186,7 +2191,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const git = await measure(cwd, task.git)
             // A short lookup: the report waits for it, and a slow GitHub must not hold the conversation.
             if (git.files && git.branch && git.branch !== git.default_branch)
-                git.pr = await findPullRequest(cwd, git.branch, this.agentEnv(), 5_000)
+                git.pr = await findPullRequest(cwd, git.branch, this.agentEnv(this.scopeOf(task, task.project)), 5_000)
             this.store.updateTask(taskId, { git })
         } catch (error) {
             log.warn(

@@ -59,10 +59,12 @@ export function routineRoutes(): Hono<Env> {
         const { routines } = c.get('app')
         const name = c.req.param('name')
         if (!routines.get(name)) return c.json({ error: 'routine not found' }, 404)
+        // What a step prints may carry a secret: masked as in every stored log (the owner's screen may be shared).
+        const { store } = c.get('app')
         try {
-            return c.json(await routines.preview(name))
+            return c.json(store.redactDeep(await routines.preview(name)))
         } catch (error) {
-            if (error instanceof StepError) return c.json({ error: error.message }, 422)
+            if (error instanceof StepError) return c.json({ error: store.redactDeep(error.message) }, 422)
             throw error
         }
     })
@@ -79,10 +81,9 @@ export function routineRoutes(): Hono<Env> {
         try {
             // The owner's screen may be shared: secret values are masked here as in every stored log.
             const run = await routines.runStep(name, index, body.step)
-            const { vault } = c.get('app')
-            return c.json({ ...run, stdout: vault.redact(run.stdout), stderr: vault.redact(run.stderr) })
+            return c.json(c.get('app').store.redactDeep(run))
         } catch (error) {
-            if (error instanceof StepError) return c.json({ error: error.message }, 422)
+            if (error instanceof StepError) return c.json({ error: c.get('app').store.redactDeep(error.message) }, 422)
             throw error
         }
     })

@@ -203,6 +203,12 @@ export class LiveDraft {
         const entry = this.live.get(taskId)
         if (!entry) return
         entry.timer = null
+        // One request at a time: the next text goes when this one has landed (its `finally` schedules it),
+        // so drafts never land out of order and `end()` always waits for the last one.
+        if (entry.inFlight) {
+            entry.dirty = true
+            return
+        }
         entry.dirty = false
         entry.lastSentAt = Date.now()
         const send = (text: string, parse: boolean) =>
@@ -210,14 +216,16 @@ export class LiveDraft {
                 parse_mode: parse ? 'HTML' : undefined,
                 can_stop: true
             })
-        entry.inFlight = send(draftText(entry.state), true)
+        const request: Promise<void> = send(draftText(entry.state), true)
             .catch(() => send(draftText(entry.state, Date.now(), false), false))
             .catch((error) =>
                 log.warn(`draft for ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`)
             )
+            .then(() => undefined)
             .finally(() => {
-                entry.inFlight = null
+                if (entry.inFlight === request) entry.inFlight = null
                 if (this.live.get(taskId) === entry) this.schedule(taskId)
             })
+        entry.inFlight = request
     }
 }

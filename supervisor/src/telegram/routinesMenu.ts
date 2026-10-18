@@ -101,13 +101,13 @@ function lastAndNext(r: RoutineView, now: number): string {
     return [last, next].filter(Boolean).join(' · ')
 }
 
-/** The buttons that act on a routine: run (or stop its run), switch, details. */
+/** The buttons that act on a routine: run (or stop its run), switch, details; in the classic form each names the routine. */
 const actButtons = (r: RoutineView): Button[] => [
     r.active_task
-        ? { text: '⏹ Stop', data: `s|stop|${r.active_task.id}|l`, style: 'danger' }
+        ? { text: '⏹ Stop', plain: `⏹ ${r.name}`, data: `s|stop|${r.active_task.id}|l`, style: 'danger' }
         : r.errors.length
-          ? { text: '▶️ Run', disabled: true }
-          : { text: '▶️ Run', data: routineData('run', r.name, 'list'), style: 'success' },
+          ? { text: '▶️ Run', plain: `▶️ ${r.name}`, disabled: true }
+          : { text: '▶️ Run', plain: `▶️ ${r.name}`, data: routineData('run', r.name, 'list'), style: 'success' },
     r.errors.length
         ? { text: '⚠️ Invalid', disabled: true }
         : { text: r.enabled ? '⏸ Off' : '▶ On', data: routineData(r.enabled ? 'off' : 'on', r.name, 'list') },

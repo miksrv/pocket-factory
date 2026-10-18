@@ -105,6 +105,7 @@ export function CodeEditor({
                     onKeyDown={(e) => {
                         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
                             e.preventDefault()
+                            e.stopPropagation()
                             onSave?.()
                         }
                     }}

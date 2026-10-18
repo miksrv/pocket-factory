@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { Hono } from 'hono'
 
-import type { FolderKind, Kind } from '../../files/catalog.js'
+import { BadName, type FolderKind, type Kind } from '../../files/catalog.js'
 import type { Env } from '../context.js'
 
 const KINDS: Kind[] = ['agents', 'skills', 'projects', 'routines']
@@ -72,12 +72,26 @@ export function fileRoutes(): Hono<Env> {
 
     // A skill and a routine are folders: the scripts, data and references next to the main file are listed and edited here.
     for (const kind of FOLDER_KINDS) {
-        const relOf = (p: string) => decodeURIComponent(p.split('/files/').slice(1).join('/files/'))
+        // The path after `/<kind>/<name>/files/`, read from the raw URL segment by segment: a routine
+        // named `files` keeps its path, a stray `%` is a bad name, not a crash.
+        const relOf = (url: string) => {
+            const segments = new URL(url).pathname.split('/')
+            const at = segments.indexOf(kind)
+            if (at < 0 || segments[at + 2] !== 'files') throw new BadName('not a folder file path')
+            try {
+                return segments
+                    .slice(at + 3)
+                    .map((s) => decodeURIComponent(s))
+                    .join('/')
+            } catch {
+                throw new BadName('the file path is not valid URL encoding')
+            }
+        }
         app.get(`/${kind}/:name/files`, (c) => c.json(c.get('app').catalog.folderFiles(kind, c.req.param('name'))))
         app.get(`/${kind}/:name/files/*`, (c) => {
             const { catalog } = c.get('app')
             const name = c.req.param('name')
-            const rel = relOf(c.req.path)
+            const rel = relOf(c.req.url)
             if (c.req.query('raw')) {
                 // A download, never rendered: the file is whatever a run or an upload put there.
                 const bytes = catalog.readFolderBytes(kind, name, rel)
@@ -94,7 +108,7 @@ export function fileRoutes(): Hono<Env> {
         })
         /** Text from the editor (`text`, with the `updated_at` it opened), or an upload (`base64`); `exec` sets the executable bit. */
         app.put(`/${kind}/:name/files/*`, async (c) => {
-            const rel = relOf(c.req.path)
+            const rel = relOf(c.req.url)
             const body = (await c.req.json().catch(() => ({}))) as {
                 text?: unknown
                 base64?: unknown
@@ -123,7 +137,7 @@ export function fileRoutes(): Hono<Env> {
             return c.json(c.get('app').catalog.renameFolderFile(kind, c.req.param('name'), body.from, body.to))
         })
         app.delete(`/${kind}/:name/files/*`, (c) => {
-            c.get('app').catalog.removeFolderFile(kind, c.req.param('name'), relOf(c.req.path))
+            c.get('app').catalog.removeFolderFile(kind, c.req.param('name'), relOf(c.req.url))
             return c.body(null, 204)
         })
     }
