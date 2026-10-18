@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.6.0
+
+### Minor Changes
+
+- Telegram: topics are gone; the chat is flat again, `/mode fresh` / `thread` as in 1.4.0
+- Telegram: buttons sit inside the messages (rich messages): `/routines` lists every routine with its own Run / Off / Details, a routine's card, `/status`, `/model`, `/mode`, `/usage`, `/help` and the agent's questions
+- Telegram: a reply carries Open, PR, Run again and Routine inside it; a client that refuses a rich message gets the same as HTML with a keyboard
+- Telegram: a tap on Run is acknowledged at once and the outcome shows in the message; a run that found nothing new offers "Run with all N"
+- Telegram: `/new` alone picks the project on buttons (fresh mode); `/status` lists everything running and opens the main views
+- Telegram: the live draft shows the step count and the tool only, never the agent's prose; it ends while a question waits and before the reply
+- Routines: a routine is a pipeline — `steps:` run in order (scripts, GitHub pull requests, Trac tickets, a command that lists items) and the agent is the last step; prefilters and `poll:` triggers are gone (old files still read)
+- Routines: a source that finds nothing means no agent and no tokens; a routine without an agent runs its scripts and reports their output; a failing step stops the run with its last lines
+- Routines: Preview runs every step but the agent; Run now on sources that found nothing new can hand every item over again ("Run with all")
+- Routines: a routine is a folder — `ROUTINE.md` plus its scripts (`scripts/`) and data (`data/`), `ROUTINE_DIR` for the steps; a flat file moves in on its next save
+- Routines: the pipeline is a graph of cards top to bottom, as in GitHub Actions — each step with how it went last time, what it is for and what it misses; a click opens the step in a window (a script step with its script in a code editor, what it reads, Run step to run it alone)
+- Routines: ＋ Script creates `scripts/<name>.sh` with a header to fill; the Files section edits every file of the folder (code editor, CSV as a table, upload, download, rename)
+- Routines: a run opens into its steps (ok / failed, time, the head of the output), like a CI job; the Routines page shows every pipeline at once
+- Settings: Secrets and variables, as in GitHub — a secret is written once and never shown, a variable stays visible; scoped to all or to chosen routines and projects; set from a step card with Set
+- Security: secret values are masked as •••• in task prompts, results, events, run logs and Telegram; every change of a secret is told in Telegram
+- Skills: the files next to SKILL.md (scripts, references) are listed, edited in a code editor and added under the procedure
+- Skills: Secrets and variables on a skill's page — what its scripts read, which routines running it get each name, Set / Allow; the routine's agent step shows the same
+- Routines: the form is shorter — one schedule field, step cards with a number and kind, one-line hints, the model in the Agent step (orchestrator only), hosts and session only for a file that has them
+- Routines: no Mode field — what a run may do is written in its instructions; an old file's `action:` moves there on start
+- UI: long forms are split into sections with headings (pipeline, schedule, hosts, toolchain, MCP, tools, the Markdown body)
+- UI: windows have a header (tile, title, one line, close) and a body across the whole width
+- Projects: the form keeps repository, workflow, MCP, toolchain and hosts; display name, default branch and PR base are gone (git and the task decide), checkout and delegation under More
+- Settings: the Claude Code card shows only CLI, login and model; a provider's MCP tools are one badge with a count, named in its tooltip
+- Presets: `engineering` — eight skills from mattpocock/skills (tdd, code-review, diagnosing-bugs, pr, research, codebase-design, writing-for-agents, retro)
+- Tasks and Overview: a routine's run is listed by the routine's name
+- Agents: MCP servers that still need authentication are folded away in the form
+- Agents: tools read as names (Delegate to a role, ClickUp · create task), the identifier the file holds in the tooltip; the factory's own tools have their own line
+- Docs: `docs/plans/database.md` (SQLite stays, and why), `docs/plans/ui-review.md` (what to simplify next)
+- Dependencies: Playwright 1.64, ESLint 10.13, Vitest 5.0.5, React 19.3.1, lucide-react 1.58, Prettier 3.9.10
+- Fixed: a supervisor started while the previous one was still closing the database died with "database is locked"
+- Fixed: `scripts/screenshot.mjs` left a signed-in session behind on every run
+- Routines: the web panel offers "Run with all N" too, after a Run now that found nothing new
+- Fixed: a new-only routine whose first timed run found nothing marked the first real item as "existing" and skipped it
+- Fixed: changing only the schedule of a 1.5.0 poll routine in the form dropped its prefilter
+- Routines: a GitHub pull-requests step watches several repositories, one per line, as `owner/name` or the address from the browser
+- Routines: Run step in a step's window runs the step as it stands there, before Save
+- Fixed: a GitHub step given the repository's address broke the routine and left Run step disabled
+- UI: a button beside a field is the field's height
+- Fixed: switching a routine on or off made the open form's next Save fail as "changed on disk"
+- Fixed: a 1.5.0 file with a schedule next to a poll is refused with a hint to split it, instead of the poll silently gating the schedule
+- Fixed: a script step that left a process in the background was reported as timed out; Cyrillic in step output could break at a chunk boundary
+- Fixed: a JSON source listing the same key twice handed the item over twice; a failed step's run now records how long it took
+- Fixed: Telegram Run / `/run` held up the whole bot until the routine's steps were done
+- Fixed: Telegram voice notes over ~4 minutes were transcribed but never became a task (the echo was too long)
+- Fixed: Telegram long replies with a footer could lose the last part; a reply that arrived in part is remembered, so replying to it continues the chat
+- Fixed: Telegram sent a message twice when the rich form failed after delivery (timeout, 5xx); only a refusal falls back to HTML
+- Fixed: Telegram `/model` failed for a provider name too long for a button
+- Routines: a Trac step takes the address of a custom query as one field, pasted from the browser; `TRAC_URL` is gone, only the login is shared
+- Fixed: a routine step's line of variables disappeared at the first edit of the step
+- Fixed: the Set button of a missing variable was unreadable on hover; the scope lists in the variable window lost their odd indent
+- Fixed: the routines overview sat further from the card's edges than an open routine
+
 ## 1.5.0
 
 ### Minor Changes

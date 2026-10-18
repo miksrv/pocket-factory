@@ -18,7 +18,7 @@ A thin **supervisor** turns messages from Telegram (text, voice, files), the web
 1. **Zero idle cost.** Claude Code is spawned per task, not kept alive. When there is nothing to do, only the cheap deterministic supervisor (bot polling, scheduler, web UI) is awake.
 2. **Claude Code is the agent; we are the supervisor.** The tool never modifies the CLI, never handles the owner's Claude credentials, and never re-implements what Claude Code already does (sub-agents, skills, sessions, memory, MCP, transcripts). The owner's subscription is the default backend; other model providers (self-hosted or cloud, since 1.3.0) are an option the same CLI reaches through the supervisor's gateway.
 3. **Everything is a file.** Sub-agents, skills, projects, routines and global rules are Markdown files on a volume. The UI and the agent edit the same files; every edit the agent makes is a file event in the Audit log.
-4. **Deterministic prefilter before LLM.** Polling, filtering and deduplication are plain code. Claude Code is invoked only when there is real work.
+4. **Deterministic steps before LLM.** Polling, filtering and deduplication are plain code (a routine's pipeline). Claude Code is invoked only when there is real work.
 5. **Facts ≠ procedures ≠ roles.** Project facts in project files, workflows in skills, roles in sub-agent definitions, universal rules in `CLAUDE.md`. No duplication.
 6. **Portable by design.** One Docker Compose stack + one `/data` volume = the entire system.
 7. **Template for others.** No personal facts in the code: anyone can fork the repo, log in with **their own subscription**, add their own bot and projects. Strictly single-owner: the tool never offers Claude login in its UI, never stores or proxies anyone's Claude credentials, never intermediates Claude usage for a third party.
@@ -31,7 +31,7 @@ A thin **supervisor** turns messages from Telegram (text, voice, files), the web
 
 - Autonomous multi-step software tasks (feature → PR → review → fixes → report) without supervision, across many repositories, each with its own workflow and conventions.
 - Telegram as the primary human channel (text, voice, files in; questions and reports out, only the essentials); a web UI for chat, observability and administration.
-- Tasks from Telegram, the web and routines (an agent, its instructions, schedules and polls with deterministic prefilters).
+- Tasks from Telegram, the web and routines (a pipeline of scripts and sources with the agent as the last step, on schedules).
 - Human-in-the-loop inside the same run; corrections persisted by the agent into its own files.
 - A one-shot run per task. In Telegram every message starts a new chat and a reply resumes the chat it answers (`/mode thread`: the next message resumes, `/new` starts fresh); in the web the next message in a thread resumes it; `/stop` cancels.
 
@@ -46,7 +46,7 @@ Multi-tenant or team use (single owner, whitelisted Telegram ids); enterprise RB
 - **UC-1 — Feature from a voice note.** *"In my project, URLs in `/photos` must become SEO slugs."* Transcribed, queued, matched to the project, its workflow skill runs developer → reviewer → checks → `gh pr create`; Telegram gets the PR link.
 - **UC-2 — ClickUp task.** *"In webshop take DEV-1234 and do it."* Read through the claude.ai connector; an ambiguity becomes an `AskUserQuestion` answered from Telegram or the web, and the same run continues; PR, comment on the task, status → Review.
 - **UC-3 — GitHub review request.** A routine's `github-prs` poll looks without a public endpoint; a new PR or push runs `pr-review` with read-only tools.
-- **UC-4 — Trac defect monitor.** A `trac` prefilter finds new or changed tickets (zero tokens otherwise); reproduce read-only over SSH or from code, fix, review, PR.
+- **UC-4 — Trac defect monitor.** A `trac` source finds new or changed tickets (zero tokens otherwise); reproduce read-only over SSH or from code, fix, review, PR.
 - **UC-5 / UC-6 / UC-7 — The factory edits itself.** "Create an agent that triages my inbox", `onboard-project` writing a project file after an interview, "remember: always update CHANGELOG" — the agent writes the files, the owner reviews them in the UI and the Audit log.
 - **UC-8 — Ending a session.** Nothing to end: a run exits with its report; a reply (or the next message in a web thread) resumes it, a plain Telegram message starts fresh.
 - **UC-9 — Bulk work off the subscription.** Keyword research or an SEO article runs on a self-hosted or cloud provider, so the windows stay for coding.
@@ -60,7 +60,7 @@ Multi-tenant or team use (single owner, whitelisted Telegram ids); enterprise RB
  Telegram ◄─────────►│  supervisor (always on, no LLM)                    web              │
  (text/voice/files)  │  ┌──────────────────────────────────────────┐     ┌──────────────┐  │
  GitHub, Trac ──────►│  │ telegram bot (long polling) + STT        │     │ Vite/React   │  │
-  (polled)           │  │ task queue · scheduler · prefilters      │◄────│ SPA: chat    │  │
+  (polled)           │  │ task queue · scheduler · pipelines        │◄────│ SPA: chat    │  │
                      │  │ session manager: spawn / resume / ask /  │     │ agents/skills│  │
                      │  │   answer / stop / restart recovery       │     │ projects     │  │
                      │  │ provider gateway (/gateway/<name>)       │     │ audit · tasks│  │
@@ -80,7 +80,7 @@ Multi-tenant or team use (single owner, whitelisted Telegram ids); enterprise RB
 
 | Component | Responsibility | Tech |
 |---|---|---|
-| **supervisor** | Telegram bot (long polling, no public IP needed), voice → text, task queue + worker, scheduler + prefilters, **session manager** (§4.4), delivery of reports and questions, provider gateway, toolchain and Docker housekeeping, the HTTP API | TypeScript on Node 22, grammY, `node:sqlite`, a dependency-free cron matcher, `child_process` around `claude -p` |
+| **supervisor** | Telegram bot (long polling, no public IP needed), voice → text, task queue + worker, scheduler + pipelinrs, **session manager** (§4.4), delivery of reports and questions, provider gateway, toolchain and Docker housekeeping, the HTTP API | TypeScript on Node 22, grammY, `node:sqlite`, a dependency-free cron matcher, `child_process` around `claude -p` |
 | **claude** | The agent: dispatcher rules, sub-agents, skills, MCP, sessions, memory. Unmodified CLI, logged in by the owner inside the container; spawned per task | Claude Code CLI (pinned), `git`, `gh`, `mise` runtimes, PHP + composer, docker CLI |
 | **web** | Chat and admin UI (§6), live output over SSE | Vite + React SPA built into the image and served by the supervisor; no UI framework |
 | **db** | Conversations, tasks and their events, routine runs, seen items, web sessions, meta | SQLite on the volume (WAL) |
@@ -99,31 +99,38 @@ Rules:
 
 ### 4.3 Routines
 
-A routine is work an agent does again and again: who does it (`agent:`), what to do (the body) and when (`triggers:`). It is a Markdown file, `data/config/routines/<name>.md`, not a table row: its body is the instruction for every run *and* the agent's memory between runs (deferred tickets, PRs skipped on purpose), which the agent edits itself. The store keeps only what a file cannot: `schedule_runs` (every firing and why it did or did not start a task) and `seen_items` (both named before the rename).
+A routine is work that runs by itself: a **pipeline** of steps (`steps:`) and the schedules that start it (`triggers:`). The steps are scripts (fetch statistics, make a backup), **sources** (open pull requests, Trac tickets, a command whose output is a list of items) and, as the last step, the **agent**, which reads the instructions in the body and what the steps found. When every source comes back empty the agent is not started, so an idle routine costs no tokens; a routine without an agent step just runs its scripts and reports their output. It is a folder of files, not a table row — `data/config/routines/<name>/` with `ROUTINE.md` (frontmatter and body), the steps' scripts in `scripts/` and the routine's own data in `data/`, all visible and editable on the routine's page: its body is the instruction for every run *and* the agent's memory between runs (deferred tickets, PRs skipped on purpose), which the agent edits itself. The store keeps only what a file cannot: `schedule_runs` (every firing and why it did or did not start a task) and `seen_items` (both named before the rename).
 
 ```yaml
 ---
-agent: tracker-triager             # the run is this agent (its prompt, tools, model)
-skill: tracker-defect-fix          # optional, given in the prompt
 triggers:
-  - schedule: "0 9 * * 1-5"        # every firing starts a run; five fields, read in TIMEZONE
-  - poll: "*/15 9-18 * * 1-5"      # a prefilter runs first, without the model; new items start a run
-    prefilter: { kind: trac, query: "status=new&component=billing" }   # command | github-prs | trac
+  - schedule: "0 9 * * 1-5"        # five fields, read in TIMEZONE; several schedules = one run at a time
+steps:                             # the pipeline, in order; no tokens until the agent
+  - name: stats
+    run: ${SKILL_DIR}/scripts/stats.sh --days 7       # a script: its output goes to the agent as text
+  - run: gh pr list --repo acme/shop --json number,title,url
+    items: true                    # a source: one item per line (key<TAB>title) or a JSON array; nothing = no agent
+  - github-prs: { repo: acme/billing, filter: review-requested }   # built-in sources: github-prs, trac
+  - trac: { query: "status=new&component=billing" }
+  - agent: tracker-triager         # the run is this agent (its prompt, tools, model); `orchestrator` = decide from the instructions
+    skill: tracker-defect-fix      # given in the prompt; its directory is SKILL_DIR for the scripts
 enabled: true
-project: billing                   # or hosts: [{ host, path, notes }]
+project: billing                   # the checkout the steps and the agent run in; or hosts: [{ host, path, notes }]
 model: inherit                     # pins a CLI alias; provider: for another backend
-action: report                     # the mode the agent gets: report | fix | comment …
 notify: telegram                   # or none
 session: fresh                     # or continue
-first_run: skip                    # a poll starts from now
+first_run: skip                    # a new-only source starts from now
+max_items: 10
 ---
 Instructions for every run, in prose. ## Notes: what the agent decided last time.
 ```
 
-- **Triggers.** A `schedule` fires at every allowed minute (20 s ticker); a `poll` runs its prefilter at those minutes and starts a run only for new items; each may carry its own `tz:` / `window:`. Several triggers still mean one run at a time; no triggers = a routine run only by hand. **Run now** is always there, not a trigger; it uses the first poll's prefilter. A firing up to `ROUTINES_LATE_MIN` late still runs; an older one is recorded as `missed`, told in Telegram, never caught up. `once: true` switches the file off after one task. A file with the old `cron:` (+ `prefilter:`) is read as one trigger.
-- **Prefilter.** `command`, `github-prs` (key = PR + head commit), `trac` (key = id + change time). New items only; nothing new = no task. A poll's first firing marks what exists as seen; a changed key is passed as "seen before, changed since".
-- **The task** runs in the routine's own conversation (`schedule:<name>`, kept from before), a fresh session by default, prompt = run frame ("Routine run") + file body + new items; report and questions go to Telegram unless `notify: none`. A routine with `agent:` on the subscription runs *as* that agent (`claude --agent`, its prompt, tools and `model:`), not as an orchestrator that spawns it and relays its report; its `skill:` comes in the prompt. On a light-mode provider the agent's file is the system prompt.
-- **Guards.** One run at a time; **soft-stop** (`ROUTINES_SOFT_STOP`, 85 %) skips timed firings of subscription runs while a window is above it; an unanswered question is answered for the owner after `ROUTINES_ASK_TIMEOUT_MIN`. Start with `action: report` and graduate.
+- **Schedules.** A `schedule` fires at every allowed minute (20 s ticker); each may carry its own `tz:` / `window:`. Several schedules still mean one run at a time; none = a routine run only by hand. **Run now** is always there, not a trigger. A firing up to `ROUTINES_LATE_MIN` late still runs; an older one is recorded as `missed`, told in Telegram, never caught up. `once: true` switches the file off after one run.
+- **Steps.** Scripts run in order in the checkout (or the workspaces root) with the agent's environment, the secrets and variables in the routine's scope, plus `ROUTINE`, `ROUTINE_DIR`, `ROUTINE_FILE`, `PROJECT_DIR` and `SKILL_DIR`; a step's scripts belong in the routine's folder (`"${ROUTINE_DIR}/scripts/x.sh"`). A script says what it is for in the comment under its shebang and what it reads in `# secrets:` / `# vars:` lines; its card shows both, whether each name reaches the run, and edits the script in a code editor. A script's output (16k cap) goes into the prompt under "Step outputs", marked as data. A failing step (exit code, timeout, a source's server) records an `error` run with its last lines and spends no token. Every run keeps each step's result (ok, time, the head of its output). `Preview steps` runs every step but the agent; `Run step` runs one alone; neither records anything.
+- **Sources.** `github-prs` (key = PR + head commit), `trac` (key = id + change time) and a `run` with `items: true` hand their items to the agent. `new_only` (default on) hands over only what no earlier run has seen; a changed key is passed as "seen before, changed since"; `max_items` per run; the first timed firing marks what exists as seen (`first_run: skip`). Every source empty = the run is `empty`, no agent. "Run with all" hands the seen items over again.
+- **The agent step** runs in the routine's own conversation (`schedule:<name>`, kept from before), a fresh session by default, prompt = run frame ("Routine run") + file body + step outputs + new items; report and questions go to Telegram unless `notify: none`. A named agent on the subscription runs *as* that agent (`claude --agent`, its prompt, tools and `model:`), not as an orchestrator that spawns it and relays its report; its `skill:` comes in the prompt. On a light-mode provider the agent's file is the system prompt. No agent step = the run is `done` with the steps' output as its report (Telegram gets it).
+- **Guards.** One run at a time; **soft-stop** (`ROUTINES_SOFT_STOP`, 85 %) skips timed firings of subscription runs while a window is above it; an unanswered question is answered for the owner after `ROUTINES_ASK_TIMEOUT_MIN`. Start with "look and report, change nothing" in the instructions and graduate.
+- **The 1.5.0 shape** (`cron:`, `poll:` triggers, `prefilter:`, `agent:` / `skill:` on top) still reads: a prefilter is the first step, a poll a schedule, the top-level agent the agent step; the form writes `steps:` on the next save.
 
 ### 4.4 Session lifecycle
 
@@ -200,7 +207,7 @@ A chat plus a viewer for the files and transcripts Claude Code already produces.
 - **Tasks** — every run across sources, with the transcript, tokens and window share, and the **Changes** panel (diff by folder, Create PR).
 - **Sessions** — the indexed Claude Code transcripts.
 - **Audit** — every model call, tool call, file edit, sub-agent start / end, question and rate-limit reading, attributed to agent and project; filters by kind, agent, project, period.
-- **Agents, Skills, Projects, Routines** — one list + form editor over the Markdown files; routines show their triggers' live state, run history, Run now and Preview prefilter. **Presets** installs bundles.
+- **Agents, Skills, Projects, Routines** — one list + form editor over the Markdown files; routines show their schedules' live state, run history, Run now and Preview steps. **Presets** installs bundles.
 - **Settings** — Claude Code (model, login), Providers, Toolchains, MCP (registry, Authorize), Hosts (test, host-key trust), Security, Appearance.
 
 Every list is keyset-paged. No money anywhere: the unit is tokens and window share.
@@ -229,7 +236,7 @@ Every list is keyset-paged. No money anywhere: the unit is tokens and window sha
 - **The CLI's environment** is the supervisor's minus its own secrets (bot token, allowed ids, web auth, Groq key, every provider's key variable): a prompt injection that runs `env` must not walk away with the bot, the UI or a paid API key. GitHub tokens and MCP `${VAR}` secrets stay, since the agent needs them.
 - **Provider keys never reach the agent.** A provider task's CLI talks to `/gateway/<name>` with a per-start, per-provider bearer; the gateway adds the real key, so a task cannot read a key or spend another provider's. A provider's `token` may not name the factory's own secrets; a self-signed provider is trusted by pasting its CA into the form. Work-project code does not go to a provider the owner does not trust (a per-project allowlist is wanted).
 - **Container as sandbox.** Broad permissions inside the container (`bypassPermissions`), `mem_limit` / `pids_limit` in compose, the host never exposed. The agents' Docker is a `docker:dind` sidecar with its own state, reached over TLS on the compose network only, never the host's socket: dind needs `privileged`, the one trade-off accepted for cleanliness (nothing on the host, nothing left after removing `data/`); it is off unless `COMPOSE_PROFILES=docker`.
-- **Secrets** in `.env` and read-only `/data/secrets`, never in Markdown or the repo. Servers only over SSH keys, read-only by rule, host keys trusted explicitly from the UI, no passwords. GitHub via **fine-grained PATs**, one per repository owner (`GH_TOKEN_<OWNER>`).
+- **Secrets** in `.env`, read-only `/data/secrets` (SSH keys) and the vault (Settings → Secrets and variables, `data/vault/secrets.json`, owner-only), never in Markdown or the repo. The UI writes a secret and never reads it back; each is scoped to all runs or to chosen routines and projects, masked as `••••` in everything the factory stores or sends, and every change is told in Telegram. The factory's own secrets and names that change how a shell starts cannot be set there. Servers only over SSH keys, read-only by rule, host keys trusted explicitly from the UI, no passwords. GitHub via **fine-grained PATs**, one per repository owner (`GH_TOKEN_<OWNER>`).
 - **Web UI.** A sign-in page with a password from `.env`, a hashed session cookie with an idle timeout, lockout after repeated failures, every attempt logged and told in Telegram; HTTPS through a reverse proxy. The API refuses foreign `Origin`s and, in open mode, foreign `Host` names; bodies are capped; attachments other than raster images are served as downloads under a sandbox CSP.
 - **Human gate on irreversible actions** (merging PRs, deleting branches or data, sending email): the CLI's own permission prompt relayed over stream-json (§4.4) — under `bypassPermissions` the `AskUserQuestion` the skills call before such steps, under `acceptEdits` / `default` every unsettled tool call as Allow / Deny.
 
@@ -260,11 +267,11 @@ The ordered list is "Next" in `CLAUDE.md`. The larger items:
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Token burn by autonomous loops | Windows exhausted mid-day | Model policy for sub-agents, `maxTurns`, soft-stop for background tasks, prefilters, bulk work on other providers |
+| Token burn by autonomous loops | Windows exhausted mid-day | Model policy for sub-agents, `maxTurns`, soft-stop for background tasks, sources before the agent, bulk work on other providers |
 | Runaway / looping agent | Garbage PRs, wasted windows | `--max-turns` on every spawn and per sub-agent, wall-clock timeout, `/stop` in Telegram and the UI |
 | Prompt injection via PR bodies, tickets, emails | Credential misuse, unwanted pushes / emails | Untrusted-input rule, minimal tool sets, human gate on irreversible actions, fine-grained PATs, secrets stripped from the CLI's environment |
 | Credential blast radius (GitHub + mail in one box) | Account compromise | Fine-grained PATs, per-agent tool allowlists, provider keys only in the gateway, Telegram whitelist, web sign-in with lockout |
-| Reviewer rubber-stamps the developer | Bad PRs while the owner is away | Reviewer in a fresh context with a verification pass; checks and CI are the real gate; routines start with `action: report` |
+| Reviewer rubber-stamps the developer | Bad PRs while the owner is away | Reviewer in a fresh context with a verification pass; checks and CI are the real gate; routines start as "look and report" |
 | Run lost to a restart or a stuck question | Lost work, a slot held | Re-queue once and resume; routine runs' questions answered after a timeout |
 
 ---

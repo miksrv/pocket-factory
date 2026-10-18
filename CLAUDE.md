@@ -16,7 +16,7 @@ you close your laptop lid*. Four things it adds on top of the CLI, in this order
 3. **Management** — agents, skills and projects as Markdown files edited in the UI or by the agent;
    presets; live model and tool lists.
 4. **Pipelines** — skills chaining sub-agents into repeatable flows; routines (an agent, its
-   instructions, triggers with prefilters).
+   instructions, a pipeline of steps and schedules).
 
 Concept, use cases and security model: `docs/SPEC.md` (§4.4 session lifecycle and §8 security are
 the load-bearing parts). History of what shipped: `CHANGELOG.md` and git log.
@@ -78,16 +78,25 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
     tool_use / tool_result, `llm` (one per model call), `agent` (sub-agent start / end from the
     CLI's `task_started` / `task_notification`), `limits` and the final `result`
   - `bot.ts` grammY bot (text, voice, photos / documents), `stt/groq.ts` Whisper,
+    `telegram/view.ts` the bot's messages as views (text / buttons / footer blocks → a rich
+    message with `<tg-button-row>`, else HTML + inline keyboard), `telegram/routinesMenu.ts` the
+    routines list and cards, `telegram/draft.ts` the live draft under a running task,
+    `telegram/send.ts` the agent's reply (rich Markdown, chunked HTML fallback),
     `telegram/format.ts` Markdown → Telegram HTML with plain-text fallback
   - `telegram/webNotify.ts` — a `web` task's reply unread after `TELEGRAM_WEB_NOTIFY_MIN` (default
     2), or its question still open, goes to Telegram; the chat's topic switches to that thread and
     the task is escalated (its next questions and reply go at once). Timers live in memory
-  - `files/catalog.ts` agents / skills / projects / routines as Markdown+frontmatter;
+  - `files/catalog.ts` agents / skills / projects / routines as Markdown+frontmatter (a skill and a
+    routine are folders: their other files through `folderFiles` / `writeFolderFile`);
     `files/hosts.ts` shared SSH hosts; `files/knownHosts.ts`; `files/inbox.ts` attachments;
     `files/providers.ts`; `sessions/transcripts.ts` indexes Claude Code JSONL; `presets/`
-  - `routines/` — `spec.ts` (frontmatter, `triggers:`), `cron.ts` (dependency-free five-field matcher with
-    zones, `nextRun`, `startOfDay`), `prefilters.ts` (`command`, `github-prs`, `trac`), `service.ts`
-    (the scheduler, 20 s tick)
+  - `routines/` — `spec.ts` (frontmatter: `triggers:`, `steps:`), `cron.ts` (dependency-free five-field
+    matcher with zones, `nextRun`, `startOfDay`), `steps.ts` (the pipeline: scripts and sources in
+    their process groups, a result per step, `runOneStep`), `scripts.ts` (the file a step runs and
+    its header: description, `secrets:` / `vars:`), `sources.ts` (`github-prs`, `trac`,
+    `parseItems`), `service.ts` (the scheduler, 20 s tick)
+  - `secrets/vault.ts` — Settings → Secrets and variables: `data/vault/secrets.json` (0600),
+    scoped values into `agentEnv(scope)`, `redact()` masks secrets in what the store keeps
   - `toolchains/` — `detect.ts` (a checkout's needs: go.mod, `.nvmrc`, engines, composer,
     `.python-version`, mise / tool-versions, compose services), `mise.ts`, `docker.ts` (the dind
     sidecar through `DOCKER_HOST`), `service.ts` (overview cached a minute; `health()` answers from
@@ -111,7 +120,12 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
     `window.confirm`. A destructive question focuses Cancel, keeps the window open while
     `onConfirm` runs and shows its error inline; on a phone it is a bottom sheet.
   - `components/Editor.tsx` shared list+form for agents / skills / projects / routines (an
-    `aside` slot shows live state above the form).
+    `aside` slot shows live state above the form, `overview` the page before one is picked).
+  - `components/CodeEditor.tsx` — CodeMirror 6 (`lib/codemirror.ts`, a lazy chunk; a textarea under
+    jsdom); `components/Files.tsx` a folder's files (a list; a file opens in a window: editor, CSV table, upload) for skills and
+    routines; `components/Pipeline.tsx` a routine's pipeline as a graph of step cards (GitHub
+    Actions style), a step edited in a window on a draft (Apply puts it into the form); `components/Secrets.tsx` the
+    Secrets and variables section, `SecretDialog` and the `NeedsLine` of a step card.
   - Lists are keyset-paged (`lib/usePaged.ts` + `LoadMore`) with a `(timestamp, id)` cursor sent
     as `before` + `before_id`; the audit log pages by event id and the server says `has_more`.
     Polling refreshes only the first page.
@@ -190,6 +204,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - The CLI's environment is `process.env` minus the supervisor's own secrets (`PRIVATE_ENV` in
   `tasks/service.ts`: bot token, allowed ids, web auth, Groq key; `agentEnv` also strips every
   provider's `token` variable); GitHub tokens and MCP `${VAR}` secrets stay because the agent needs them.
+  The vault's values in a run's scope are added on top (`agentEnv(scope)`: its routine, its project).
 - Single language: TypeScript for supervisor, API and UI; no Python service. The web UI is a
   Vite SPA served by the supervisor (one container, no SSR).
 
@@ -307,6 +322,19 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   <provider>:<model>` set the chat's defaults for new chats (`meta` `telegram.chat.<id>`).
   `/mode thread` is the old behaviour: one conversation until `/new`, a reply switches and sticks.
   A question from a task that is not the topic says "reply to this message".
+- **No forum topics** (1.6.0, owner's call after 1.5.0: the clients handle a bot's private-chat
+  topics badly): the chat is flat, nothing sends `message_thread_id`, `telegram_threads` is dropped.
+- **Buttons inside messages** (1.6.0): every message of the bot with buttons is a *view*
+  (`telegram/view.ts`: text / buttons / footer blocks) sent as a rich message (`sendRichMessage`
+  with `html`, `<tg-button-row>`, Bot API 10.3) and edited in place with `editMessageText` +
+  `rich_message`; when Telegram refuses the rich form the same view goes as classic HTML with an
+  inline keyboard. The agent's reply is rich *Markdown* with the footer and the button rows
+  appended as HTML. Callback data: `a|task|q|opt` answers, `p|task|allow|deny`, `r|action|key[|l]`
+  routines (`|l` = tapped in the list, redraw the list), `n|project` new chat, `m|alias`,
+  `md|mode`, `s|stop|task[|l|c]` (stay on the list / card), `u|refresh`, `v|<view>` menu. A
+  routine button is acknowledged *before* the routine fires (a slow step outlives Telegram's
+  callback window). The live draft (`telegram/draft.ts`) shows steps and the tool, never prose,
+  and `end()` resolves after its last request, so the reply never lands under a ghost draft.
 - **Chat titles**: a new web / Telegram chat on the subscription is named by one Haiku call
   (`TaskService.nameConversation`: `--system-prompt`, `--tools ""`, `--strict-mcp-config`,
   `--no-session-persistence`, ~1k tokens), one at a time; the first line stays as the title until
@@ -317,55 +345,87 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 
 ### Routines (Schedules until 1.4.2)
 
-- A **routine** = who does it (`agent:`), what to do (the body: instructions and the agent's own
-  notes) and when (`triggers:`). **Files, not rows**: `data/config/routines/<name>.md`, because
-  the body is both the instruction for every run and the agent's memory between runs, which the
-  agent edits itself. The store keeps only `schedule_runs` (last 1000 per routine) and
+- A **routine** = a pipeline (`steps:`) and when it runs (`triggers:`); the body is the instruction
+  for the agent step and the agent's own notes. **Files, not rows**: a folder
+  `data/config/routines/<name>/` with `ROUTINE.md` (frontmatter + body), `scripts/` and `data/`
+  (owner, 1.6.0: everything a routine runs is visible and editable in its page; a flat `<name>.md`
+  still reads and moves into its folder on the next save or file write), because the body is both the instruction for every run and the agent's memory between runs, which
+  the agent edits itself. The store keeps only `schedule_runs` (last 1000 per routine) and
   `seen_items`; their table and column names, the conversation key `schedule:<name>` and the meta
   keys predate the rename on purpose (history and threads stay). The task source is `routine`
   (`cron` in rows before 1.5.0). On start `config/schedules/` is moved to `config/routines/` once
   (`migrateSchedulesDir`); a name present in both stays put and is logged.
-- `triggers:` is a list of `- schedule: <cron>` (every firing starts a run) and `- poll: <cron>` +
-  `prefilter:` (only new items do; zero tokens on an empty poll), each with an optional `tz:` /
-  `window:` over the file's. Several triggers still mean one run at a time; an empty list is a
-  routine that runs only by **Run now** (always available, never a trigger). A file with the old
-  `cron:` (+ `prefilter:`) reads as one trigger; the form writes the new shape on the next save.
-  Run now and Preview use the first poll's prefilter. A poll's first firing marks what exists as
-  seen (`first_run: skip`; the seeding mark lives in `meta`, so "Forget seen items" really hands
-  everything over). An item whose key changed (`id@changetime`, `pr@sha`) is handed over as "seen
-  before, changed since". Run now always hands over.
-- A routine with `agent:` on the subscription runs **as** that agent (`claude --agent <name>`,
-  1.4.1; always since 1.4.2, owner's rule: the agent picked is what runs, never an orchestrator in
-  between): its prompt, tools, `maxTurns:` and `model:` (the routine's `model:` pins it; none or
-  `inherit` there leaves it to the agent file, whose `inherit` follows the orchestrator). The
-  routine's `skill:` (one of `data/claude/skills`) is given in the prompt, so the agent needs no
-  Read. The frame ("Routine run") is the same for every agent: one without `Edit` simply keeps no
-  notes (owner: flexible, give it the tool if it should). The run's events count as the agent's in
-  the Audit log (`COALESCE(e.agent, t.agent)`, which also puts a delegated role's work under the
-  role). The factory's CLAUDE.md still loads under `--agent` (`omitClaudeMd` is for sub-agents
-  only).
+- **Prefilters are gone (1.6.0, owner's call)**: everything a run does before the agent is a step of
+  the pipeline. `steps:` is a list of `- run: <bash>` (optional `name:`, `cwd:` relative to the
+  checkout, `timeout_s:` 300, `items: true` makes it a source, `new_only:`), `- github-prs: {repo,
+  filter, mine, drafts, new_only}`, `- trac: {url, query, on_change, max, new_only}` and, last and
+  at most once, `- agent: <name | orchestrator>` with `skill:`. `routines/steps.ts` runs the
+  pipeline (`bash -c` in its own process group, SIGTERM then SIGKILL on timeout; env = the agent's
+  plus `ROUTINE`, `ROUTINE_FILE`, `ROUTINE_DIR`, `PROJECT`, `PROJECT_DIR`, `SKILL_DIR`, and the vault's
+  values in its scope); `routines/sources.ts` has
+  the built-in sources and `parseItems`. A script's stdout (16k cap) lands in the prompt under
+  "Step outputs"; a source's items under "New since the last run" after dedup. A failing step is an
+  `error` run with its last lines, no task. Every source empty → `empty`, no agent. No agent step →
+  the run is `done` and its note is the steps' output (told in Telegram). A step's scripts belong in
+  the routine's folder (`"${ROUTINE_DIR}/scripts/x.sh"`); a skill keeps only the tools its agent
+  calls. A script says what it is in the comment under the shebang and names what it reads
+  (`# secrets: A B`, `# vars: C`): the step card shows both, with Set for what is missing. Each
+  run keeps every step's result (`schedule_runs.steps`: ok, ms, 2 KB of output, masked).
+  `POST /api/routines/<name>/preview` runs every step but the agent, `…/steps/<i>/run` one step
+  alone (nothing recorded).
+- `triggers:` is a list of `- schedule: <cron>`, each with an optional `tz:` / `window:` over the
+  file's. Several still mean one run at a time; an empty list is a routine that runs only by
+  **Run now** (always available, never a trigger). The 1.5.0 shape still reads: `cron:` is one
+  schedule, `- poll:` a schedule whose `prefilter:` becomes the first step (a source with
+  `new_only`), `agent:` / `skill:` on top the agent step; the form writes `steps:` on the next
+  save. A new-only source's first timed firing marks what exists as seen (`first_run: skip`; the
+  seeding mark lives in `meta`, so "Forget seen items" really hands everything over). An item whose
+  key changed (`id@changetime`, `pr@sha`) is handed over as "seen before, changed since". Run now
+  always hands over; "Run with all" (`fire(…, { everything: true })`) hands the seen items over
+  again.
+- A routine whose agent step names an agent on the subscription runs **as** that agent (`claude
+  --agent <name>`, 1.4.1; always since 1.4.2, owner's rule: the agent picked is what runs, never an
+  orchestrator in between): its prompt, tools, `maxTurns:` and `model:` (the routine's `model:`
+  pins it; none or `inherit` there leaves it to the agent file, whose `inherit` follows the
+  orchestrator). The step's `skill:` (one of `data/claude/skills`) is given in the prompt, so the
+  agent needs no Read. The frame ("Routine run") is the same for every agent: one without `Edit`
+  simply keeps no notes (owner: flexible, give it the tool if it should). The run's events count
+  as the agent's in the Audit log (`COALESCE(e.agent, t.agent)`, which also puts a delegated role's
+  work under the role). The factory's CLAUDE.md still loads under `--agent` (`omitClaudeMd` is for
+  sub-agents only).
 - One run at a time per routine; timed firings yield to the windows (`ROUTINES_SOFT_STOP`,
-  default 85 %), manual ones do not. Missed minutes: within `ROUTINES_LATE_MIN` (5) run late,
-  older ones are recorded as `missed` and told in Telegram, **never caught up** (owner's call).
-  `once: true` switches the file off after queueing. A routine task's question is answered for the
-  owner after `ROUTINES_ASK_TIMEOUT_MIN` (120): permission → deny, question → "decide by the
-  instructions". The `SCHEDULES_*` names of an older `.env` are still read.
-- The form, top to bottom: Agent, Skill, Instructions (the body), Triggers (cards; one cron field
-  each, read back in words by `GET /api/routines/cron`), then the rest folded under "More"
-  (project, model / provider, mode, report to, session, once, hosts). The zone is `TIMEZONE` in
-  `.env` (empty = UTC), which is also where "today" starts for the stats. `tz:` / `window:` are
-  honoured but not offered. The file routes refuse a save older than the file (409 "changed on
-  disk") since the agent edits routines every run. `/api/routines/*` and `/routines` only: no
-  aliases or redirects for the old paths (single owner, no outside scripts).
+  default 85 %), manual ones and scripts-only routines do not. Missed minutes: within
+  `ROUTINES_LATE_MIN` (5) run late, older ones are recorded as `missed` and told in Telegram,
+  **never caught up** (owner's call). `once: true` switches the file off after one run. A routine
+  task's question is answered for the owner after `ROUTINES_ASK_TIMEOUT_MIN` (120): permission →
+  deny, question → "decide by the instructions". The `SCHEDULES_*` names of an older `.env` are
+  still read.
+- The form, top to bottom: Pipeline (step cards: Script / GitHub pull requests / Trac tickets /
+  Agent, the agent last), Instructions (the body), Schedule (one cron field, read back in words by
+  `GET /api/routines/cron`, empty = Run now only; further `triggers:` in a file are kept and named,
+  not edited: owner has no use for several; Run once as one checkbox under it), First run / Max items when a source is new-only, then
+  below a line the rest, not folded (project, report to; hosts and `session:
+  continue` only when the file has them: a project's hosts come with the project, a fresh session
+  is the rule). Model / provider sit in the Agent step card, only for the orchestrator or when the
+  file pins one (a named agent brings its own). Sections follow `DESIGN.md`. The
+  zone is `TIMEZONE` in `.env` (empty = UTC), which is also where "today" starts for the stats.
+  `tz:` / `window:` are honoured but not offered. The file routes refuse a save older than the file
+  (409 "changed on disk") since the agent edits routines every run. `/api/routines/*` and
+  `/routines` only: no aliases or redirects for the old paths (single owner, no outside scripts).
 - **A routine's chat thread is a log** (owner's rule): project, provider and model are the routine
   file's, so the thread's head shows them as text with a link to the routine, the API refuses to
   change them or to take a message there (409) unless a run's question is open, and a run never
   reads the conversation's model. Telegram still continues the thread by a reply to a run's
   notice (that is how its questions are answered).
-- Mail has no deterministic prefilter yet (Gmail lives in the session as a connector): a mail
-  routine is a schedule at a coarse cadence. Trac is polled over HTTP from the supervisor
-  (`TRAC_URL`, `TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every routine with
-  `action: report` and graduate it.
+- Mail has no deterministic source yet (Gmail lives in the session as a connector): a mail
+  routine is a schedule at a coarse cadence. Trac is polled over HTTP from the supervisor: the
+  step holds the custom query's address as the browser has it (`url:`; no `TRAC_URL`, owner's
+  call), the login is shared by every Trac step (`TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every routine in its
+  instructions with "look and report, change nothing" and graduate it.
+- **No mode field** (1.6.0, owner's call): `action:` was only a line in the prompt and looked like a
+  safety switch it never was, so what a run may do is written in its instructions. On start
+  `migrateRoutineActions` moves an old file's `action:` into the first line of its body, once. A
+  real read-only run would be deny rules in the session, not a field.
 
 ### Hosts, GitHub, security
 
@@ -376,6 +436,19 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   are trusted from the UI after keyscan + fingerprint confirmation. Keys are never read by the
   API; passwords are not supported. Host work is read-only by rule. Branches are `feature/…` /
   `fix/…` by task kind.
+- **Secrets and variables** (1.6.0, owner's call: "as in GitHub"): set in Settings or from a step
+  card, `data/vault/secrets.json` (0600, its own mount, outside `config/`). A secret is written and
+  never read back by the API; a variable shows its value; a name keeps its kind for life. Scope:
+  all, or chosen routines / projects (a chat outside them never gets it). A name in the vault wins
+  over `.env`; the factory's own names, run variables and shell start-up names (`LD_PRELOAD`,
+  `BASH_ENV`, `NODE_OPTIONS`, `CLAUDE_*` …) are refused. Secret values (6+ chars) are masked as
+  `••••` in task prompts, results, events, run notes and step logs (the store's redactor) and in
+  Run step output; every change is told in Telegram. Sessions get a deny rule on the vault's
+  directory for Read / Edit; an agent with Bash in scope can still print a value it was given
+  (scope is the protection). No encryption at rest (the key would sit beside it). An agent reads
+  nothing itself: its skill's scripts do (`# secrets:` / `# vars:` in their headers), so a skill's
+  page lists those names per routine running it (`GET /api/secrets/skills/<name>`) and the
+  routine's agent step shows them as its needs.
 - GitHub auth = fine-grained PATs, never mounted SSH keys: `GH_TOKEN_<OWNER>` per repository owner
   (login upper-cased, `-` → `_`), `GH_TOKEN` as the fallback; `docker/gh` and
   `docker/git-credential-owner` resolve the owner from `origin`.
@@ -404,7 +477,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - Agents, skills and projects live only in `data/` (gitignored); `templates/` and `presets/` are
   the install-time seed. What an agent did, including edits to its own files, is the Audit log
   (built live from stream-json, never from transcripts after the fact).
-- **UI**: light, Guild.ai-like (paper background, dot grid, mono font, pastel pills, icon tiles)
+- **UI**: the rules are in `DESIGN.md` (forms: a row is always full, a hint is one short line). Light, Guild.ai-like (paper background, dot grid, mono font, pastel pills, icon tiles)
   plus a dark theme on the same tokens (`:root[data-theme='dark']`; never write a literal `#fff`
   on an ink or red surface). No UI framework. Icons are `lucide-react`, mapped once in
   `components/Icon.tsx` (the same icon for the same concept everywhere); a tile never changes size;
@@ -415,8 +488,8 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 ## Next
 
 1. Routines: trigger `api` (a per-routine token, `POST /api/routines/<name>/fire`, see
-   `docs/plans/routines.md`); an IMAP prefilter; whether the Trac prefilter needs `/login` is
-   unverified.
+   `docs/plans/routines.md`); an IMAP source; steps after the agent (publish what it wrote);
+   whether the Trac source needs `/login` is unverified.
 2. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
    `POST /api/tasks/fire`, "continue in chat" for a laptop session, Merge from the UI, files back
    to the chat, budgets per agent / project, audit export.

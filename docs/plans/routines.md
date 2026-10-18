@@ -1,6 +1,9 @@
 # Plan: Schedules become Routines
 
-Status: **shipped in 1.5.0** (phases 1 and 2; phase 3, the `api` trigger, is still open). Owner's
+Status: **shipped in 1.5.0** (phases 1 and 2; phase 3, the `api` trigger, is still open). 1.6.0 turned the
+routine into a pipeline: `steps:` (scripts, the built-in sources `github-prs` / `trac`, a command
+with `items: true`, the agent last) replaced prefilters and `poll:` triggers altogether; a routine
+without an agent step runs its scripts and reports their output. See `docs/SPEC.md` §4.3. Owner's
 decisions (2026-10-16): "Рутины" in Russian, a routine may have no trigger at all (Run now only),
 no aliases or redirects for the old paths at all. Owner's call (2026-10-16): a schedule is not "a
 task at 08:10" but routine work an agent does again and again, as in Claude Code's routines (a
@@ -26,7 +29,7 @@ A **routine** = who does it (an agent), what to do (the body: instructions and m
 | task source `cron` | task source `routine` (old rows stay `cron`) |
 
 What does not change: one run at a time per routine, the soft-stop for subscription runs, missed
-minutes never caught up, seen items, the ask timeout, `action: report` first. Light mode on a
+minutes never caught up, seen items, the ask timeout, report-only instructions first. Light mode on a
 provider stays as it is.
 
 ## File format
