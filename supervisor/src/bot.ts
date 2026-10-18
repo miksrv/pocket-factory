@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 
-import { Bot, type Context, InlineKeyboard } from 'grammy'
-import type { InlineKeyboardMarkup, ReactionTypeEmoji } from 'grammy/types'
+import { Bot, type Context } from 'grammy'
+import type { ReactionTypeEmoji } from 'grammy/types'
 
 import { MODEL_ALIASES } from './claude/models.js'
 import type { Config } from './config.js'
@@ -10,13 +10,13 @@ import { modelRef, parseModelRef } from './files/providers.js'
 import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
 import type { Routines } from './routines/service.js'
-import { routineOf, type RoutineSpec } from './routines/spec.js'
+import type { RoutineSpec } from './routines/spec.js'
+import type { Vault } from './secrets/vault.js'
 import type { Ask, Conversation, RateLimitSnapshot, RoutineRun, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
 import { askQuestions, type Delegation, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
 import { type DraftState, LiveDraft } from './telegram/draft.js'
 import {
-    backToCard,
     findRoutine,
     parseRoutineData,
     previewText,
@@ -25,7 +25,18 @@ import {
     routinesList,
     runsText
 } from './telegram/routinesMenu.js'
-import { EFFECT, sendMarkdown, sendReply } from './telegram/send.js'
+import { DeliveryError, EFFECT, sendMarkdown, sendReply } from './telegram/send.js'
+import {
+    type Button,
+    editView,
+    errorText,
+    escapeHtml,
+    row,
+    sendView,
+    text,
+    type View,
+    type ViewSendOptions
+} from './telegram/view.js'
 import { WebNotifier } from './telegram/webNotify.js'
 import { VERSION } from './version.js'
 import { describeUserAgent, type WebAuth } from './web/auth.js'
@@ -72,9 +83,16 @@ export function routineNotice(
         return `⏸ Routine **${run.schedule}** skipped this run: subscription ${reason}.${until ? ` Routine runs resume after the reset, ${until}.` : ''} /run ${run.schedule} runs it anyway.`
     }
     const stuck = run.status === 'skipped' && note.startsWith('the previous run is still')
-    if (run.status !== 'error' && run.status !== 'missed' && !stuck) {
+    if (run.status !== 'error' && run.status !== 'missed' && run.status !== 'done' && !stuck) {
         if (run.status !== 'skipped') lastNotice.delete(run.schedule)
         return null
+    }
+    if (run.status === 'done') {
+        // A good run ends an error streak, so the same error later is told again.
+        lastNotice.delete(run.schedule)
+        // Run now was pressed where its result shows (the card in Telegram, the page in the web): no second notice.
+        if (spec?.notify === 'none' || run.trigger === 'manual') return null
+        return `✅ Routine **${run.schedule}** ran its steps${run.items ? ` (${run.items} new item(s))` : ''}:\n\n${note || '(no output)'}`
     }
     if (lastNotice.get(run.schedule) === note) return null
     lastNotice.set(run.schedule, note)
@@ -177,41 +195,40 @@ function permissionSummary(input: Record<string, unknown>): string {
 }
 
 /**
- * A question of the agent as a Telegram message: the question, its options
- * with their descriptions, and one button per option; free text is the
- * "Other" choice — the keyboard asks the client for a reply to the question,
- * which lands in the right conversation whichever chat is the topic. A
- * permission request gets a green Allow and a red Deny.
+ * A question of the agent as a message: the question, its options with
+ * their descriptions, and one button per option inside the message; free
+ * text is the "Other" choice — the client is asked for a reply to the
+ * question, which lands in the right conversation whichever chat is the
+ * topic. A permission request gets a green Allow and a red Deny.
  */
-export function askMessage(
-    task: Task,
-    ask: Ask
-): { key: string; text: string; markup: InlineKeyboardMarkup & { force_reply?: boolean } } | null {
+export function askMessage(task: Task, ask: Ask): { key: string; view: View; forceReply: boolean } | null {
     if (ask.kind === 'permission') {
-        const text = [
-            `🔐 The agent asks to run ${ask.tool_name}:`,
-            '',
-            permissionSummary(ask.input),
-            '',
-            'Allow it or deny it below.'
-        ].join('\n')
-        const keyboard = new InlineKeyboard()
-            .text('✅ Allow', `p|${task.id}|allow`)
-            .success()
-            .text('⛔ Deny', `p|${task.id}|deny`)
-            .danger()
-        return { key: ask.request_id, text, markup: { inline_keyboard: keyboard.inline_keyboard } }
+        return {
+            key: ask.request_id,
+            forceReply: false,
+            view: [
+                text(
+                    `🔐 The agent asks to run <b>${escapeHtml(ask.tool_name)}</b>:\n<pre>${escapeHtml(permissionSummary(ask.input))}</pre>`
+                ),
+                row(
+                    { text: '✅ Allow', data: `p|${task.id}|allow`, style: 'success' },
+                    { text: '⛔ Deny', data: `p|${task.id}|deny`, style: 'danger' }
+                )
+            ]
+        }
     }
     const questions = askQuestions(ask)
     const next = openQuestions(ask)[0]
     if (!next) return null
     const index = questions.indexOf(next)
-    const lines = [`❓ ${next.header ? `${next.header}: ` : ''}${next.question}`]
+    const lines = [`❓ ${next.header ? `<b>${escapeHtml(next.header)}</b>: ` : ''}${escapeHtml(next.question)}`]
     const options = next.options ?? []
     if (options.length) {
         lines.push('')
         for (const option of options)
-            lines.push(`• ${option.label}${option.description ? ` — ${option.description}` : ''}`)
+            lines.push(
+                `• <b>${escapeHtml(option.label)}</b>${option.description ? ` — ${escapeHtml(option.description)}` : ''}`
+            )
     }
     lines.push(
         '',
@@ -222,13 +239,18 @@ export function askMessage(
             : 'Reply with your answer.'
     )
     if (questions.length > 1) lines.push(`(question ${index + 1} of ${questions.length})`)
-    const keyboard = new InlineKeyboard()
-    options.forEach((option, i) => keyboard.text(option.label.slice(0, 60), `a|${task.id}|${index}|${i}`).row())
-    return {
-        key: `${ask.request_id}:${index}`,
-        text: lines.join('\n'),
-        markup: { inline_keyboard: keyboard.inline_keyboard, force_reply: true }
-    }
+    const view: View = [text(lines.join('\n'))]
+    // Every option on a row of its own: labels are sentences, and a row of them would not fit a phone.
+    options.forEach((option, i) =>
+        view.push(
+            row({
+                text: Array.from(option.label).slice(0, 60).join(''),
+                data: `a|${task.id}|${index}|${i}`,
+                style: 'primary'
+            })
+        )
+    )
+    return { key: `${ask.request_id}:${index}`, view, forceReply: true }
 }
 
 /**
@@ -311,9 +333,22 @@ interface ChatDefaults {
     model: string | null
 }
 
-const noPreview = { link_preview_options: { is_disabled: true } } as const
+/** The buttons that open the bot's main views, under `/help` and `/status`. */
+const MENU: Button[] = [
+    { text: '📋 Routines', data: 'v|routines' },
+    { text: '📊 Status', data: 'v|status' },
+    { text: '🧠 Model', data: 'v|model' },
+    { text: '📈 Usage', data: 'v|usage' }
+]
 
-export function createBot(config: Config, tasks: TaskService, store: Store, routines?: Routines, auth?: WebAuth): Bot {
+export function createBot(
+    config: Config,
+    tasks: TaskService,
+    store: Store,
+    routines?: Routines,
+    auth?: WebAuth,
+    vault?: Vault
+): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
     const publicUrl = config.web.publicUrl
@@ -323,10 +358,6 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
     // the bot (a routine's report, a question). `/new` switches back.
     const topicFor = (chatId: number): Conversation =>
         store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
-    /** The conversation a message is about: its topic's (topics on), else the chat's current one. */
-    const conversationFor = (ctx: Context) =>
-        topicConversation(ctx) ??
-        (topicsOn() ? tasks.conversationFor('telegram', String(ctx.chat!.id)) : topicFor(ctx.chat!.id))
     const isTopic = (chatId: number, conversationId: string) => topicFor(chatId).id === conversationId
     /** The bot sent a message about a conversation: a reply to it later continues that conversation. */
     const remember = (
@@ -370,15 +401,13 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         store.telegramChatsFor(conversation.id)[0] ?? ownerChat ?? null
     /** The chat follows the thread it was told about: the next message there continues it, as after a reply. */
     const switchTo = (chatId: number, conversation: Conversation) => {
-        if (!topicsOn() && !isTopic(chatId, conversation.id)) store.setTelegramTopic(chatId, conversation.id)
+        if (!isTopic(chatId, conversation.id)) store.setTelegramTopic(chatId, conversation.id)
     }
     const mode = (): ChatMode => (store.getMeta<ChatMode>(MODE_META) === 'thread' ? 'thread' : 'fresh')
     const fromWeb = (conversation: Conversation) =>
-        topicsOn()
-            ? `💻 **${topicName(conversation)}** — from the web.`
-            : mode() === 'fresh'
-              ? `💻 **${topicName(conversation)}** — from the web. Reply to this message to continue it.`
-              : `💻 **${topicName(conversation)}** — from the web. This chat now continues that thread; /new comes back.`
+        mode() === 'fresh'
+            ? `💻 **${topicName(conversation)}** — from the web. Reply to this message to continue it.`
+            : `💻 **${topicName(conversation)}** — from the web. This chat now continues that thread; /new comes back.`
     const defaultsKey = (chatId: number) => `telegram.chat.${chatId}`
     const defaultsFor = (chatId: number): ChatDefaults => ({
         project: null,
@@ -397,9 +426,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             try {
                 conversation = tasks.setConversationModel(conversation.id, defaults.provider, defaults.model)
             } catch (error) {
-                log.warn(
-                    `chat ${chatId}: provider ${defaults.provider} left out: ${error instanceof Error ? error.message : String(error)}`
-                )
+                log.warn(`chat ${chatId}: provider ${defaults.provider} left out: ${errorText(error)}`)
             }
         }
         store.setTelegramTopic(chatId, conversation.id)
@@ -419,112 +446,26 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
     const detached = (label: string, work: () => Promise<void>) => {
         void work().catch((error) => log.error(`${label} failed`, error))
     }
-    const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
-
-    // ---- topics: with topics on for the bot, a conversation is a topic of the chat -----------
-
-    /**
-     * Topics in the private chat (Bot API 9.3) are a BotFather setting of the
-     * bot. With them on, the chat is a list of topics and every conversation
-     * gets one — the owner's chats (named after the project, or the chat's
-     * title), a routine's thread (`⏱ name`), a web chat that reached Telegram.
-     * A message in a topic continues its conversation; General is for new
-     * chats and commands. Off, the chat is flat and `/mode` rules.
-     */
-    const topicsOn = (): boolean => {
-        try {
-            return bot.botInfo.has_topics_enabled
-        } catch {
-            return false
-        }
+    /** A view sent to a chat, remembered for the task it is about (a reply to it continues that chat). */
+    const send = async (chatId: number, view: View, options: ViewSendOptions & { taskId?: string | null } = {}) => {
+        const id = await sendView(bot, chatId, view, options)
+        const task = options.taskId ? tasks.task(options.taskId) : undefined
+        if (task) remember(chatId, id, task.conversation_id, task.id)
+        return id
     }
-    const threadOfCtx = (ctx: Context): number | undefined =>
-        ctx.msg?.is_topic_message ? ctx.msg.message_thread_id : undefined
-    /** The chat a conversation's topic lives in: the Telegram chat it belongs to, else the owner's. */
-    const chatOf = (conversation: Conversation): number | null =>
-        conversation.channel === 'telegram' ? Number(conversation.external_id) || null : (ownerChat ?? null)
-    /**
-     * What to call a conversation's topic: a routine's name, the project, or
-     * the chat's title. A second live topic of the same project (the owner
-     * forgot to delete the first) carries the chat's title after the project.
-     */
-    const topicTitle = (conversation: Conversation, chatId: number, own: string | null = null): string => {
-        const routine = routineOf(conversation)
-        if (routine) return `⏱ ${routine}`
-        const title = conversation.title?.trim() || 'New chat'
-        if (!conversation.project) return title.slice(0, 128)
-        const taken = store.telegramThreadNames(chatId).filter((name) => name !== own)
-        return (
-            taken.includes(conversation.project) ? `${conversation.project} · ${title}` : conversation.project
-        ).slice(0, 128)
-    }
-    const TOPIC_COLOR = { routine: 0xffd67e, project: 0x6fb9f0, chat: 0x8eee98 } as const
-    /** The topic of a conversation, made on first use; undefined with topics off or when Telegram refuses. */
-    const threadFor = async (conversation: Conversation, chatId: number): Promise<number | undefined> => {
-        if (!topicsOn()) return undefined
-        const known = store.threadOf(conversation.id, chatId)
-        if (known) return known.thread_id
-        const name = topicTitle(conversation, chatId)
-        try {
-            const topic = await bot.api.createForumTopic(chatId, name, {
-                icon_color: routineOf(conversation)
-                    ? TOPIC_COLOR.routine
-                    : conversation.project
-                      ? TOPIC_COLOR.project
-                      : TOPIC_COLOR.chat
-            })
-            store.setTelegramThread(chatId, topic.message_thread_id, conversation.id, name)
-            return topic.message_thread_id
-        } catch (error) {
-            log.warn(`could not make a topic for ${conversation.id}: ${errorText(error)}`)
-            return undefined
-        }
-    }
-    /** A topic the owner made in the client (or one the bot lost): a conversation for it, in the project of its name if there is one. */
-    const bindTopic = (chatId: number, thread: number, name: string): Conversation => {
-        const project = tasks.hasProject(name) ? name : null
-        const conversation = tasks.newConversation('telegram', String(chatId), project ? null : name, project)
-        store.setTelegramThread(chatId, thread, conversation.id, name)
-        log.info(`topic ${thread} "${name}" bound to conversation ${conversation.id}`)
-        return conversation
-    }
-    /** The conversation of the topic a message came in; null in General or with topics off. */
-    const topicConversation = (ctx: Context): Conversation | null => {
-        const thread = threadOfCtx(ctx)
-        if (!thread) return null
-        const chatId = ctx.chat!.id
-        const known = store.telegramThread(chatId, thread)
-        const found = known ? store.getConversation(known.conversation_id) : undefined
-        if (found && !found.deleted_at) return found
-        // A message in a topic replies to the topic's opening service message, which carries its name.
-        const name = ctx.msg?.reply_to_message?.forum_topic_created?.name ?? known?.name ?? 'Chat'
-        return bindTopic(chatId, thread, name)
-    }
-    /** Telegram's answer to a message into a topic the owner deleted. */
-    const threadGone = (error: unknown) =>
-        /thread not found|topic.*(deleted|closed)|TOPIC_(DELETED|CLOSED)/i.test(errorText(error))
-    /**
-     * The owner deleted a topic (the client tells the bot nothing): its
-     * conversation goes the way of a chat deleted in the web, and what was
-     * meant for it is said in General instead.
-     */
-    const topicDeleted = (conversation: Conversation, chatId: number) => {
-        const thread = store.threadOf(conversation.id, chatId)
-        if (thread) store.dropTelegramThread(chatId, thread.thread_id)
-        try {
-            tasks.deleteConversation(conversation.id)
-        } catch {
-            // a task still runs: the conversation stays, its next message goes to General
-        }
+    /** The message under a tapped button, replaced by the view. */
+    const edit = async (ctx: Context, view: View, taskId?: string | null) => {
+        const message = ctx.callbackQuery?.message
+        if (!message) return
+        await editView(bot, message.chat.id, message.message_id, view)
+        const task = taskId ? tasks.task(taskId) : undefined
+        if (task) remember(message.chat.id, message.message_id, task.conversation_id, task.id)
     }
 
     // ---- the owner's message: a reaction per state, a draft while it runs -----------------
 
-    /** The owner's message that started a task: the reactions sit on it, the reply quotes it (or its copy in the task's topic). */
-    const origins = new Map<
-        string,
-        { chatId: number; messageId: number; replyTo: number; thread: number | undefined; reaction: Reaction | null }
-    >()
+    /** The owner's message that started a task: the reactions sit on it, the reply quotes it. */
+    const origins = new Map<string, { chatId: number; messageId: number; reaction: Reaction | null }>()
     const react = (taskId: string, reaction: Reaction) => {
         const origin = origins.get(taskId)
         if (!origin || origin.reaction === reaction) return
@@ -544,7 +485,6 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         waiting: null,
         steps: 0,
         step: null,
-        prose: '',
         ...extra
     })
     const waitingFor = (task: Task): string | null =>
@@ -552,9 +492,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             ? task.not_before
                 ? `subscription limit, continues at ${clockAt(task.not_before, config.timezone)}`
                 : 'waiting for a free slot'
-            : task.ask
-              ? 'waiting for your answer'
-              : null
+            : null
 
     // Whitelist: the bot fronts an agent with repository access, so it must
     // ignore everyone who is not the owner. (A stopped draft names only the
@@ -568,138 +506,160 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         await next()
     })
 
-    const help = async (ctx: Context) => {
+    // ---- /help ---------------------------------------------------------------------------------
+
+    const helpView = (): View => {
         const fresh = mode() === 'fresh'
-        const topics = topicsOn()
-        await ctx.reply(
-            [
-                '<b>Pocket Factory is online.</b>',
-                '',
-                topics
-                    ? 'Every chat is a topic: /new picks the project and opens one, a message there continues it, a message in General starts a new chat in its own topic. Delete a topic to drop its chat; routines report in topics of their own.'
-                    : fresh
-                      ? 'Send a task as text or voice. Every message starts a new chat; reply to a message (mine or yours) to continue its chat.'
-                      : 'Send a task as text or voice. Replies continue the same Claude Code session.',
-                'Photos and files go with the task: send them with a caption, or first and then the text.',
-                'Your message gets a reaction as the task moves: 👀 seen · 👨‍💻 working · 🤔 asking you · 😴 waiting for the window · 👍 done · 💔 failed · 🫡 stopped. While it works, a draft shows the steps; its Stop button stops the task.',
-                topics
-                    ? 'A question of the agent takes your next message in its topic as the answer, or a tap on one of its buttons.'
-                    : fresh
-                      ? 'A question of the agent takes your next message as the answer, or a tap on one of its buttons.'
-                      : 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
-                topics
-                    ? 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, in a topic of its own.'
-                    : fresh
-                      ? 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here; reply to it to continue.'
-                      : 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, and this chat switches to its thread.',
-                '',
-                '/routines — the routines on buttons: run, switch on / off, preview, last runs',
-                '/run &lt;name&gt; — fire a routine now',
-                '/status — what is going on, with a Stop button',
-                '/usage — subscription limits (5-hour and weekly windows)',
-                "/model — the orchestrator's model on buttons; /model &lt;provider&gt;:&lt;model&gt; puts this chat on another provider",
-                topics
-                    ? '/new — a new chat: pick the project, a topic opens for it'
-                    : fresh
-                      ? '/new [project] — new chats run inside that checkout from now on; /new alone: no project'
-                      : '/new [project] — start a fresh session; with a project name, inside its checkout',
-                topics
-                    ? null
-                    : `/mode — ${fresh ? 'a new chat per message now; thread keeps one session until /new' : 'one session until /new now; fresh starts a new chat per message'}`,
-                '/stop — cancel the running task (as a reply: the task of that chat)'
-            ]
-                .filter(Boolean)
-                .join('\n'),
-            { parse_mode: 'HTML', ...noPreview }
-        )
+        return [
+            text(
+                [
+                    '<b>Pocket Factory is online.</b>',
+                    '',
+                    fresh
+                        ? 'Send a task as text or voice. Every message starts a new chat; reply to a message (mine or yours) to continue its chat.'
+                        : 'Send a task as text or voice. Replies continue the same Claude Code session.',
+                    'Photos and files go with the task: send them with a caption, or first and then the text.',
+                    'Your message gets a reaction as the task moves: 👀 seen · 👨‍💻 working · 🤔 asking you · 😴 waiting for the window · 👍 done · 💔 failed · 🫡 stopped. While it works, a draft under the chat counts the steps; its Stop button stops the task.',
+                    fresh
+                        ? 'A question of the agent takes your next message as the answer, or a tap on one of its buttons.'
+                        : 'Reply to a message of mine (a report, a question) to continue in its conversation; /new comes back to a fresh one.',
+                    fresh
+                        ? 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here; reply to it to continue.'
+                        : 'A web task you left (reply unopened, question unanswered for a couple of minutes) comes here, and this chat switches to its thread.',
+                    '',
+                    '/routines — every routine with its buttons: run, switch on / off, details',
+                    '/run &lt;name&gt; — fire a routine now',
+                    '/status — what is going on, with a Stop button',
+                    '/usage — subscription limits (5-hour and weekly windows)',
+                    "/model — the orchestrator's model; /model &lt;provider&gt;:&lt;model&gt; puts this chat on another provider",
+                    fresh
+                        ? '/new — pick the project new chats run in, on buttons; /new &lt;project&gt; picks it by name'
+                        : '/new [project] — start a fresh session; with a project name, inside its checkout',
+                    `/mode — ${fresh ? 'a new chat per message now; thread keeps one session until /new' : 'one session until /new now; fresh starts a new chat per message'}`,
+                    '/stop — cancel the running task (as a reply: the task of that chat)'
+                ].join('\n')
+            ),
+            row(...MENU)
+        ]
     }
-    bot.command(['start', 'help'], help)
+    bot.command(['start', 'help'], async (ctx) => {
+        await send(ctx.chat.id, helpView())
+    })
 
-    // ---- routines: a list, a card per routine, buttons that act -------------------------
+    // ---- routines: a list with buttons per routine, a card per routine ----------------------
 
-    const routinesView = (): RoutineViewMessage => {
-        const { text, keyboard } = routinesList(routines?.list() ?? [])
-        return { text, reply_markup: keyboard }
-    }
-    type RoutineViewMessage = { text: string; reply_markup: InlineKeyboard }
-    const cardView = (name: string, note?: string): RoutineViewMessage | null => {
+    const listView = (note?: string): View => routinesList(routines?.list() ?? [], publicUrl, Date.now(), note)
+    const cardView = (name: string, options: { note?: string; emptyRun?: number } = {}): View | null => {
         const view = routines?.get(name)
         if (!view) return null
-        const { text, keyboard } = routineCard(view, config.timezone, { note, webUrl: publicUrl })
-        return { text, reply_markup: keyboard }
+        return routineCard(view, config.timezone, { ...options, webUrl: publicUrl })
     }
-    /** Fire a routine by hand; the card's note and the toast say what came of it. */
-    const fireRoutine = async (chatId: number, name: string): Promise<{ note: string; run: RoutineRun }> => {
-        const run = await routines!.fire(name, 'manual')
-        const note =
-            run.status === 'queued'
-                ? `▶️ Queued${run.note ? ` (${run.note})` : ''}. The report comes here when it is done; reply to it to follow up.`
-                : `${run.status}${run.note ? ` — ${run.note}` : ''}`
-        return { note, run }
-    }
-    const sendView = async (chatId: number, view: RoutineViewMessage, taskId?: string | null) => {
-        const sent = await bot.api.sendMessage(chatId, view.text, {
-            parse_mode: 'HTML',
-            reply_markup: view.reply_markup,
-            ...noPreview
-        })
-        const task = taskId ? tasks.task(taskId) : undefined
-        if (task) remember(chatId, sent.message_id, task.conversation_id, task.id)
-        return sent
+    /** Fire a routine by hand; the card's note says what came of it, and offers everything the poll sees when nothing was new. */
+    const fireRoutine = async (
+        name: string,
+        everything = false
+    ): Promise<{ note: string; run: RoutineRun; emptyRun?: number }> => {
+        const run = await routines!.fire(name, 'manual', null, { everything })
+        if (run.status === 'queued')
+            return {
+                run,
+                note: `▶️ Queued${run.note ? ` (${run.note})` : ''}. The report comes here when it is done; reply to it to follow up.`
+            }
+        if (run.status === 'empty')
+            return {
+                run,
+                emptyRun: run.found || undefined,
+                note: run.found
+                    ? `Nothing started: ${run.note} — every item was handed to an earlier run. "Run with all" hands them over again.`
+                    : `Nothing started: ${run.note ?? 'the sources found nothing'}.`
+            }
+        if (run.status === 'done')
+            return {
+                run,
+                note: `✅ Done (no agent): ${(run.note ?? '').slice(0, 400)}${(run.note?.length ?? 0) > 400 ? '…' : ''}`
+            }
+        return {
+            run,
+            note: `${run.status === 'skipped' ? '⏸ Skipped' : '⚠️ ' + run.status}${run.note ? ` — ${run.note}` : ''}`
+        }
     }
 
     bot.command(['routines', 'run'], async (ctx) => {
         if (!routines) return void (await ctx.reply('Routines are not available.'))
         const name = ctx.match.trim()
-        if (!name) return void (await sendView(ctx.chat.id, routinesView()))
+        if (!name) return void (await send(ctx.chat.id, listView()))
         if (!routines.get(name))
-            return void (await sendView(ctx.chat.id, {
-                text: `No routine named "${name}".`,
-                reply_markup: new InlineKeyboard().text('📋 Routines', routineData('list'))
-            }))
-        const { note, run } = await fireRoutine(ctx.chat.id, name)
-        await sendView(ctx.chat.id, cardView(name, note) ?? routinesView(), run.task_id)
+            return void (await send(ctx.chat.id, [
+                text(`No routine named "${escapeHtml(name)}".`),
+                row({ text: '📋 Routines', data: routineData('list') })
+            ]))
+        // The steps may take minutes: the bot keeps answering meanwhile.
+        const chatId = ctx.chat.id
+        detached('routine run', async () => {
+            try {
+                const { note, run, emptyRun } = await fireRoutine(name)
+                await send(chatId, cardView(name, { note, emptyRun }) ?? listView(), { taskId: run.task_id })
+            } catch (error) {
+                await send(chatId, [
+                    text(`<b>${escapeHtml(name)}</b>: ❌ ${escapeHtml(errorText(error))}`),
+                    backRow(name)
+                ])
+            }
+        })
     })
 
-    /** A button of the routines menu: `r|<action>|<key>`. The list and the cards edit the message they sit under. */
+    /**
+     * A button of the routines menu: `r|<action>|<key>`. The list and the cards edit the message
+     * they sit under. The tap is acknowledged first: a step may take seconds, and Telegram
+     * forgets a callback query after a while, so the answer would be lost and the owner would
+     * see a tap that did nothing (2026-10-16, "Run now did not start the routine").
+     */
     const routineButton = async (ctx: Context & { callbackQuery: { data: string } }) => {
         const parsed = parseRoutineData(ctx.callbackQuery.data)
         if (!parsed || !routines) throw new Error('routines are not available')
         const chatId = ctx.chat!.id
         const view = parsed.key === null ? undefined : findRoutine(routines.list(), parsed.key)
         if (parsed.action !== 'list' && !view) throw new Error('this routine is gone')
-        const edit = async (message: RoutineViewMessage, taskId?: string | null) => {
-            try {
-                await ctx.editMessageText(message.text, {
-                    parse_mode: 'HTML',
-                    reply_markup: message.reply_markup,
-                    ...noPreview
-                })
-            } catch (error) {
-                if (!/not modified/.test(errorText(error))) throw error
-            }
-            const task = taskId ? tasks.task(taskId) : undefined
-            const id = ctx.callbackQuery.message?.message_id
-            if (task && id) remember(chatId, id, task.conversation_id, task.id)
-        }
         const name = view?.name ?? ''
         switch (parsed.action) {
             case 'list':
                 await ctx.answerCallbackQuery()
-                return edit(routinesView())
+                return edit(ctx, listView())
             case 'card':
                 await ctx.answerCallbackQuery()
-                return edit(cardView(name)!)
+                return edit(ctx, cardView(name)!)
             case 'open':
                 await ctx.answerCallbackQuery()
-                await sendView(chatId, cardView(name)!)
+                await send(chatId, cardView(name)!)
                 return
             case 'run':
+            case 'all':
             case 'fire': {
-                const { note, run } = await fireRoutine(chatId, name)
-                await ctx.answerCallbackQuery({ text: run.status === 'queued' ? `▶️ ${name} queued` : note })
-                if (parsed.action === 'run') return edit(cardView(name, note)!, run.task_id)
-                await sendView(chatId, { text: `<b>${name}</b>: ${note}`, reply_markup: backToCard(name) }, run.task_id)
+                await ctx.answerCallbackQuery({ text: `▶️ ${name}…` })
+                // The query is answered already: what goes wrong from here is said in the message itself.
+                // Detached, as the steps may take minutes and grammY handles one update at a time.
+                detached('routine run', async () => {
+                    try {
+                        const { note, run, emptyRun } = await fireRoutine(name, parsed.action === 'all')
+                        if (parsed.action === 'fire')
+                            await send(
+                                chatId,
+                                [text(`<b>${escapeHtml(name)}</b>: ${escapeHtml(note)}`), backRow(name)],
+                                {
+                                    taskId: run.task_id
+                                }
+                            )
+                        else if (parsed.from === 'list') await edit(ctx, listView(`${name}: ${note}`), run.task_id)
+                        else await edit(ctx, cardView(name, { note, emptyRun })!, run.task_id)
+                    } catch (error) {
+                        const failed = [
+                            text(`<b>${escapeHtml(name)}</b>: ❌ ${escapeHtml(errorText(error))}`),
+                            backRow(name)
+                        ]
+                        if (parsed.action === 'fire') await send(chatId, failed)
+                        else await edit(ctx, failed)
+                    }
+                })
                 return
             }
             case 'on':
@@ -707,26 +667,23 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                 const on = parsed.action === 'on'
                 routines.setEnabled(name, on)
                 await ctx.answerCallbackQuery({ text: on ? `🟢 ${name} is on` : `⚪️ ${name} is off` })
-                return edit(cardView(name)!)
+                // The list stays a list, the card stays a card.
+                return edit(ctx, parsed.from === 'list' ? listView() : cardView(name)!)
             }
             case 'runs':
                 await ctx.answerCallbackQuery()
-                return edit({
-                    text: runsText(view!, routines.runs(name, 8, true), config.timezone),
-                    reply_markup: backToCard(name)
-                })
+                return edit(ctx, runsText(view!, routines.runs(name, 8, true), config.timezone))
             case 'preview': {
-                await ctx.answerCallbackQuery({ text: 'Running the prefilter…' })
-                // A prefilter may take a while (a host, a timeout): the bot must not stall meanwhile.
+                await ctx.answerCallbackQuery({ text: 'Running the steps…' })
+                // A step may take a while (a host, a timeout): the bot must not stall meanwhile.
                 detached('routine preview', async () => {
                     try {
-                        const preview = await routines.preview(name)
-                        await edit({ text: previewText(view!, preview), reply_markup: backToCard(name) })
+                        await edit(ctx, previewText(view!, await routines.preview(name)))
                     } catch (error) {
-                        await edit({
-                            text: `👁 <b>${name}</b>: ❌ ${errorText(error).replace(/&/g, '&amp;').replace(/</g, '&lt;')}`,
-                            reply_markup: backToCard(name)
-                        })
+                        await edit(ctx, [
+                            text(`👁 <b>${escapeHtml(name)}</b>: ❌ ${escapeHtml(errorText(error))}`),
+                            backRow(name)
+                        ])
                     }
                 })
                 return
@@ -735,33 +692,49 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                 await ctx.answerCallbackQuery()
         }
     }
+    const backRow = (name: string) => row({ text: '📋 Routine', data: routineData('card', name) })
 
     // ---- /new, /model, /mode, /stop, /status, /usage ---------------------------------------
 
     // `/new` forgets the session; `/new <project>` also starts the next one inside that checkout.
     // The one project command (2026-10-05): `/project <name>` did the same minus a new thread and only confused.
-    /** With topics on, `/new` asks for the project: the first button is no project, then every project file. */
-    const projectPicker = (): { text: string; reply_markup: InlineKeyboard } => {
-        const keyboard = new InlineKeyboard().text('No project', 'n|-').row()
-        const projects = tasks.projects().filter((slug) => Buffer.byteLength(`n|${slug}`) <= 64)
-        projects.forEach((slug, i) => {
-            keyboard.text(slug, `n|${slug}`)
-            if (i % 2 === 1) keyboard.row()
-        })
-        return { text: 'New chat — in which project?', reply_markup: keyboard }
+    /** `/new` alone asks for the project on buttons: the first is no project, then every project with a checkout. */
+    const projectPicker = (chatId: number): View => {
+        const current = defaultsFor(chatId).project
+        const projects = tasks
+            .projects()
+            .filter((slug) => tasks.hasProject(slug) && Buffer.byteLength(`n|${slug}`) <= 64)
+            .sort()
+        const buttons: Button[] = [
+            current === null ? { text: '✓ No project', disabled: true } : { text: 'No project', data: 'n|-' },
+            ...projects.map((slug): Button =>
+                slug === current ? { text: `✓ ${slug}`, disabled: true } : { text: slug, data: `n|${slug}` }
+            )
+        ]
+        const view: View = [
+            text(
+                mode() === 'fresh'
+                    ? `New chats run ${current ? `in <b>${escapeHtml(current)}</b>` : 'without a project'}. Pick where the next ones run:`
+                    : `Fresh session — in which project?`
+            )
+        ]
+        for (let i = 0; i < buttons.length; i += 2) view.push(row(...buttons.slice(i, i + 2)))
+        return view
     }
-    /** A new chat with its own topic, in the chat's provider if it has one; the topic opens with a word on where to write. */
-    const newTopicChat = async (chatId: number, project: string | null): Promise<Conversation> => {
+    /** `/new [project]` and the picker's button: the chat's project for new chats, and a fresh conversation now. */
+    const startNew = (chatId: number, project: string | null): { said: string; conversation: Conversation } => {
         setDefaults(chatId, { project })
         const conversation = freshConversation(chatId)
         pending.delete(chatId)
-        const thread = await threadFor(conversation, chatId)
-        await bot.api.sendMessage(
-            chatId,
-            `${project ? `New chat in ${project}, from its checkout` : 'New chat without a project'}. Send the task here; delete the topic when it is done.`,
-            { message_thread_id: thread }
-        )
-        return conversation
+        const said =
+            mode() === 'fresh'
+                ? project
+                    ? `New chats run in ${project} from now on, from its checkout. /new alone picks another.`
+                    : 'New chats run without a project from now on.'
+                : project
+                  ? `Fresh session in ${project}. Next message runs from its checkout.`
+                  : 'Fresh session. Next message starts from scratch.'
+        return { said, conversation }
     }
     bot.command('new', async (ctx) => {
         const project = ctx.match.trim() || null
@@ -771,67 +744,65 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             )
             return
         }
-        if (topicsOn()) {
-            if (project || !tasks.projects().length) await newTopicChat(ctx.chat.id, project)
-            else {
-                const view = projectPicker()
-                await ctx.reply(view.text, { reply_markup: view.reply_markup })
-            }
+        // In fresh mode the project is a default for the chat's next chats: pick it on buttons. In thread
+        // mode `/new` is the reset of the session (the old behaviour), and a name picks the project.
+        if (!project && mode() === 'fresh' && tasks.projects().some((slug) => tasks.hasProject(slug))) {
+            await send(ctx.chat.id, projectPicker(ctx.chat.id))
             return
         }
-        // The project stays for the chat's next new chats too (`fresh` mode).
-        setDefaults(ctx.chat.id, { project })
-        const fresh = freshConversation(ctx.chat.id)
-        pending.delete(ctx.chat.id)
-        const sent = await ctx.reply(
-            mode() === 'fresh'
-                ? project
-                    ? `New chats run in ${project} from now on, from its checkout. /new alone drops the project.`
-                    : 'New chats run without a project from now on.'
-                : project
-                  ? `Fresh session in ${project}. Next message runs from its checkout.`
-                  : 'Fresh session. Next message starts from scratch.'
-        )
-        remember(ctx.chat.id, sent.message_id, fresh.id)
+        const { said, conversation } = startNew(ctx.chat.id, project)
+        const sent = await ctx.reply(said)
+        remember(ctx.chat.id, sent.message_id, conversation.id)
     })
 
     /**
      * The model message: the factory's alias and this chat's provider, with
      * a button per alias (the current one pressed) and per provider.
      */
-    const modelView = (chatId: number): { text: string; reply_markup: InlineKeyboard } => {
+    const modelView = (chatId: number): View => {
         const conversation = topicFor(chatId)
         const fresh = mode() === 'fresh'
         const defaults = defaultsFor(chatId)
         const chatProvider = fresh ? defaults.provider : conversation.provider
         const chatModel = fresh ? defaults.model : conversation.model
         const current = tasks.model()
-        const keyboard = new InlineKeyboard()
-        for (const alias of MODEL_ALIASES)
-            if (alias === current) keyboard.disabled(`✓ ${alias}`)
-            else keyboard.text(alias, `m|${alias}`)
         const providers = tasks.providerStatus()
-        if (providers.length) {
-            keyboard.row()
-            if (chatProvider) keyboard.text('claude', 'm|claude').primary()
-            else keyboard.disabled('✓ claude')
-            for (const p of providers)
-                if (p.name === chatProvider) keyboard.disabled(`✓ ${p.name}`)
-                else keyboard.text(p.name, `m|${p.name}`)
-        }
-        return {
-            text: [
-                `Model: <b>${current}</b> — the orchestrator in every chat; sub-agents keep their own.`,
-                chatProvider
-                    ? `${fresh ? 'New chats here' : 'This chat'}: <b>${modelRef(chatProvider, chatModel)}</b> (claude comes back to the subscription).`
-                    : providers.length
-                      ? `${fresh ? 'New chats here' : 'This chat'}: the subscription. A provider button puts ${fresh ? 'them' : 'it'} on that box; /model &lt;provider&gt;:&lt;model&gt; names the model.`
-                      : null
-            ]
-                .filter(Boolean)
-                .join('\n'),
-            reply_markup: keyboard
-        }
+        const view: View = [
+            text(
+                [
+                    `Model: <b>${current}</b> — the orchestrator in every chat; sub-agents keep their own.`,
+                    chatProvider
+                        ? `${fresh ? 'New chats here' : 'This chat'}: <b>${escapeHtml(modelRef(chatProvider, chatModel) ?? chatProvider)}</b> (claude comes back to the subscription).`
+                        : providers.length
+                          ? `${fresh ? 'New chats here' : 'This chat'}: the subscription. A provider button puts ${fresh ? 'them' : 'it'} on that box; /model &lt;provider&gt;:&lt;model&gt; names the model.`
+                          : null
+                ]
+                    .filter(Boolean)
+                    .join('\n')
+            ),
+            row(
+                ...MODEL_ALIASES.map((alias): Button =>
+                    alias === current ? { text: `✓ ${alias}`, disabled: true } : { text: alias, data: `m|${alias}` }
+                )
+            )
+        ]
+        if (providers.length)
+            view.push(
+                row(
+                    chatProvider
+                        ? { text: 'claude', data: 'm|claude', style: 'primary' }
+                        : { text: '✓ claude', disabled: true },
+                    // Telegram refuses callback data over 64 bytes, and with it the whole view: such a name stays /model's.
+                    ...providers
+                        .filter((p) => p.name === chatProvider || Buffer.byteLength(`m|${p.name}`) <= 64)
+                        .map((p): Button =>
+                            p.name === chatProvider
+                                ? { text: `✓ ${p.name}`, disabled: true }
+                                : { text: p.name, data: `m|${p.name}` }
+                        )
+                )
+            )
+        return view
     }
     /** Apply `/model <what>`: an alias for the factory, `claude` or `<provider>[:<model>]` for this chat. Returns what to say. */
     const applyModel = (chatId: number, what: string): string => {
@@ -869,39 +840,34 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             }
             return
         }
-        const view = modelView(ctx.chat.id)
-        await ctx.reply(view.text, { parse_mode: 'HTML', reply_markup: view.reply_markup })
+        await send(ctx.chat.id, modelView(ctx.chat.id))
     })
 
     // How messages map to chats (`ChatMode`); one setting for every chat of the bot, kept in meta.
-    const modeView = (): { text: string; reply_markup: InlineKeyboard } => {
+    const modeView = (): View => {
         const fresh = mode() === 'fresh'
-        const keyboard = new InlineKeyboard()
-        if (topicsOn())
-            return {
-                text: 'Mode: <b>topics</b> (a BotFather setting of the bot). Every chat is a topic; /new picks the project. Switch topics off in BotFather for the fresh / thread modes.',
-                reply_markup: keyboard
-            }
-        if (fresh) keyboard.disabled('✓ fresh').text('thread', 'md|thread')
-        else keyboard.text('fresh', 'md|fresh').disabled('✓ thread')
-        return {
-            text: fresh
-                ? 'Mode: <b>fresh</b>. Every message starts a new chat (no context of the last task); reply to a message to continue its chat. Thread keeps one session until /new.'
-                : 'Mode: <b>thread</b>. Messages continue one session until /new; a reply switches to its conversation. Fresh starts a new chat per message.',
-            reply_markup: keyboard
-        }
+        return [
+            text(
+                fresh
+                    ? 'Mode: <b>fresh</b>. Every message starts a new chat (no context of the last task); reply to a message to continue its chat. Thread keeps one session until /new.'
+                    : 'Mode: <b>thread</b>. Messages continue one session until /new; a reply switches to its conversation. Fresh starts a new chat per message.'
+            ),
+            row(
+                fresh ? { text: '✓ fresh', disabled: true } : { text: 'fresh', data: 'md|fresh' },
+                fresh ? { text: 'thread', data: 'md|thread' } : { text: '✓ thread', disabled: true }
+            )
+        ]
     }
     bot.command('mode', async (ctx) => {
         const wanted = ctx.match.trim().toLowerCase()
         if (wanted === 'fresh' || wanted === 'thread') store.setMeta(MODE_META, wanted)
         else if (wanted) return void (await ctx.reply('Usage: /mode fresh | /mode thread'))
-        const view = modeView()
-        await ctx.reply(view.text, { parse_mode: 'HTML', reply_markup: view.reply_markup })
+        await send(ctx.chat.id, modeView())
     })
 
     bot.command('stop', async (ctx) => {
         // As a reply: the task of that message's chat (several chats run side by side in `fresh` mode).
-        const conversation = repliedConversation(ctx.chat.id, ctx.message?.reply_to_message) ?? conversationFor(ctx)
+        const conversation = repliedConversation(ctx.chat.id, ctx.message?.reply_to_message) ?? topicFor(ctx.chat.id)
         // A task waiting in the queue (for a window reset, or behind a running one) is cancelled too.
         const active = tasks.activeTask(conversation.id) ?? tasks.queuedTask(conversation.id)
         if (!active) {
@@ -915,84 +881,89 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
     // What the owner needs on a phone: where the next message goes, what runs now, the model
     // and the windows (2026-10-05: session id and the workspaces path were noise, the
     // conversation line is shown only when the chat was switched to another thread by a reply).
-    const statusView = (
-        chatId: number,
-        conversation: Conversation = topicFor(chatId)
-    ): { text: string; reply_markup: InlineKeyboard } => {
-        const topics = topicsOn()
-        const fresh = !topics && mode() === 'fresh'
+    const statusView = (chatId: number): View => {
+        const conversation = topicFor(chatId)
+        const fresh = mode() === 'fresh'
         const defaults = defaultsFor(chatId)
         // A topic is an override: after `/new` the chat's own (newest) conversation is the topic too.
         const switched =
-            !fresh && !topics && conversation.id !== tasks.conversationFor('telegram', String(chatId)).id
-                ? conversation
-                : null
+            !fresh && conversation.id !== tasks.conversationFor('telegram', String(chatId)).id ? conversation : null
         const active = tasks.activeTask(conversation.id)
         const queued = active ? undefined : tasks.queuedTask(conversation.id)
+        // Every task running anywhere (other chats, routines), so the phone sees the whole factory.
+        const running = tasks
+            .runningTaskIds()
+            .map((id) => tasks.task(id))
+            .filter((t): t is Task => Boolean(t))
         const windows = limitsLine(tasks.limits())
-        const running = active
+        const here = active
             ? `"${titleFrom(active.prompt)}" · ${active.started_at ? elapsed(active.started_at) : 'starting'}${active.ask ? ' · waiting for your answer' : ''}`
             : queued
               ? `"${titleFrom(queued.prompt)}" · queued, waiting for a free slot`
               : 'nothing'
-        const keyboard = new InlineKeyboard()
         const current = active ?? queued
-        if (current) keyboard.text('⏹ Stop', `s|stop|${current.id}`).danger()
-        keyboard.text('🔄 Refresh', 's|refresh')
-        return {
-            text: [
-                `<b>Pocket Factory v${VERSION}</b>`,
-                topics
-                    ? `Mode: topics — ${routineOf(conversation) ? `routine ${routineOf(conversation)}` : topicName(conversation)}`
-                    : fresh
-                      ? 'Mode: a new chat per message; reply to a message to continue its chat (/mode: one session)'
-                      : 'Mode: one thread until /new (/mode: a new chat per message)',
-                switched
-                    ? `Thread: ${topicName(switched)} (switched by your reply; /new comes back to this chat)`
-                    : null,
-                fresh
-                    ? `Project of new chats: ${defaults.project ?? 'none (workspaces root)'} (/new &lt;project&gt; to set)`
-                    : topics
-                      ? `Project: ${conversation.project ?? 'none (workspaces root)'}`
-                      : `Project: ${conversation.project ?? 'none (workspaces root)'} (/new &lt;project&gt; starts a fresh one there)`,
-                fresh ? `Last chat: ${topicName(conversation)}` : null,
-                `Running: ${running}`,
-                fresh && defaults.provider
-                    ? `Model: ${modelRef(defaults.provider, defaults.model)} for new chats (/model claude comes back; factory: ${tasks.model()})`
-                    : !fresh && conversation.provider
-                      ? `Model: ${modelRef(conversation.provider, conversation.model)} for this chat (/model claude comes back; factory: ${tasks.model()})`
-                      : `Model: ${tasks.model()} (/model to switch)`,
-                `Limits: ${windows ?? 'unknown (see /usage)'}`
-            ]
-                .filter(Boolean)
-                .join('\n'),
-            reply_markup: keyboard
-        }
+        const lines = [
+            `<b>Pocket Factory v${VERSION}</b>`,
+            fresh
+                ? 'Mode: a new chat per message; reply to a message to continue its chat (/mode: one session)'
+                : 'Mode: one thread until /new (/mode: a new chat per message)',
+            switched ? `Thread: ${escapeHtml(topicName(switched))} (switched by your reply; /new comes back)` : null,
+            fresh
+                ? `Project of new chats: ${escapeHtml(defaults.project ?? 'none (workspaces root)')} (/new to pick)`
+                : `Project: ${escapeHtml(conversation.project ?? 'none (workspaces root)')} (/new &lt;project&gt; starts a fresh one there)`,
+            fresh ? `Last chat: ${escapeHtml(topicName(conversation))}` : null,
+            `Running here: ${escapeHtml(here)}`,
+            running.length
+                ? `Running in all: ${running.length} — ${running
+                      .map((t) => escapeHtml(t.schedule ? `⏱ ${t.schedule}` : titleFrom(t.prompt)))
+                      .join(', ')}`
+                : null,
+            fresh && defaults.provider
+                ? `Model: ${escapeHtml(modelRef(defaults.provider, defaults.model) ?? defaults.provider)} for new chats (/model claude comes back; factory: ${tasks.model()})`
+                : !fresh && conversation.provider
+                  ? `Model: ${escapeHtml(modelRef(conversation.provider, conversation.model) ?? conversation.provider)} for this chat (/model claude comes back; factory: ${tasks.model()})`
+                  : `Model: ${tasks.model()} (/model to switch)`,
+            `Limits: ${windows ?? 'unknown (see /usage)'}`
+        ].filter((line): line is string => Boolean(line))
+        return [
+            text(lines.join('\n')),
+            row(
+                current ? { text: '⏹ Stop', data: `s|stop|${current.id}`, style: 'danger' } : null,
+                { text: '🔄 Refresh', data: 's|refresh' },
+                ...MENU.filter((b) => b.data !== 'v|status')
+            )
+        ]
     }
     bot.command('status', async (ctx) => {
-        const view = statusView(ctx.chat.id, conversationFor(ctx))
-        await ctx.reply(view.text, { parse_mode: 'HTML', reply_markup: view.reply_markup })
+        await send(ctx.chat.id, statusView(ctx.chat.id))
     })
 
     // `/usage` shows the last reading; Refresh (or `/usage refresh`) spends one Haiku turn to get a fresh one.
-    const usageKeyboard = () => new InlineKeyboard().text('🔄 Refresh (one Haiku turn)', 'u|refresh')
+    const usageView = (snapshot: RateLimitSnapshot | undefined | null, probing = false): View => [
+        text(probing ? 'Asking the CLI…' : limitsReport(snapshot ?? undefined).join('\n')),
+        row(probing ? null : { text: '🔄 Refresh (one Haiku turn)', data: 'u|refresh' })
+    ]
+    const refreshUsage = (chatId: number, messageId: number) =>
+        detached('usage refresh', async () => {
+            const snapshot = await tasks.probeLimits()
+            await editView(
+                bot,
+                chatId,
+                messageId,
+                snapshot
+                    ? usageView(snapshot)
+                    : [
+                          text('❌ The CLI reported no rate-limit status; see the supervisor log.'),
+                          row({ text: '🔄 Refresh (one Haiku turn)', data: 'u|refresh' })
+                      ]
+            )
+        })
     bot.command('usage', async (ctx) => {
         if (/^refresh\b/i.test(ctx.match)) {
-            const sent = await ctx.reply('Asking the CLI…')
-            detached('usage refresh', async () => {
-                const snapshot = await tasks.probeLimits()
-                await bot.api.editMessageText(
-                    ctx.chat.id,
-                    sent.message_id,
-                    snapshot
-                        ? limitsReport(snapshot).join('\n')
-                        : '❌ The CLI reported no rate-limit status; see the supervisor log.',
-                    { reply_markup: usageKeyboard() }
-                )
-            })
+            refreshUsage(ctx.chat.id, await send(ctx.chat.id, usageView(null, true)))
             return
         }
-        await ctx.reply(limitsReport(tasks.limits()).join('\n'), { reply_markup: usageKeyboard() })
+        await send(ctx.chat.id, usageView(tasks.limits()))
     })
 
     // A message that *starts* with an unknown command is a typo, not a task
@@ -1017,60 +988,33 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         // Files sent a moment ago without a caption go with this message.
         attachments = [...takePending(chatId), ...attachments]
         const replyTo = ctx.message?.reply_to_message
-        const inTopic = topicConversation(ctx)
-        const topic = inTopic ?? (topicsOn() ? null : topicFor(chatId))
-        // In a topic the message is for its conversation; a real reply wins over the topic's opening message.
-        const replied = inTopic ? null : repliedConversation(chatId, replyTo)
-        const route = topic
-            ? routeMessage({
-                  mode: inTopic ? 'thread' : mode(),
-                  replied: Boolean(replied),
-                  topicAsks: Boolean(tasks.pendingAsk(topic.id)),
-                  topicEmpty: isEmpty(topic)
-              })
-            : 'fresh'
-        let conversation = topic ?? replied ?? freshConversation(chatId)
+        const topic = topicFor(chatId)
+        const replied = repliedConversation(chatId, replyTo)
+        const route = routeMessage({
+            mode: mode(),
+            replied: Boolean(replied),
+            topicAsks: Boolean(tasks.pendingAsk(topic.id)),
+            topicEmpty: isEmpty(topic)
+        })
+        let conversation = topic
         if (replied) {
-            if (!topicsOn() && topic && replied.id !== topic.id) store.setTelegramTopic(chatId, replied.id)
+            if (replied.id !== topic.id) store.setTelegramTopic(chatId, replied.id)
             conversation = replied
-        } else if (route === 'fresh' && topic) {
+        } else if (route === 'fresh') {
             conversation = freshConversation(chatId)
-        }
-        if (route === 'fresh' && !replied) {
             // A reply whose chat is gone (deleted, or older than the bot remembers) brings the message it answers.
             const quoted = replyTo ? quoteReply(replyTo.text ?? replyTo.caption) : null
             if (quoted) prompt = `${quoted}\n\n${prompt}`
         }
-        const switched = !topicsOn() && replied && topic && replied.id !== topic.id ? replied : null
+        const switched = replied && replied.id !== topic.id ? replied : null
         const first = isEmpty(conversation)
         const answering = Boolean(tasks.pendingAsk(conversation.id))
         const task = tasks.submit(conversation.id, 'telegram', prompt, { attachments })
-        // The conversation's topic (topics on): made now for a new chat. A message typed in General
-        // is copied into the topic, so the topic reads as the whole conversation and the reply quotes it there.
-        const thread = await threadFor(conversation, chatId)
-        let replyToId = ctx.message?.message_id
-        if (thread && ctx.message && !inTopic) {
-            try {
-                const copy = await bot.api.copyMessage(chatId, chatId, ctx.message.message_id, {
-                    message_thread_id: thread
-                })
-                replyToId = copy.message_id
-                remember(chatId, copy.message_id, conversation.id, task.id)
-            } catch (error) {
-                log.warn(`could not copy the message into topic ${thread}: ${errorText(error)}`)
-            }
-        }
         // The owner's own message: a reply to it later continues this chat, and its reactions tell the task's state.
         if (ctx.message) {
             remember(chatId, ctx.message.message_id, conversation.id, task.id)
             if (!origins.has(task.id))
-                origins.set(task.id, {
-                    chatId,
-                    messageId: ctx.message.message_id,
-                    replyTo: replyToId ?? ctx.message.message_id,
-                    thread,
-                    reaction: null
-                })
+                origins.set(task.id, { chatId, messageId: ctx.message.message_id, reaction: null })
             react(task.id, reactionFor(task))
         }
         if (!answering && !draft.has(task.id))
@@ -1079,13 +1023,12 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                 chatId,
                 draftState(task, {
                     head:
-                        first && (topicsOn() || mode() === 'fresh')
+                        first && mode() === 'fresh'
                             ? `▶️ New chat${conversation.project ? ` in ${conversation.project}` : ''} ·`
                             : '▶️',
                     startedAt: Date.now(),
                     waiting: waitingFor(task)
-                }),
-                thread
+                })
             )
         const notes = [
             switched ? `↪️ ${topicName(switched)}` : null,
@@ -1093,7 +1036,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             attachments.length ? `📎 ${attachments.length} file${attachments.length === 1 ? '' : 's'} with it` : null
         ].filter(Boolean)
         if (notes.length) {
-            const sent = await bot.api.sendMessage(chatId, notes.join(' · '), { message_thread_id: thread })
+            const sent = await bot.api.sendMessage(chatId, notes.join(' · '))
             remember(chatId, sent.message_id, conversation.id, task.id)
         }
     }
@@ -1106,6 +1049,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
     bot.on('callback_query:data', async (ctx) => {
         const data = ctx.callbackQuery.data
         const [kind, a, b, c] = data.split('|')
+        const chatId = ctx.chat!.id
         try {
             switch (kind) {
                 case 'a': {
@@ -1129,31 +1073,23 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                 case 'n': {
                     const project = a === '-' ? null : a
                     if (project && !tasks.hasProject(project)) throw new Error(`project "${project}" is gone`)
-                    await ctx.answerCallbackQuery({ text: project ? `New chat in ${project}` : 'New chat' })
-                    await ctx
-                        .editMessageReplyMarkup({
-                            reply_markup: new InlineKeyboard().disabled(`✓ ${project ?? 'No project'}`)
-                        })
-                        .catch(() => undefined)
-                    await newTopicChat(ctx.chat!.id, project)
+                    await ctx.answerCallbackQuery({ text: project ? `New chats in ${project}` : 'No project' })
+                    const { said, conversation } = startNew(chatId, project)
+                    await edit(ctx, [text(escapeHtml(said)), ...projectPicker(chatId).slice(1)])
+                    const message = ctx.callbackQuery.message
+                    if (message) remember(chatId, message.message_id, conversation.id)
                     return
                 }
                 case 'm': {
-                    const text = applyModel(ctx.chat!.id, a === 'p' ? b : a)
-                    await ctx.answerCallbackQuery({ text })
-                    const view = modelView(ctx.chat!.id)
-                    await ctx
-                        .editMessageText(view.text, { parse_mode: 'HTML', reply_markup: view.reply_markup })
-                        .catch(() => undefined)
+                    const said = applyModel(chatId, a)
+                    await ctx.answerCallbackQuery({ text: said })
+                    await edit(ctx, modelView(chatId)).catch(() => undefined)
                     return
                 }
                 case 'md': {
                     if (a === 'fresh' || a === 'thread') store.setMeta(MODE_META, a)
                     await ctx.answerCallbackQuery({ text: `Mode: ${mode()}` })
-                    const view = modeView()
-                    await ctx
-                        .editMessageText(view.text, { parse_mode: 'HTML', reply_markup: view.reply_markup })
-                        .catch(() => undefined)
+                    await edit(ctx, modeView()).catch(() => undefined)
                     return
                 }
                 case 's': {
@@ -1164,28 +1100,34 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                         tasks.stop(task.id)
                         await ctx.answerCallbackQuery({ text: task.status === 'queued' ? '⏹ Cancelled' : 'Stopping…' })
                     } else await ctx.answerCallbackQuery()
-                    const view = statusView(ctx.chat!.id, conversationFor(ctx))
-                    await ctx
-                        .editMessageText(view.text, { parse_mode: 'HTML', reply_markup: view.reply_markup })
-                        .catch(() => undefined)
+                    // Under the routines list or a routine's card the Stop button keeps that view; elsewhere it is the status.
+                    const schedule = a === 'stop' ? tasks.task(b)?.schedule : undefined
+                    const view =
+                        c === 'l' ? listView() : c === 'c' && schedule ? cardView(schedule) : statusView(chatId)
+                    await edit(ctx, view ?? listView()).catch(() => undefined)
                     return
                 }
                 case 'u': {
                     await ctx.answerCallbackQuery({ text: 'Asking the CLI…' })
                     const message = ctx.callbackQuery.message
                     if (!message) return
-                    await ctx.editMessageText('Asking the CLI…').catch(() => undefined)
-                    detached('usage refresh', async () => {
-                        const snapshot = await tasks.probeLimits()
-                        await bot.api.editMessageText(
-                            message.chat.id,
-                            message.message_id,
-                            snapshot
-                                ? limitsReport(snapshot).join('\n')
-                                : '❌ The CLI reported no rate-limit status; see the supervisor log.',
-                            { reply_markup: usageKeyboard() }
-                        )
-                    })
+                    await edit(ctx, usageView(null, true)).catch(() => undefined)
+                    refreshUsage(message.chat.id, message.message_id)
+                    return
+                }
+                case 'v': {
+                    await ctx.answerCallbackQuery()
+                    const view =
+                        a === 'routines'
+                            ? listView()
+                            : a === 'status'
+                              ? statusView(chatId)
+                              : a === 'model'
+                                ? modelView(chatId)
+                                : a === 'usage'
+                                  ? usageView(tasks.limits())
+                                  : helpView()
+                    await send(chatId, view)
                     return
                 }
                 default:
@@ -1195,18 +1137,10 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             await ctx.answerCallbackQuery({ text: `❌ ${errorText(error)}`, show_alert: true }).catch(() => undefined)
         }
     })
-
     // The Stop button under a task's draft.
     bot.on('stopped_message_generation', (ctx) => {
         const stopped = ctx.update.stopped_message_generation
         draft.stopped(stopped.chat.id, stopped.draft_id)
-    })
-
-    // A topic the owner made in the client: a chat of its own from the start, in the project of its name if there is one.
-    bot.on('message:forum_topic_created', (ctx) => {
-        const thread = ctx.message.message_thread_id
-        if (thread && !store.telegramThread(ctx.chat.id, thread))
-            bindTopic(ctx.chat.id, thread, ctx.message.forum_topic_created.name)
     })
 
     bot.on('message:text', async (ctx) => {
@@ -1258,7 +1192,7 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                     `"${tooBig.name}" is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB, the most a bot may download`
                 )
             // Saved where the next message will go; a reply that switches the topic still finds them by path.
-            const conversation = conversationFor(ctx)
+            const conversation = topicFor(chatId)
             const saved: Attachment[] = []
             for (const item of items.slice(0, MAX_ATTACHMENTS)) {
                 const { data, filePath } = await download(item.ctx, item.fileId)
@@ -1336,7 +1270,11 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                     await ctx.reply('Could not make out any words in that recording.')
                     return
                 }
-                await ctx.reply(`🎤 ${text}`, { reply_parameters: { message_id: ctx.message.message_id } })
+                // A long recording outgrows one message (4096 characters): echo the start, the agent gets it all.
+                const echo = text.length > 3500 ? `${text.slice(0, 3500)}… (${text.length} characters in all)` : text
+                await ctx
+                    .reply(`🎤 ${echo}`, { reply_parameters: { message_id: ctx.message.message_id } })
+                    .catch((error: unknown) => log.warn(`voice echo failed: ${errorText(error)}`))
                 await submit(ctx, text)
             } catch (error) {
                 const message = errorText(error)
@@ -1351,17 +1289,19 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
     tasks.on('task', (task) => {
         if (origins.has(task.id)) react(task.id, reactionFor(task))
         if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
-            draft.end(task.id)
+            void draft.end(task.id)
             return
         }
         const chatId = chatFor(task)
         if (!chatId) return
+        // A question is a message of its own: the draft would vanish under it and come back on
+        // the next refresh. It ends while the agent waits and starts again with the answer.
+        if (task.ask) {
+            void draft.end(task.id)
+            return
+        }
         if (task.status === 'running' && !draft.has(task.id)) {
-            const conversation = tasks.conversationOf(task)
-            void (conversation ? threadFor(conversation, chatId) : Promise.resolve(undefined)).then((thread) => {
-                if (!draft.has(task.id) && tasks.task(task.id)?.status === 'running')
-                    draft.start(task.id, chatId, draftState(task, { waiting: waitingFor(task) }), thread)
-            })
+            draft.start(task.id, chatId, draftState(task, { waiting: waitingFor(task) }))
             return
         }
         draft.update(task.id, () => ({ waiting: waitingFor(task) }))
@@ -1370,17 +1310,27 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
 
     // Questions and permission requests go to the conversation's chat with
     // buttons; once the request is settled, from whichever channel, the
-    // buttons give way to one that names the answer. Keyed by request and
+    // buttons give way to a line that names the answer. Keyed by request and
     // question, so a poll of the same task never sends a question twice.
-    const sentAsks = new Map<string, { taskId: string; chatId: number; messageId: number; question: string | null }>()
+    const sentAsks = new Map<
+        string,
+        { taskId: string; chatId: number; messageId: number; question: string | null; view: View; settled?: string }
+    >()
     const settle = async (key: string, note: string) => {
         const sent = sentAsks.get(key)
         if (!sent) return
+        // The message is still on its way (a retry, a slow network): settled once it has an id.
+        if (!sent.messageId) {
+            sent.settled = note
+            return
+        }
         sentAsks.delete(key)
         try {
-            await bot.api.editMessageReplyMarkup(sent.chatId, sent.messageId, {
-                reply_markup: new InlineKeyboard().disabled(note.slice(0, 60))
-            })
+            // The question stays, its buttons give way to the answer.
+            await editView(bot, sent.chatId, sent.messageId, [
+                ...sent.view.filter((block) => block.kind === 'text'),
+                row({ text: Array.from(note).slice(0, 60).join(''), disabled: true })
+            ])
         } catch (error) {
             log.warn(`could not settle ask message ${sent.messageId}: ${errorText(error)}`)
         }
@@ -1400,31 +1350,24 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         }
         sendAsk(task, chatId)
     })
-    const sendAsk = (task: Task, chatId: number, head = '') => {
+    const sendAsk = (task: Task, chatId: number, head: View = []) => {
         if (!task.ask) return
         const message = askMessage(task, task.ask)
         if (!message || sentAsks.has(message.key)) return
         const question = task.ask.kind === 'question' ? (openQuestions(task.ask)[0]?.question ?? null) : null
-        sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question })
-        const conversation = tasks.conversationOf(task)
-        const send = (thread: number | undefined) =>
-            bot.api.sendMessage(chatId, `${head}${message.text}`, {
-                message_thread_id: thread,
-                reply_markup: message.markup,
-                ...noPreview
-            })
-        void (conversation ? threadFor(conversation, chatId) : Promise.resolve(undefined))
-            .then((thread) =>
-                send(thread).catch((error) => {
-                    if (!thread || !threadGone(error) || !conversation) throw error
-                    topicDeleted(conversation, chatId)
-                    return send(undefined)
-                })
-            )
-            .then((sent) => {
+        const view = [...head, ...message.view]
+        sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question, view })
+        // After the draft's last request, so the question is the newest thing in the chat.
+        void draft
+            .end(task.id)
+            .then(() => sendView(bot, chatId, view, { forceReply: message.forceReply }))
+            .then((id) => {
                 const entry = sentAsks.get(message.key)
-                if (entry) entry.messageId = sent.message_id
-                remember(chatId, sent.message_id, task.conversation_id, task.id)
+                if (entry) {
+                    entry.messageId = id
+                    if (entry.settled) void settle(message.key, entry.settled)
+                }
+                remember(chatId, id, task.conversation_id, task.id)
             })
             .catch((error) => {
                 sentAsks.delete(message.key)
@@ -1436,13 +1379,11 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         const chatId = conversation && webChatFor(conversation)
         if (!conversation || !chatId) return
         switchTo(chatId, conversation)
-        sendAsk(
-            task,
-            chatId,
-            topicsOn()
-                ? `💻 ${topicName(conversation)} — from the web.\n\n`
-                : `💻 ${topicName(conversation)} — from the web. This chat now continues that thread.\n\n`
-        )
+        sendAsk(task, chatId, [
+            text(
+                `💻 <b>${escapeHtml(topicName(conversation))}</b> — from the web. This chat now continues that thread.`
+            )
+        ])
     }
     tasks.on('event', (event: TaskEvent) => {
         if (event.type !== 'answer') return
@@ -1464,73 +1405,50 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         const chatId = chatFor(task)
         if (!chatId) return
         const clock = clockAt(task.not_before, config.timezone)
-        const head = task.schedule ? `⏱ ${task.schedule}: ` : ''
-        const conversation = tasks.conversationOf(task)
-        void (conversation ? threadFor(conversation, chatId) : Promise.resolve(undefined))
-            .then((thread) =>
-                bot.api.sendMessage(
-                    chatId,
-                    `${head}⏸ Subscription limit reached. The task continues by itself at ${clock} (in ${resetsIn(task.not_before!)}), in the same session.`,
-                    {
-                        message_thread_id: thread,
-                        reply_markup: new InlineKeyboard().text('⏹ Cancel it', `s|stop|${task.id}`).danger()
-                    }
-                )
-            )
-            .then((sent) => remember(chatId, sent.message_id, task.conversation_id, task.id))
-            .catch((error) => log.error(`limit notice to chat ${chatId} failed`, error))
+        const head = task.schedule ? `⏱ <b>${escapeHtml(task.schedule)}</b>: ` : ''
+        void send(
+            chatId,
+            [
+                text(
+                    `${head}⏸ Subscription limit reached. The task continues by itself at ${clock} (in ${resetsIn(task.not_before)}), in the same session.`
+                ),
+                row({ text: '⏹ Cancel it', data: `s|stop|${task.id}`, style: 'danger' })
+            ],
+            { taskId: task.id }
+        ).catch((error) => log.error(`limit notice to chat ${chatId} failed`, error))
     })
 
     // ---- replies -------------------------------------------------------------------------------
 
-    /** Buttons under a reply: the task page, its pull request, and for a routine's report the routine itself. */
-    const replyButtons = (task: Task): InlineKeyboard | undefined => {
-        const keyboard = new InlineKeyboard()
-        let any = false
-        if (publicUrl) {
-            keyboard.url('🌐 Open', `${publicUrl}/tasks/${task.id}`)
-            any = true
-        }
-        if (task.git?.pr) {
-            keyboard.url(`PR #${task.git.pr.number}`, task.git.pr.url)
-            any = true
-        }
-        if (task.schedule && routines?.get(task.schedule)) {
-            if (any) keyboard.row()
-            keyboard
-                .text('▶️ Run again', routineData('fire', task.schedule))
-                .text('📋 Routine', routineData('open', task.schedule))
-            any = true
-        }
-        return any ? keyboard : undefined
+    /** Buttons inside a reply: the task page, its pull request, and for a routine's report the routine itself. */
+    const replyButtons = (task: Task): Button[][] => {
+        const first: Button[] = []
+        if (publicUrl) first.push({ text: '🌐 Open', url: `${publicUrl}/tasks/${task.id}` })
+        if (task.git?.pr) first.push({ text: `PR #${task.git.pr.number}`, url: task.git.pr.url, style: 'success' })
+        const second: Button[] = []
+        if (task.schedule && routines?.get(task.schedule))
+            second.push(
+                { text: '▶️ Run again', data: routineData('fire', task.schedule), style: 'success' },
+                { text: '📋 Routine', data: routineData('open', task.schedule) }
+            )
+        return [first, second].filter((r) => r.length)
     }
     const deliver = async (chatId: number, task: Task, head: string, replyTo?: number) => {
-        draft.end(task.id)
+        // The draft's last request lands before the reply, or it would show under the reply for half a minute.
+        await draft.end(task.id)
         const body =
             task.status === 'done'
                 ? (task.result ?? '')
                 : task.status === 'cancelled'
                   ? '⏹ Stopped.'
                   : `❌ ${task.error || 'failed'}`
-        const conversation = tasks.conversationOf(task)
-        const thread = conversation ? await threadFor(conversation, chatId) : undefined
-        const send = (thread: number | undefined, head: string) =>
-            sendReply(bot, chatId, `${head}${body}`, {
-                thread,
-                footer: footer(task, tasks.limits(), publicUrl, tasks.delegationsOf(task.id)),
-                replyTo,
-                markup: replyButtons(task),
-                // A pull request is an occasion.
-                effect: task.status === 'done' && task.git?.pr ? EFFECT.party : undefined
-            })
-        try {
-            return await send(thread, head)
-        } catch (error) {
-            // The owner deleted the topic meanwhile: the reply still arrives, in General.
-            if (!thread || !threadGone(error) || !conversation) throw error
-            topicDeleted(conversation, chatId)
-            return send(undefined, `🗑 *${topicName(conversation)}* — its topic was deleted.\n\n${head}`)
-        }
+        return sendReply(bot, chatId, `${head}${body}`, {
+            footer: footer(task, tasks.limits(), publicUrl, tasks.delegationsOf(task.id)),
+            replyTo,
+            buttons: replyButtons(task),
+            // A pull request is an occasion.
+            effect: task.status === 'done' && task.git?.pr ? EFFECT.party : undefined
+        })
     }
 
     // Deliver results of Telegram-originated tasks back to their chat, and of
@@ -1548,12 +1466,16 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         if (!chatId) return
         const head = task.schedule ? `⏱ **${task.schedule}**\n\n` : ''
         // Delivered = seen: the web's "unread" mark goes; a failed delivery keeps it, so the reply is not lost.
-        void deliver(chatId, task, head, origin?.chatId === chatId ? origin.replyTo : undefined)
+        void deliver(chatId, task, head, origin?.chatId === chatId ? origin.messageId : undefined)
             .then((ids) => {
                 remember(chatId, ids, task.conversation_id, task.id)
                 tasks.markRead(task.conversation_id)
             })
-            .catch((error) => log.error(`delivery to chat ${chatId} failed`, error))
+            .catch((error) => {
+                // What did arrive is remembered: a reply to it continues the chat. The unread mark stays.
+                if (error instanceof DeliveryError) remember(chatId, error.ids, task.conversation_id, task.id)
+                log.error(`delivery to chat ${chatId} failed`, error)
+            })
     })
 
     // A web task's reply nobody opened in the web goes here after a while (WebNotifier),
@@ -1568,12 +1490,13 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
             remember(chatId, ids, task.conversation_id, task.id)
             tasks.markRead(task.conversation_id)
         } catch (error) {
+            if (error instanceof DeliveryError) remember(chatId, error.ids, task.conversation_id, task.id)
             log.error(`web reply to chat ${chatId} failed`, error)
         }
     }
     tasks.on('task', (task) => notifier.onTask(task))
 
-    // A prefilter that breaks (credentials expired, a host down) would
+    // A step that breaks (credentials expired, a host down) would
     // otherwise fail silently every hour: say so once per distinct error. A
     // minute the factory slept through, a firing skipped because the previous
     // run still waits, and a firing skipped for the soft-stop are told too,
@@ -1583,40 +1506,19 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
         if (!ownerChat) return
         const text = routineNotice(run, spec, lastNotice, config.timezone)
         if (!text) return
-        const markup = new InlineKeyboard()
-            .text('▶️ Run now', routineData('fire', run.schedule))
-            .success()
-            .text('📋 Routine', routineData('open', run.schedule))
         const conversation = store.findConversation('web', `schedule:${run.schedule}`)
-        void (conversation ? threadFor(conversation, ownerChat) : Promise.resolve(undefined))
-            .then((thread) => sendMarkdown(bot, ownerChat, text, { markup, thread }))
+        sendMarkdown(bot, ownerChat, text, {
+            buttons: [
+                [
+                    { text: '▶️ Run now', data: routineData('fire', run.schedule), style: 'success' },
+                    { text: '📋 Routine', data: routineData('open', run.schedule) }
+                ]
+            ]
+        })
             .then((ids) => {
                 if (conversation) remember(ownerChat, ids, conversation.id, run.task_id)
             })
             .catch((error) => log.error('routine notice failed', error))
-    })
-
-    // A topic follows its conversation: the Haiku title renames a topic named after the
-    // chat (a project's keeps the project's name), a chat deleted in the web takes its topic along.
-    tasks.on('conversation', (conversation, change) => {
-        if (!topicsOn()) return
-        const chatId = chatOf(conversation)
-        const thread = chatId === null ? undefined : store.threadOf(conversation.id, chatId)
-        if (!chatId || !thread) return
-        if (change === 'deleted') {
-            store.dropTelegramThread(chatId, thread.thread_id)
-            bot.api
-                .deleteForumTopic(chatId, thread.thread_id)
-                .catch((error) => log.warn(`could not delete topic ${thread.thread_id}: ${errorText(error)}`))
-            return
-        }
-        if (thread.name === conversation.project || routineOf(conversation)) return
-        const name = topicTitle(conversation, chatId, thread.name)
-        if (name === thread.name) return
-        store.renameTelegramThread(chatId, thread.thread_id, name)
-        bot.api
-            .editForumTopic(chatId, thread.thread_id, { name })
-            .catch((error) => log.warn(`could not rename topic ${thread.thread_id}: ${errorText(error)}`))
     })
 
     // The web UI's door: the owner hears about every sign-in, the first wrong
@@ -1633,6 +1535,15 @@ export function createBot(config: Config, tasks: TaskService, store: Store, rout
                   ? `🔒 Web sign-in locked for ${where} until ${new Date(notice.locked_until ?? Date.now()).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' })} after ${notice.failures} wrong passwords${name}.`
                   : `⚠️ Wrong web password ${where}${name}. ${auth.policy.max_failures - notice.failures} more and that address is locked for ${auth.policy.lock_minutes} min.`
         sendMarkdown(bot, ownerChat, text).catch((error) => log.error('sign-in notice failed', error))
+    })
+
+    // A secret is as sensitive as the password: every change is told, never its value.
+    vault?.on('change', (change) => {
+        if (!ownerChat) return
+        const what = change.secret ? 'Secret' : 'Variable'
+        const icon = change.action === 'deleted' ? '🗑' : '🔑'
+        const text = `${icon} ${what} \`${change.name}\` ${change.action} in the web UI${change.from ? ` from \`${change.from}\`` : ''}.`
+        sendMarkdown(bot, ownerChat, text).catch((error) => log.error('vault notice failed', error))
     })
 
     bot.catch((err) => {

@@ -42,6 +42,8 @@ services:
             - docker-certs:/certs:ro
             # SSH keys for project hosts (linked to ~/.ssh by the entrypoint).
             - ./data/secrets:/data/secrets:ro
+            # Secrets and variables set in the web UI (Settings → Secrets and variables), owner-only.
+            - ./data/vault:/data/vault
         # For one-off interactive runs in the container, e.g. an MCP OAuth login:
         #   docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser
         stdin_open: true

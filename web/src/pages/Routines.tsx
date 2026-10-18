@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Editor, Field, str } from '../components/Editor'
+import { FolderFiles } from '../components/Files'
 import { ProjectHosts } from '../components/Hosts'
 import { useConfirm } from '../components/Modal'
+import { kindOf, type RawStep, StepsField } from '../components/Pipeline'
 import { ModelPicker } from '../components/Providers'
-import { Button, ErrorBox, StatusBadge, useToast } from '../components/ui'
+import { Button, ErrorBox, SectionHead, StatusBadge, useToast } from '../components/ui'
 import {
     api,
     type CatalogEntry,
@@ -25,12 +27,6 @@ const TEMPLATE = `What to do on every run, in plain words: what counts, what to 
 
 Decisions the agent keeps between runs (it edits this section itself): tickets deferred and why, PRs skipped on purpose, anything the next run should know. Lines about items that are gone (merged, closed) are removed on the next run.
 `
-
-const PREFILTERS = [
-    { value: 'command', label: 'command — a shell command; its output lines are the items' },
-    { value: 'github-prs', label: 'github-prs — open pull requests of a repository' },
-    { value: 'trac', label: 'trac — tickets of a Trac query' }
-]
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -53,7 +49,7 @@ function dayList(days: number[]): string {
 /** Show runs lists this many, newest first; older firings are not shown anywhere. */
 const RUNS_SHOWN = 20
 const runTone = (status: RoutineRun['status']) =>
-    status === 'queued'
+    status === 'queued' || status === 'done'
         ? 'done'
         : status === 'error'
           ? 'failed'
@@ -69,21 +65,59 @@ function RunBadge({ run }: { run: RoutineRun }) {
     return <span className={`badge ${runTone(run.status)}`}>{run.status}</span>
 }
 
-/**
- * A trigger as the file has it: `{ schedule: cron }` or `{ poll: cron, prefilter }`,
- * plus `tz` / `window` the form does not offer but keeps.
- */
+/** A trigger as the file has it: `{ schedule: cron }` (`{ poll: cron }` from 1.5.0 reads the same), plus `tz` / `window` the form keeps. */
 type RawTrigger = Record<string, unknown>
-const isPoll = (t: RawTrigger) => t.poll !== undefined
-const cronOf = (t: RawTrigger) => str(isPoll(t) ? t.poll : t.schedule)
+const cronOf = (t: RawTrigger) => str(t.poll ?? t.schedule)
 
-/** The triggers of a form's frontmatter: `triggers:` as it is, or the old `cron:` (+ `prefilter:`) read as one. */
+/** The triggers of a form's frontmatter: `triggers:` as it is, or the old `cron:` read as one. */
 function triggersOf(fm: Record<string, unknown>): RawTrigger[] {
     if (Array.isArray(fm.triggers))
         return fm.triggers.filter((t): t is RawTrigger => Boolean(t) && typeof t === 'object')
     const cron = str(fm.cron).trim()
-    if (!cron) return []
-    return [fm.prefilter ? { poll: cron, prefilter: fm.prefilter } : { schedule: cron }]
+    return cron ? [{ schedule: cron }] : []
+}
+
+/** The 1.5.0 `prefilter:` shape as a step, read as the server reads it (`parseStep` in routines/spec.ts). */
+function stepOfPrefilter(p: unknown): RawStep | null {
+    if (!p || typeof p !== 'object') return typeof p === 'string' && p.trim() ? { run: p } : null
+    const { kind, ...rest } = p as RawStep
+    if (kind === undefined) return rest
+    if (kind === 'command') return { ...rest, run: rest.run ?? '', items: true }
+    if (kind === 'github-prs' || kind === 'trac') {
+        const { name, ...options } = rest
+        return name === undefined ? { [kind]: options } : { name, [kind]: options }
+    }
+    return null
+}
+
+/**
+ * The pipeline of a form's frontmatter: `steps:` as it is, or the 1.5.0
+ * fields read as one (`prefilter:` on top or under a trigger as the first
+ * step, `agent:` / `skill:` as the agent step). A file without `steps:`
+ * always has the agent step: that was the only way to run.
+ */
+export function stepsOf(fm: Record<string, unknown>): RawStep[] {
+    const steps: RawStep[] = []
+    // As on the server: a top-level prefilter counts only without `triggers:`, and under a trigger only a `poll:` has one.
+    const prefilters = Array.isArray(fm.triggers)
+        ? triggersOf(fm)
+              .filter((t) => t.poll !== undefined)
+              .map((t) => t.prefilter)
+        : [fm.prefilter]
+    for (const p of prefilters) {
+        const step = stepOfPrefilter(p)
+        if (step) steps.push(step)
+    }
+    const listed = Array.isArray(fm.steps)
+    if (listed)
+        for (const s of fm.steps as unknown[]) {
+            if (typeof s === 'string') steps.push({ run: s })
+            else if (s && typeof s === 'object') steps.push(s as RawStep)
+        }
+    const hasAgent = steps.some((s) => kindOf(s) === 'agent')
+    if (!hasAgent && (!listed || str(fm.agent) || str(fm.skill)))
+        steps.push({ agent: str(fm.agent) || 'orchestrator', skill: str(fm.skill) || undefined })
+    return steps
 }
 
 export function RoutinesPage() {
@@ -96,39 +130,57 @@ export function RoutinesPage() {
     const keys = useAsync(() => api.sshKeys(), [])
     const viewOf = (name: string) => status.data?.find((s) => s.name === name)
     const cron = useCronCheck()
+    // The file open in a routine's Files section.
+    const [openFile, setOpenFile] = useState<{ routine: string; path: string } | null>(null)
+    // Bumped when a step card writes a script, so the Files list reads the folder again.
+    const [filesVersion, setFilesVersion] = useState(0)
+    const refresh = () => {
+        status.reload()
+        setFilesVersion((v) => v + 1)
+    }
 
     return (
         <Editor
             kind='routines'
             title='Routines'
-            sub='Work an agent does again and again: who does it, what to do, and the triggers that start it. The agent edits the instructions to remember its decisions. Files in data/config/routines/.'
+            sub='Work that runs by itself: a pipeline of steps (scripts, sources, the agent last) and the schedules that start it. The agent edits the instructions to remember its decisions. Files in data/config/routines/.'
             defaults={{
                 triggers: [{ schedule: '0 8 * * mon-fri' }],
+                steps: [{ agent: 'orchestrator' }],
                 enabled: false,
                 notify: 'telegram',
-                session: 'fresh',
-                action: 'report'
+                session: 'fresh'
             }}
             validate={(fm) => {
                 for (const [i, t] of triggersOf(fm).entries()) {
                     const expr = cronOf(t).trim()
-                    if (!expr) return `trigger ${i + 1}: a cron is required`
+                    if (!expr) return `schedule ${i + 1}: a cron is required`
                     const check = cron.result(expr)
-                    if (check && !check.ok) return `trigger ${i + 1}: ${check.error}`
-                    if (isPoll(t) && !str((t.prefilter as RawTrigger | undefined)?.kind))
-                        return `trigger ${i + 1}: a poll needs a prefilter`
+                    if (check && !check.ok) return `schedule ${i + 1}: ${check.error}`
+                }
+                const steps = stepsOf(fm)
+                if (!steps.length) return 'the pipeline is empty: add a step or the agent'
+                for (const [i, s] of steps.entries()) {
+                    const kind = kindOf(s)
+                    if (kind === 'run' && !str(s.run).trim()) return `step ${i + 1}: a command is required`
+                    // As on the server: the query is `query:` or the part of `url:` after `?`.
+                    const trac = s.trac as RawStep | undefined
+                    if (kind === 'trac' && !str(trac?.query).trim() && !/\?./s.test(str(trac?.url)))
+                        return `step ${i + 1}: a Trac query is required`
+                    if (kind === 'agent' && i !== steps.length - 1) return 'the agent must be the last step'
                 }
                 return null
             }}
             template={TEMPLATE}
-            bodyLabel="Instructions (Markdown) — what to do on every run; the agent's memory between runs lives here too"
+            bodyLabel='Instructions'
+            bodyHint='Markdown: what to do on every run; the agent keeps its notes here too'
             describe={(e) => {
                 const v = viewOf(e.name)
                 const when = v
-                    ? v.triggers.map((t) => (t.kind === 'poll' ? `poll ${t.cron_text}` : t.cron_text)).join(', ') ||
-                      'by hand'
+                    ? v.triggers.map((t) => t.cron_text).join(', ') || 'by hand'
                     : triggersOf(e.frontmatter).map(cronOf).join(', ')
-                const parts = [v?.agent ?? str(e.frontmatter.agent) ?? null, when, str(e.frontmatter.project) || null]
+                const who = v ? (v.has_agent ? (v.agent ?? 'orchestrator') : 'scripts only') : str(e.frontmatter.agent)
+                const parts = [who || null, when, str(e.frontmatter.project) || null]
                 // The state is a dot (green on, grey off, red invalid); the word is its tooltip.
                 const state = v
                     ? v.errors.length
@@ -151,8 +203,9 @@ export function RoutinesPage() {
                     </>
                 )
             }}
-            intro='A routine is an agent with standing instructions and a trigger: review new pull requests, check a tracker for new defects, look at the inbox, rewrite one old page a day. A schedule starts it at a time; a poll (a shell command, a GitHub or Trac query) runs first without spending tokens and starts it only when it finds something new; Run now is always there. Pick one from the list, or create a new one.'
+            intro='A routine is a pipeline that runs by itself: scripts (fetch statistics, make a backup), sources (open pull requests, Trac tickets, a command that lists items) and, as the last step, the agent that reads what they found and your instructions. When every source comes back empty the agent is not started, so an idle routine costs no tokens; a routine without an agent just runs its scripts and reports their output. Pick one from the list, or create a new one.'
             newLabel='New routine'
+            overview={status.data && status.data.length > 0 && <PipelinesOverview routines={status.data} />}
             aside={(entry) => (
                 <Status
                     entry={entry}
@@ -160,54 +213,67 @@ export function RoutinesPage() {
                     onChanged={status.reload}
                 />
             )}
-            form={(fm, set) => (
-                <div className='field wide pair'>
-                    <Field
-                        label='Agent'
-                        hint='Who does the run; empty = the orchestrator decides.'
-                    >
-                        <select
-                            value={str(fm.agent)}
-                            onChange={(e) => set({ agent: e.target.value })}
+            form={(fm, set, entry) => {
+                // The agent step runs as the agent picked: a named agent brings its own model and provider,
+                // so the routine pins one only for the orchestrator, or when the file already does.
+                const agentStep = stepsOf(fm).find((s) => kindOf(s) === 'agent')
+                const named = Boolean(agentStep && str(agentStep.agent) && str(agentStep.agent) !== 'orchestrator')
+                const model =
+                    agentStep && (!named || str(fm.model) || str(fm.provider)) ? (
+                        <Field
+                            hint={
+                                str(fm.provider)
+                                    ? 'Runs go to this provider, off the subscription; light mode runs the agent alone.'
+                                    : named
+                                      ? "Overrides the agent file's model; inherit follows the file."
+                                      : "The orchestrator's model here; inherit = the factory's current one."
+                            }
+                            group
+                            wide
                         >
-                            <option value=''>— orchestrator decides —</option>
-                            {(agents.data ?? []).map((a) => (
-                                <option
-                                    key={a.name}
-                                    value={a.name}
-                                >
-                                    {a.name}
-                                </option>
-                            ))}
-                        </select>
-                    </Field>
-                    <Field
-                        label='Skill'
-                        hint='A procedure given in the prompt; empty = the instructions only.'
-                    >
-                        <select
-                            value={str(fm.skill)}
-                            onChange={(e) => set({ skill: e.target.value })}
-                        >
-                            <option value=''>— none —</option>
-                            {(skills.data ?? []).map((s) => (
-                                <option
-                                    key={s.name}
-                                    value={s.name}
-                                >
-                                    {s.name}
-                                </option>
-                            ))}
-                        </select>
-                    </Field>
-                </div>
-            )}
+                            <ModelPicker
+                                provider={str(fm.provider)}
+                                model={str(fm.model)}
+                                providers={providers.data?.providers}
+                                onChange={(p, m) => set({ provider: p || undefined, model: m || undefined })}
+                            />
+                        </Field>
+                    ) : null
+                return (
+                    <StepsField
+                        model={model}
+                        steps={stepsOf(fm)}
+                        view={entry ? viewOf(entry.name) : undefined}
+                        saved={entry ? stepsOf(entry.frontmatter) : []}
+                        onChanged={refresh}
+                        // The form writes the new shape; the 1.5.0 fields (prefilter, agent, skill on top) go with the first save.
+                        onChange={(next) =>
+                            set({
+                                steps: next,
+                                prefilter: undefined,
+                                agent: undefined,
+                                skill: undefined,
+                                triggers: triggersOf(fm).map(({ prefilter: _p, poll, ...t }) =>
+                                    poll !== undefined ? { ...t, schedule: poll } : t
+                                ),
+                                cron: undefined
+                            })
+                        }
+                        agents={(agents.data ?? []).map((a) => a.name)}
+                        skills={(skills.data ?? []).map((s) => s.name)}
+                        routine={entry?.name ?? null}
+                    />
+                )
+            }}
             below={(fm, set, entry) => {
                 const triggers = triggersOf(fm)
-                // The form writes the new shape; the old top-level cron / prefilter go with the first save.
-                const setTriggers = (next: RawTrigger[]) =>
-                    set({ triggers: next, cron: undefined, prefilter: undefined })
-                const polls = triggers.some(isPoll)
+                const steps = stepsOf(fm)
+                const newOnly = steps.some(
+                    (s) =>
+                        ((kindOf(s) === 'github-prs' || kindOf(s) === 'trac') &&
+                            (s[kindOf(s)] as RawStep).new_only !== false) ||
+                        (kindOf(s) === 'run' && s.items === true && s.new_only !== false)
+                )
                 // Bare names from the first form of the file become references, so the cards can edit them.
                 const hostList = (Array.isArray(fm.hosts) ? fm.hosts : []).flatMap((h): ProjectHost[] =>
                     typeof h === 'string' && h.trim()
@@ -219,61 +285,60 @@ export function RoutinesPage() {
                 return (
                     <>
                         <div className='field wide triggers'>
-                            <div className='field-head'>
-                                <div>
-                                    <div>Triggers — when the routine runs by itself</div>
-                                    <div className='dim'>
-                                        Run now (and /run in Telegram) is always there; several triggers still mean one
-                                        run at a time.
-                                    </div>
-                                </div>
-                            </div>
-                            <div className='row wrap'>
-                                <Button
-                                    size='sm'
-                                    onClick={() => setTriggers([...triggers, { schedule: '0 8 * * mon-fri' }])}
-                                >
-                                    ＋ On a schedule
-                                </Button>
-                                <Button
-                                    size='sm'
-                                    onClick={() =>
-                                        setTriggers([
-                                            ...triggers,
-                                            { poll: '*/15 * * * *', prefilter: { kind: 'command' } }
-                                        ])
-                                    }
-                                >
-                                    ＋ When something new appears
-                                </Button>
-                            </div>
-                            {triggers.length === 0 && (
+                            <SectionHead
+                                title='Schedule'
+                                hint='Empty = only by Run now (or /run in Telegram).'
+                            />
+                            <CronField
+                                value={triggers[0] ? cronOf(triggers[0]) : ''}
+                                onChange={(expr) => {
+                                    const { poll: _p, prefilter: _f, ...first } = triggers[0] ?? {}
+                                    const rest = triggers
+                                        .slice(1)
+                                        .map(({ prefilter: _q, poll, ...t }) =>
+                                            poll !== undefined ? { ...t, schedule: poll } : t
+                                        )
+                                    // The 1.5.0 prefilter becomes a step here too, or this edit alone would drop it.
+                                    set({
+                                        steps,
+                                        prefilter: undefined,
+                                        agent: undefined,
+                                        skill: undefined,
+                                        // Clearing the first schedule leaves the others the file has, not an empty one.
+                                        triggers: expr.trim() ? [{ ...first, schedule: expr }, ...rest] : rest,
+                                        cron: undefined
+                                    })
+                                }}
+                                check={cron}
+                            />
+                            {triggers.length > 1 && (
                                 <div className='dim small'>
-                                    No triggers: the routine runs only when you press Run now.
+                                    {`+ ${triggers.length - 1} more in the file: `}
+                                    <span className='mono'>{triggers.slice(1).map(cronOf).join(', ')}</span>
                                 </div>
                             )}
-                            {triggers.map((t, i) => (
-                                <TriggerCard
-                                    key={i}
-                                    trigger={t}
-                                    check={cron}
-                                    onChange={(next) => setTriggers(triggers.map((x, j) => (j === i ? next : x)))}
-                                    onRemove={() => setTriggers(triggers.filter((_, j) => j !== i))}
+                            <label
+                                className='row'
+                                style={{ gap: 8 }}
+                            >
+                                <input
+                                    type='checkbox'
+                                    checked={fm.once === true}
+                                    onChange={(e) => set({ once: e.target.checked ? true : undefined })}
                                 />
-                            ))}
+                                <span>Run once (switch off after the next run)</span>
+                            </label>
                         </div>
-                        {polls && (
-                            <div className='field wide pair'>
+                        {newOnly && (
+                            <>
                                 <Field
-                                    label='First poll'
-                                    hint='What the first poll does with what the prefilter already finds; Run now always hands over.'
+                                    label='First run'
+                                    hint='Run now never skips: it hands over what is new at once.'
                                 >
                                     <select
                                         value={
                                             str(fm.first_run) ||
-                                            (triggers.every(
-                                                (t) => !isPoll(t) || (t.prefilter as RawTrigger).kind === 'command'
-                                            )
+                                            (steps.every((s) => kindOf(s) === 'run' || kindOf(s) === 'agent')
                                                 ? 'process'
                                                 : 'skip')
                                         }
@@ -295,36 +360,13 @@ export function RoutinesPage() {
                                         onChange={(e) => set({ max_items: Number(e.target.value) || undefined })}
                                     />
                                 </Field>
-                            </div>
+                            </>
                         )}
-                        <details
-                            className='field wide more'
-                            open={Boolean(
-                                str(fm.project) ||
-                                str(fm.provider) ||
-                                hostList.length ||
-                                (str(fm.action) && str(fm.action) !== 'report')
-                            )}
-                        >
-                            <summary>
-                                More
-                                <span className='dim'>
-                                    {' '}
-                                    · project, model, mode, where the report goes, session, hosts
-                                    {[
-                                        str(fm.project) && `project ${str(fm.project)}`,
-                                        str(fm.provider) && `on ${str(fm.provider)}`,
-                                        hostList.length && `${hostList.length} host(s)`
-                                    ]
-                                        .filter(Boolean)
-                                        .map((x) => ` · ${x}`)
-                                        .join('')}
-                                </span>
-                            </summary>
+                        <div className='field wide more'>
                             <div className='form-grid'>
                                 <Field
                                     label='Project'
-                                    hint='The run works in its checkout with its rules; empty = the workspaces root.'
+                                    hint='Runs in its checkout; empty = the workspaces root.'
                                     wide
                                 >
                                     <select
@@ -343,40 +385,8 @@ export function RoutinesPage() {
                                     </select>
                                 </Field>
                                 <Field
-                                    hint={
-                                        str(fm.provider)
-                                            ? 'The runs go to this provider, off the subscription; in light mode the agent above is the run itself (its file is the system prompt), with no sub-agents.'
-                                            : "Pins the model for these runs; inherit = the agent's own, or whatever the factory runs on now (Settings, /model). A provider (Settings → Providers) takes the runs off the subscription."
-                                    }
-                                    group
-                                    wide
-                                >
-                                    <ModelPicker
-                                        provider={str(fm.provider)}
-                                        model={str(fm.model)}
-                                        providers={providers.data?.providers}
-                                        onChange={(p, m) => set({ provider: p || undefined, model: m || undefined })}
-                                    />
-                                </Field>
-                                <Field
-                                    label='Mode'
-                                    hint='report = look and tell, change nothing; fix / comment = act as the instructions allow.'
-                                >
-                                    <input
-                                        list='modes'
-                                        value={str(fm.action)}
-                                        onChange={(e) => set({ action: e.target.value })}
-                                        placeholder='report'
-                                    />
-                                    <datalist id='modes'>
-                                        <option value='report' />
-                                        <option value='fix' />
-                                        <option value='comment' />
-                                    </datalist>
-                                </Field>
-                                <Field
                                     label='Report to'
-                                    hint='Where the report and questions go; the web thread has them either way.'
+                                    hint='The web thread has them either way.'
                                 >
                                     <select
                                         value={str(fm.notify) || 'telegram'}
@@ -386,44 +396,24 @@ export function RoutinesPage() {
                                         <option value='none'>web only</option>
                                     </select>
                                 </Field>
-                                <Field
-                                    label='Session'
-                                    hint='fresh: memory is this file; continue: one growing transcript.'
-                                >
-                                    <select
-                                        value={str(fm.session) || 'fresh'}
-                                        onChange={(e) => set({ session: e.target.value })}
+                                {str(fm.session) === 'continue' && (
+                                    <Field
+                                        label='Session'
+                                        hint='fresh is the default: the memory is this file.'
                                     >
-                                        <option value='fresh'>fresh session per run</option>
-                                        <option value='continue'>continue one session</option>
-                                    </select>
-                                </Field>
-                                <Field
-                                    label='Run once'
-                                    hint='Switches itself off after queueing one task: a check to do tomorrow, not every day.'
-                                    group
-                                    wide
-                                >
-                                    <div className='row wrap'>
-                                        <label
-                                            className='row'
-                                            style={{ gap: 8 }}
+                                        <select
+                                            value={str(fm.session) || 'fresh'}
+                                            onChange={(e) => set({ session: e.target.value })}
                                         >
-                                            <input
-                                                type='checkbox'
-                                                checked={fm.once === true}
-                                                onChange={(e) => set({ once: e.target.checked ? true : undefined })}
-                                            />{' '}
-                                            <span>switch off after the next run</span>
-                                        </label>
-                                    </div>
-                                </Field>
+                                            <option value='fresh'>fresh session per run</option>
+                                            <option value='continue'>continue one session</option>
+                                        </select>
+                                    </Field>
+                                )}
                                 {!entry && (
                                     <Field
                                         label='After saving'
-                                        hint='A new routine is saved switched off unless ticked; the status bar above the form switches it later.'
                                         group
-                                        wide
                                     >
                                         <div className='row wrap'>
                                             <label
@@ -440,244 +430,44 @@ export function RoutinesPage() {
                                         </div>
                                     </Field>
                                 )}
-                                <ProjectHosts
-                                    owner='routine'
-                                    value={hostList}
-                                    onChange={(next) => set({ hosts: next.length ? next : undefined })}
-                                    shared={hosts.data}
-                                    onSharedChanged={hosts.reload}
-                                    keys={keys.data}
+                                {hostList.length > 0 && (
+                                    <ProjectHosts
+                                        owner='routine'
+                                        value={hostList}
+                                        onChange={(next) => set({ hosts: next.length ? next : undefined })}
+                                        shared={hosts.data}
+                                        onSharedChanged={hosts.reload}
+                                        keys={keys.data}
+                                    />
+                                )}
+                            </div>
+                        </div>
+                        {entry && (
+                            <div
+                                id='routine-files'
+                                className='field wide'
+                            >
+                                <FolderFiles
+                                    key={`${entry.name}:${filesVersion}`}
+                                    kind='routines'
+                                    name={entry.name}
+                                    dir={viewOf(entry.name)?.dir ?? entry.path.replace(/\/ROUTINE\.md$|\.md$/, '')}
+                                    open={openFile?.routine === entry.name ? openFile.path : null}
+                                    onOpen={(path) => setOpenFile(path ? { routine: entry.name, path } : null)}
+                                    onChanged={status.reload}
+                                    hint={
+                                        <span title={viewOf(entry.name)?.dir}>
+                                            The routine's folder (ROUTINE_DIR): its scripts in scripts/, its data in
+                                            data/
+                                        </span>
+                                    }
                                 />
                             </div>
-                        </details>
+                        )}
                     </>
                 )
             }}
         />
-    )
-}
-
-/**
- * One trigger: on a schedule (a cron), or when something new appears (a cron
- * that runs a prefilter and starts the agent only for new items). The kind
- * is switched in place; a poll keeps its prefilter.
- */
-function TriggerCard({
-    trigger,
-    check,
-    onChange,
-    onRemove
-}: {
-    trigger: RawTrigger
-    check: ReturnType<typeof useCronCheck>
-    onChange: (next: RawTrigger) => void
-    onRemove: () => void
-}) {
-    const poll = isPoll(trigger)
-    const prefilter = (trigger.prefilter as RawTrigger | undefined) ?? {}
-    const kind = str(prefilter.kind)
-    const setPrefilter = (patch: Record<string, unknown>) =>
-        onChange({ ...trigger, prefilter: { ...prefilter, ...patch } })
-    const setCron = (cron: string) => onChange({ ...trigger, [poll ? 'poll' : 'schedule']: cron })
-    const switchKind = (toPoll: boolean) => {
-        if (toPoll === poll) return
-        const { schedule: _s, poll: _p, ...rest } = trigger
-        onChange(
-            toPoll
-                ? { ...rest, poll: cronOf(trigger), prefilter: trigger.prefilter ?? { kind: 'command' } }
-                : { ...rest, schedule: cronOf(trigger) }
-        )
-    }
-    return (
-        <div className='trigger-card'>
-            <Field
-                label='Trigger'
-                wide
-            >
-                <select
-                    value={poll ? 'poll' : 'schedule'}
-                    onChange={(e) => switchKind(e.target.value === 'poll')}
-                >
-                    <option value='schedule'>On a schedule — every firing starts a run</option>
-                    <option value='poll'>When something new appears — a prefilter looks first</option>
-                </select>
-            </Field>
-            <CronField
-                value={cronOf(trigger)}
-                onChange={setCron}
-                check={check}
-            />
-            {poll && (
-                <>
-                    <Field
-                        label='Prefilter'
-                        hint='Runs before the model, every firing, without tokens. Only what it finds and no earlier run has handed over becomes a task; nothing found = no task.'
-                    >
-                        <select
-                            value={kind}
-                            onChange={(e) => onChange({ ...trigger, prefilter: { kind: e.target.value } })}
-                        >
-                            {!kind && <option value=''>— pick one —</option>}
-                            {PREFILTERS.map((p) => (
-                                <option
-                                    key={p.value}
-                                    value={p.value}
-                                >
-                                    {p.label}
-                                </option>
-                            ))}
-                        </select>
-                    </Field>
-                    {kind === 'command' && (
-                        <>
-                            <Field
-                                label='Command (bash)'
-                                hint="Runs in the project's checkout (or the workspaces root) with the agent's environment: ssh keys, gh, the .env variables. One item per output line (key<TAB>title), or a JSON array of {key, title, text, url}. Empty output and exit 0 = nothing to do."
-                                wide
-                            >
-                                <textarea
-                                    className='mono'
-                                    rows={5}
-                                    value={str(prefilter.run)}
-                                    onChange={(e) => setPrefilter({ run: e.target.value })}
-                                    placeholder={
-                                        'for h in host-a host-b; do\n  p=$(ssh -o BatchMode=yes $h "df --output=pcent / | tail -1" | tr -dc 0-9)\n  [ "$p" -ge 85 ] && echo "$h $p%"\ndone\ntrue'
-                                    }
-                                    spellCheck={false}
-                                />
-                            </Field>
-                            <Field label='Timeout (seconds)'>
-                                <input
-                                    type='number'
-                                    min={5}
-                                    max={900}
-                                    value={str(prefilter.timeout_s) || '120'}
-                                    onChange={(e) => setPrefilter({ timeout_s: Number(e.target.value) || undefined })}
-                                />
-                            </Field>
-                        </>
-                    )}
-                    {kind === 'github-prs' && (
-                        <>
-                            <Field
-                                label='Repository (owner/name)'
-                                hint="Empty = the project's repository URL."
-                            >
-                                <input
-                                    className='mono'
-                                    value={str(prefilter.repo)}
-                                    onChange={(e) => setPrefilter({ repo: e.target.value })}
-                                    placeholder='owner/name'
-                                />
-                            </Field>
-                            <Field
-                                label='Which pull requests'
-                                hint='A PR comes up again after a new push (the key carries the head commit).'
-                            >
-                                <select
-                                    value={str(prefilter.filter) || 'open'}
-                                    onChange={(e) => setPrefilter({ filter: e.target.value })}
-                                >
-                                    <option value='open'>every open PR</option>
-                                    <option value='review-requested'>where my review is requested</option>
-                                    <option value='mentioned'>where I am mentioned</option>
-                                </select>
-                            </Field>
-                            <Field
-                                label='Also'
-                                group
-                            >
-                                <div
-                                    className='row wrap'
-                                    style={{ gap: '6px 16px' }}
-                                >
-                                    <label
-                                        className='row'
-                                        style={{ gap: 8 }}
-                                    >
-                                        <input
-                                            type='checkbox'
-                                            checked={prefilter.mine === true}
-                                            onChange={(e) => setPrefilter({ mine: e.target.checked })}
-                                        />{' '}
-                                        <span>my own pull requests</span>
-                                    </label>
-                                    <label
-                                        className='row'
-                                        style={{ gap: 8 }}
-                                    >
-                                        <input
-                                            type='checkbox'
-                                            checked={prefilter.drafts === true}
-                                            onChange={(e) => setPrefilter({ drafts: e.target.checked })}
-                                        />{' '}
-                                        <span>drafts</span>
-                                    </label>
-                                </div>
-                            </Field>
-                        </>
-                    )}
-                    {kind === 'trac' && (
-                        <>
-                            <Field
-                                label='Trac URL'
-                                hint='Base URL; append /login when the server authenticates that path. Empty = TRAC_URL from .env. Credentials: TRAC_USER + TRAC_PASSWORD (basic auth) or TRAC_COOKIE.'
-                            >
-                                <input
-                                    className='mono'
-                                    value={str(prefilter.url)}
-                                    onChange={(e) => setPrefilter({ url: e.target.value })}
-                                    placeholder='https://trac.example.com'
-                                />
-                            </Field>
-                            <Field
-                                label='Query'
-                                hint='Trac query string, as in the URL of a custom query: status=new&component=Foo&severity=major'
-                                wide
-                            >
-                                <input
-                                    className='mono'
-                                    value={str(prefilter.query)}
-                                    onChange={(e) => setPrefilter({ query: e.target.value })}
-                                    placeholder='status=new&component=Foo'
-                                />
-                            </Field>
-                            <Field
-                                label='Changes count'
-                                hint='On: a ticket comes up again when it changes (a reply, a status), so a deferred one resurfaces when there is news. Off: only new ids.'
-                                group
-                                wide
-                            >
-                                <div className='row wrap'>
-                                    <label
-                                        className='row'
-                                        style={{ gap: 8 }}
-                                    >
-                                        <input
-                                            type='checkbox'
-                                            checked={prefilter.on_change !== false}
-                                            onChange={(e) =>
-                                                setPrefilter({ on_change: e.target.checked ? undefined : false })
-                                            }
-                                        />{' '}
-                                        <span>a changed ticket is new again</span>
-                                    </label>
-                                </div>
-                            </Field>
-                        </>
-                    )}
-                </>
-            )}
-            <div className='trigger-foot wide'>
-                <Button
-                    size='sm'
-                    variant='ghost'
-                    onClick={onRemove}
-                >
-                    Remove trigger
-                </Button>
-            </div>
-        </div>
     )
 }
 
@@ -699,7 +489,7 @@ function useCronCheck() {
                 .catch((e: Error) =>
                     setResults((prev) => ({ ...prev, [expr]: { ok: false, error: e.message, tz: '' } }))
                 )
-        }, 250)
+        }, 300)
         return () => clearTimeout(timer)
     }, [pending, results])
     return {
@@ -720,7 +510,7 @@ function CronField({
     useEffect(() => check.ask(value), [value, check])
     const result = check.result(value)
     const hint = !value.trim() ? (
-        'minute hour day month weekday · 0 8 * * mon-fri = weekdays at 08:00 · */15 * * * * = every 15 min · @daily, @hourly'
+        'e.g. 0 8 * * mon-fri = weekdays at 08:00 · */15 * * * * = every 15 min'
     ) : !result ? (
         'checking…'
     ) : result.ok ? (
@@ -744,24 +534,19 @@ function CronField({
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder='0 8 * * mon-fri'
-                aria-invalid={!value.trim() || (result ? !result.ok : undefined)}
+                aria-invalid={value.trim() && result ? !result.ok : undefined}
             />
         </Field>
     )
 }
 
-/** One trigger as the scheduler reads it: kind, the cron in words, zone and window. */
+/** One schedule as the scheduler reads it: the cron in words, zone and window. */
 function TriggerLine({ trigger }: { trigger: RoutineTrigger }) {
     return (
         <span
             className='stack'
             style={{ gap: 2 }}
         >
-            <span>
-                <span className={`badge ${trigger.kind === 'poll' ? 'blue' : 'plain'}`}>
-                    {trigger.kind === 'poll' ? `poll ${trigger.prefilter ?? ''}` : 'schedule'}
-                </span>
-            </span>
             <span>{trigger.cron_text}</span>
             <span className='dim small'>
                 {trigger.tz}
@@ -774,7 +559,7 @@ function TriggerLine({ trigger }: { trigger: RoutineTrigger }) {
 
 /**
  * What the file cannot say: whether the routine is valid, when it fires
- * next, what the last firing did, the prefilter's current view, and the
+ * next, what the last firing did, what the steps find right now, and the
  * buttons that act on the routine rather than on its text.
  */
 function Status({
@@ -790,7 +575,9 @@ function Status({
     const [error, setError] = useState<string | null>(null)
     const [preview, setPreview] = useState<RoutinePreview | null>(null)
     const [showRuns, setShowRuns] = useState(false)
-    // By default only the firings that mattered; every poll and skip on request.
+    // A Run now that found nothing new offers what the sources see, seen or not ("Run with all").
+    const [offerAll, setOfferAll] = useState(0)
+    // By default only the firings that mattered; every empty run and skip on request.
     const [allRuns, setAllRuns] = useState(false)
     const runs = useAsync(
         () => (showRuns ? api.routineRuns(entry.name, RUNS_SHOWN, allRuns) : Promise.resolve([] as RoutineRun[])),
@@ -813,10 +600,11 @@ function Status({
             setBusy(null)
         }
     }
-    const run = () =>
+    const run = (all = false) =>
         act('run', async () => {
-            const r = await api.runRoutine(entry.name)
-            return `${r.status}${r.note ? ` — ${r.note}` : ''}`
+            const r = await api.runRoutine(entry.name, all)
+            setOfferAll(r.status === 'empty' && !all ? (r.found ?? 0) : 0)
+            return `${r.status}${r.note ? ` — ${r.note.slice(0, 200)}` : ''}`
         })
     const doPreview = () =>
         act('preview', async () => {
@@ -834,7 +622,7 @@ function Status({
             message: (
                 <>
                     {view.seen} item(s) are marked as handed over. Forgetting them makes the next run treat everything
-                    the prefilter finds as new — up to the routine's max items per run.
+                    the sources find as new — up to the routine's max items per run.
                 </>
             ),
             action: 'Forget',
@@ -851,6 +639,8 @@ function Status({
     const last = view.last_run
     const lastTask = view.last_task
     const model = view.provider ? `${view.provider}${view.model ? `:${view.model}` : ''}` : view.model
+    const hasSources = view.steps.some((s) => s.source)
+    const previewable = view.steps.some((s) => s.kind !== 'agent')
     // The last firing that queued a task is often the last firing itself: then one badge, not the same run twice.
     const taskLine = lastTask && lastTask.id !== last?.id
     return (
@@ -878,10 +668,11 @@ function Status({
                     </span>
                     <span className='small dim'>
                         {[
-                            view.agent ? `as ${view.agent}` : 'the orchestrator',
+                            view.steps.map((s) => s.name).join(' → '),
+                            view.has_agent ? (view.agent ? `as ${view.agent}` : 'the orchestrator') : 'no agent',
                             model,
                             view.once ? 'once' : null,
-                            view.prefilter ? `${view.seen} item(s) seen` : null
+                            hasSources ? `${view.seen} item(s) seen` : null
                         ]
                             .filter(Boolean)
                             .join(' · ')}
@@ -925,10 +716,10 @@ function Status({
                                     ? { color: 'var(--amber)' }
                                     : last.status === 'error'
                                       ? { color: 'var(--red)' }
-                                      : undefined
+                                      : { whiteSpace: 'pre-wrap' }
                             }
                         >
-                            {last.note}
+                            {last.note.length > 300 ? `${last.note.slice(0, 300)}…` : last.note}
                         </span>
                     )}
                     {taskLine && (
@@ -1000,24 +791,34 @@ function Status({
                 <Button
                     size='sm'
                     variant='primary'
-                    onClick={run}
+                    onClick={() => run()}
                     disabled={busy !== null || view.errors.length > 0 || view.active_task !== null}
                     title={
                         view.active_task
                             ? `a run is ${view.active_task.status}`
-                            : 'Run now: skips the crons, the windows and the soft-stop; hands over what the prefilter finds'
+                            : 'Run now: skips the crons, the windows and the soft-stop; runs the steps and hands over what the sources find'
                     }
                 >
                     {busy === 'run' ? 'Starting…' : 'Run now'}
                 </Button>
-                {view.prefilter && (
+                {offerAll > 0 && (
+                    <Button
+                        size='sm'
+                        onClick={() => run(true)}
+                        disabled={busy !== null || view.errors.length > 0 || view.active_task !== null}
+                        title='Hand over what the sources see, seen before or not, up to max items per run'
+                    >
+                        {`Run with all ${offerAll}`}
+                    </Button>
+                )}
+                {previewable && (
                     <Button
                         size='sm'
                         onClick={doPreview}
                         disabled={busy !== null || view.errors.length > 0}
-                        title='Run the prefilter and show what it finds; marks nothing'
+                        title='Run every step but the agent and show what they print and find; marks nothing'
                     >
-                        {busy === 'preview' ? 'Checking…' : 'Preview prefilter'}
+                        {busy === 'preview' ? 'Running…' : 'Preview steps'}
                     </Button>
                 )}
                 <Button
@@ -1027,7 +828,7 @@ function Status({
                 >
                     {busy === 'toggle' ? '…' : view.enabled ? 'Switch off' : 'Switch on'}
                 </Button>
-                {view.prefilter && view.seen > 0 && (
+                {hasSources && view.seen > 0 && (
                     <Button
                         size='sm'
                         variant='danger'
@@ -1059,8 +860,10 @@ function Status({
                 <div style={{ padding: '0 16px 12px' }}>
                     <div className='row between'>
                         <span className='small dim'>
-                            Prefilter found {preview.items.length} item(s) in {fmt.duration(preview.ms)},{' '}
-                            {preview.new_keys.length} new
+                            Steps ran in {fmt.duration(preview.ms)}
+                            {hasSources
+                                ? `: ${preview.items.length} item(s), ${preview.new_keys.length} would be handed over`
+                                : ''}
                         </span>
                         <Button
                             size='sm'
@@ -1070,6 +873,18 @@ function Status({
                             Close
                         </Button>
                     </div>
+                    {preview.outputs.map((o, i) => (
+                        <div
+                            key={i}
+                            style={{ marginTop: 6 }}
+                        >
+                            <div className='dim small'>
+                                {o.name} · {fmt.duration(o.ms)}
+                                {o.truncated ? ' · output cut' : ''}
+                            </div>
+                            <pre className='mono small'>{o.output.trim() || '(no output)'}</pre>
+                        </div>
+                    ))}
                     {preview.items.length > 0 && (
                         <div
                             className='mcp-servers'
@@ -1127,7 +942,7 @@ function Status({
                             checked={allRuns}
                             onChange={(e) => setAllRuns(e.target.checked)}
                         />{' '}
-                        <span>every firing, including empty polls and skips</span>
+                        <span>every firing, including empty runs and skips</span>
                     </label>
                     {runs.data?.length ? (
                         <>
@@ -1139,30 +954,16 @@ function Status({
                                         <th>Outcome</th>
                                         <th>Note</th>
                                         <th>Items</th>
-                                        <th>Prefilter</th>
+                                        <th>Steps</th>
                                         <th />
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {runs.data.map((r) => (
-                                        <tr key={r.id}>
-                                            <td
-                                                className='nowrap'
-                                                title={fmt.when(r.fired_at)}
-                                            >
-                                                {fmt.ago(r.fired_at)}
-                                            </td>
-                                            <td>{r.trigger === 'cron' ? 'schedule' : r.trigger}</td>
-                                            <td>
-                                                <RunBadge run={r} />
-                                            </td>
-                                            <td className='col-main small'>{r.note ?? ''}</td>
-                                            <td>{r.items || ''}</td>
-                                            <td className='dim nowrap'>
-                                                {r.duration_ms ? fmt.duration(r.duration_ms) : ''}
-                                            </td>
-                                            <td>{r.task_id && <Link to={`/tasks/${r.task_id}`}>task</Link>}</td>
-                                        </tr>
+                                        <RunRow
+                                            key={r.id}
+                                            run={r}
+                                        />
                                     ))}
                                 </tbody>
                             </table>
@@ -1190,6 +991,194 @@ function Status({
                 </div>
             )}
             {toast}
+        </div>
+    )
+}
+
+/**
+ * One firing in the runs table, with its steps one click away, the way a CI
+ * job opens into its steps: each with ok or failed, its time, the head of
+ * what it printed (secrets masked).
+ */
+function RunRow({ run: r }: { run: RoutineRun }) {
+    const [open, setOpen] = useState(false)
+    const steps = r.steps ?? []
+    return (
+        <>
+            <tr
+                className={steps.length ? 'run-row clickable' : 'run-row'}
+                onClick={() => steps.length && setOpen((v) => !v)}
+                aria-expanded={steps.length ? open : undefined}
+            >
+                <td
+                    className='nowrap'
+                    title={fmt.when(r.fired_at)}
+                >
+                    {steps.length > 0 && <span className='dim'>{open ? '▾ ' : '▸ '}</span>}
+                    {fmt.ago(r.fired_at)}
+                </td>
+                <td>{r.trigger === 'cron' || r.trigger === 'poll' ? 'schedule' : r.trigger}</td>
+                <td>
+                    <RunBadge run={r} />
+                </td>
+                <td
+                    className='col-main small'
+                    style={{ whiteSpace: 'pre-wrap' }}
+                >
+                    {steps.length > 0 && (
+                        <span className='run-steps'>
+                            {steps.map((s) => (
+                                <span
+                                    key={s.index}
+                                    className={`badge ${s.ok ? 'done' : 'failed'}`}
+                                    title={`${s.name}: ${s.ok ? 'ok' : 'failed'} in ${fmt.duration(s.ms)}`}
+                                >
+                                    {s.ok ? '✓' : '✗'} {s.name}
+                                </span>
+                            ))}
+                        </span>
+                    )}
+                    {(r.note ?? '').length > 400 ? `${r.note!.slice(0, 400)}…` : (r.note ?? '')}
+                </td>
+                <td>{r.items || ''}</td>
+                <td className='dim nowrap'>{r.duration_ms ? fmt.duration(r.duration_ms) : ''}</td>
+                <td>
+                    {r.task_id && (
+                        <Link
+                            to={`/tasks/${r.task_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            task
+                        </Link>
+                    )}
+                </td>
+            </tr>
+            {open && (
+                <tr className='run-detail'>
+                    <td colSpan={7}>
+                        {steps.map((s) => (
+                            <div
+                                key={s.index}
+                                className='run-step'
+                            >
+                                <div className='row small'>
+                                    <span className={`badge ${s.ok ? 'done' : 'failed'}`}>
+                                        {s.ok ? 'ok' : 'failed'}
+                                    </span>
+                                    <strong>
+                                        {s.index + 1}. {s.name}
+                                    </strong>
+                                    <span className='dim'>
+                                        {fmt.duration(s.ms)}
+                                        {s.items !== undefined ? ` · ${s.items} item(s)` : ''}
+                                    </span>
+                                </div>
+                                {s.log.trim() && <pre className='mono small'>{s.log.trim()}</pre>}
+                            </div>
+                        ))}
+                    </td>
+                </tr>
+            )}
+        </>
+    )
+}
+
+const STEP_SHORT: Record<RoutineView['steps'][number]['kind'], string> = {
+    run: 'script',
+    'github-prs': 'GitHub PRs',
+    trac: 'Trac',
+    agent: 'agent'
+}
+
+/**
+ * Every routine's pipeline at a glance: its steps in order, each coloured by
+ * how it went in the last run, with what is missing (a variable a step reads
+ * that no run gets) marked; when it runs next and how the last run ended.
+ */
+function PipelinesOverview({ routines }: { routines: RoutineView[] }) {
+    return (
+        <div className='pipelines'>
+            <SectionHead
+                title='All pipelines'
+                hint='Each step coloured by the last run; ⚠ = a variable it reads is not set.'
+            />
+            {routines.map((r) => {
+                const last = r.last_run?.steps ?? []
+                return (
+                    <Link
+                        key={r.name}
+                        to={`/routines/${encodeURIComponent(r.name)}`}
+                        className='pipeline-row'
+                    >
+                        <span className='pipeline-main'>
+                            <span className='pipeline-name'>
+                                <span
+                                    className={`live state ${r.errors.length ? 'off' : r.enabled ? '' : 'idle'}`}
+                                    aria-hidden
+                                />
+                                <strong>{r.name}</strong>
+                                <span className='dim small'>
+                                    {r.errors.length
+                                        ? 'invalid'
+                                        : r.next_run
+                                          ? `next in ${fmt.until(r.next_run)}`
+                                          : r.triggers.length
+                                            ? r.enabled
+                                                ? 'never'
+                                                : 'off'
+                                            : 'by hand'}
+                                </span>
+                            </span>
+                            <span className='pipeline-flow'>
+                                {r.steps.map((step, i) => {
+                                    const result = last.find((s) => s.index === i)
+                                    const missing = step.needs.some((n) => n.from === null && !n.optional)
+                                    return (
+                                        <span
+                                            key={i}
+                                            className='row'
+                                            style={{ gap: 4 }}
+                                        >
+                                            {i > 0 && <span className='dim'>›</span>}
+                                            <span
+                                                className={`pipeline-step ${step.kind}${result ? (result.ok ? ' ok' : ' failed') : ''}`}
+                                                title={[
+                                                    `${STEP_SHORT[step.kind]}: ${step.name}`,
+                                                    step.script?.description,
+                                                    result
+                                                        ? `last run: ${result.ok ? 'ok' : 'failed'} in ${fmt.duration(result.ms)}`
+                                                        : null,
+                                                    missing
+                                                        ? `not set: ${step.needs
+                                                              .filter((n) => n.from === null && !n.optional)
+                                                              .map((n) => n.name)
+                                                              .join(', ')}`
+                                                        : null
+                                                ]
+                                                    .filter(Boolean)
+                                                    .join('\n')}
+                                            >
+                                                {missing && '⚠ '}
+                                                {step.kind === 'agent' ? (r.agent ?? 'orchestrator') : step.name}
+                                            </span>
+                                        </span>
+                                    )
+                                })}
+                            </span>
+                        </span>
+                        <span className='pipeline-last small'>
+                            {r.last_run ? (
+                                <>
+                                    <RunBadge run={r.last_run} />{' '}
+                                    <span className='dim'>{fmt.ago(r.last_run.fired_at)}</span>
+                                </>
+                            ) : (
+                                <span className='dim'>never ran</span>
+                            )}
+                        </span>
+                    </Link>
+                )
+            })}
         </div>
     )
 }

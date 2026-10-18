@@ -3,6 +3,7 @@ import {
     Bell,
     BellOff,
     Bot,
+    Braces,
     ClipboardList,
     Eye,
     EyeOff,
@@ -12,6 +13,7 @@ import {
     KeyRound,
     LayoutDashboard,
     ListChecks,
+    Lock,
     LogOut,
     type LucideIcon,
     MessageSquare,
@@ -59,6 +61,9 @@ export const ICONS = {
     warning: TriangleAlert,
     close: X,
     key: KeyRound,
+    /** Settings → Secrets and variables: a lock for a secret, braces for a plain variable. */
+    secret: Lock,
+    variable: Braces,
     /** The sidebar's switch for desktop notifications. */
     bell: Bell,
     bellOff: BellOff,

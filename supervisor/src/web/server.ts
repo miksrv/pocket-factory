@@ -8,7 +8,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { getCookie } from 'hono/cookie'
 import { secureHeaders } from 'hono/secure-headers'
 
-import { BadName, NotFound } from '../files/catalog.js'
+import { BadName, Conflict, NotFound } from '../files/catalog.js'
 import { MAX_ATTACHMENT_BYTES } from '../files/inbox.js'
 import { factoryRoutes } from '../gateway/factory.js'
 import { gatewayRoutes } from '../gateway/routes.js'
@@ -27,6 +27,7 @@ import { toolRoutes } from './routes/models.js'
 import { presetRoutes } from './routes/presets.js'
 import { providerRoutes } from './routes/providers.js'
 import { routineRoutes } from './routes/routines.js'
+import { secretRoutes } from './routes/secrets.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { settingsRoutes } from './routes/settings.js'
 import { statusRoutes } from './routes/status.js'
@@ -129,6 +130,7 @@ export function createApp(app: AppContext): Hono<Env> {
     hono.onError((error, c) => {
         if (error instanceof BadName) return c.json({ error: error.message }, 400)
         if (error instanceof NotFound) return c.json({ error: error.message }, 404)
+        if (error instanceof Conflict) return c.json({ error: error.message, changed: true }, 409)
         log.error(`${c.req.method} ${c.req.path} failed`, error)
         return c.json({ error: error instanceof Error ? error.message : String(error) }, 500)
     })
@@ -149,6 +151,7 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/mcp', mcpRoutes())
     api.route('/settings', settingsRoutes())
     api.route('/toolchains', toolchainRoutes())
+    api.route('/secrets', secretRoutes())
     // Before the file routes: /routines/status and /routines/:name/… must not be taken for a file name.
     api.route('/routines', routineRoutes())
     api.route('/', fileRoutes())

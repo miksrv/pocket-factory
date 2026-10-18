@@ -127,7 +127,7 @@ export function statusRoutes(): Hono<Env> {
                 routines: {
                     total: routines.length,
                     on: routines.filter((s) => s.enabled && !s.errors.length).length,
-                    // What needs the owner: an invalid file, a prefilter that fails, a run the factory slept through.
+                    // What needs the owner: an invalid file, a step that fails, a run the factory slept through.
                     invalid: routines.filter((s) => s.errors.length).length,
                     failing: routines
                         .filter((s) => !s.errors.length && s.last_run?.status === 'error')

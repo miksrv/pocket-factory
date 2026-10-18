@@ -256,10 +256,7 @@ function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: Pro
                     </Button>
                 </span>
             ))}
-            <span className='dim'>
-                streamable HTTP servers (a web search next to the model) for the tasks on this provider only: a
-                subscription task never connects to them; the factory's gateway adds the key from .env
-            </span>
+            <span className='dim'>HTTP servers for this provider's tasks only; the gateway adds the key from .env</span>
         </div>
     )
 }
@@ -366,7 +363,7 @@ export function ProviderDialog({
             title={editing ? `Provider ${editing}` : 'Add provider'}
             icon='limits'
             size='wide'
-            description='A self-hosted model or a cloud API the tasks can run on instead of the subscription. The key stays in .env: name the variable here.'
+            description='A model server or cloud API off the subscription; its key stays in .env.'
             busy={busy}
             footer={
                 <>
@@ -402,7 +399,7 @@ export function ProviderDialog({
                             placeholder='gpu-box'
                             onChange={(e) => set({ name: e.target.value })}
                         />
-                        <span className='dim'>used in files as provider: name, and as provider:model</span>
+                        <span className='dim'>as provider: name in files</span>
                     </label>
                     <label className='field'>
                         <span>API</span>
@@ -413,7 +410,7 @@ export function ProviderDialog({
                             <option value='anthropic'>Anthropic Messages (Ollama, llama.cpp, vLLM, OpenRouter)</option>
                             <option value='openai'>OpenAI chat completions (OpenAI, Gemini, Groq, LM Studio)</option>
                         </select>
-                        <span className='dim'>what the endpoint speaks; the factory translates the second</span>
+                        <span className='dim'>the factory translates OpenAI</span>
                     </label>
                     <label className='field wide'>
                         <span>URL</span>
@@ -441,7 +438,7 @@ export function ProviderDialog({
                             placeholder='GEMINI_API_KEY'
                             onChange={(e) => set({ token: e.target.value.toUpperCase() })}
                         />
-                        <span className='dim'>the name in .env, never the key; empty for a server without one</span>
+                        <span className='dim'>a variable in .env, never the key</span>
                     </label>
                     <label className='field'>
                         <span>Tasks at once</span>
@@ -465,10 +462,7 @@ export function ProviderDialog({
                             placeholder='8000'
                             onChange={(e) => set({ max_output: e.target.value ? Number(e.target.value) : undefined })}
                         />
-                        <span className='dim'>
-                            tokens one model call may write; a small model that loops fails at this, not at the CLI's 32
-                            000 five minutes later
-                        </span>
+                        <span className='dim'>tokens per call; stops a looping model</span>
                     </label>
                     <label className='field'>
                         <span>Context window</span>
@@ -480,10 +474,7 @@ export function ProviderDialog({
                             placeholder="the CLI's assumption"
                             onChange={(e) => set({ context: e.target.value ? Number(e.target.value) : undefined })}
                         />
-                        <span className='dim'>
-                            the model's real window in tokens (Ollama: num_ctx), so the CLI compacts before it is full;
-                            without it a 64k box overflows silently
-                        </span>
+                        <span className='dim'>real window in tokens (Ollama: num_ctx)</span>
                     </label>
                     <label className='field wide'>
                         <span className='row between'>
@@ -504,10 +495,7 @@ export function ProviderDialog({
                             placeholder={'gemma4:12b\nqwen3.5:9b'}
                             onChange={(e) => setModels(e.target.value)}
                         />
-                        <span className='dim'>
-                            one per line (or comma separated); the form offers these, any id can still be typed in a
-                            file
-                        </span>
+                        <span className='dim'>one per line; any other id can still be typed in a file</span>
                     </label>
                     <label className='field'>
                         <span>Default model</span>
@@ -534,7 +522,7 @@ export function ProviderDialog({
                             placeholder='same as the task'
                             onChange={(e) => set({ small: e.target.value })}
                         />
-                        <span className='dim'>where the CLI's own small calls (the haiku tier) go</span>
+                        <span className='dim'>for the CLI's haiku-tier calls</span>
                     </label>
                     <div className='field wide group'>
                         <span>Prompt</span>
@@ -550,9 +538,7 @@ export function ProviderDialog({
                             <span>light mode — a short system prompt and a few tools</span>
                         </label>
                         <span className='dim'>
-                            the system prompt is the agent file's body (a routine's agent), else
-                            data/claude/light-system.md; tools Read / Write / Edit / Bash / Glob / Grep, no skills or
-                            connectors; models under ~30B need it, a frontier model can take the full prompt
+                            models under ~30B need it: the agent's body (or light-system.md), six built-in tools
                         </span>
                     </div>
                     <div className='field wide group'>
@@ -590,9 +576,7 @@ export function ProviderDialog({
                             onChange={(e) => setCa(e.target.value)}
                         />
                         <span className='dim'>
-                            a box with a self-signed certificate: paste its CA (for Caddy with tls internal:{' '}
-                            <code>/data/caddy/pki/authorities/local/root.crt</code> in the container); the factory then
-                            trusts it, no restart. Empty for a cloud API or a public certificate. Save, then Test
+                            a self-signed box only: its CA, trusted at once; empty for a public certificate
                         </span>
                     </div>
                     <McpRows
@@ -610,6 +594,18 @@ export function ProviderDialog({
 }
 
 // ---- Settings → Providers ---------------------------------------------------
+
+/**
+ * An MCP server's tools in words: `mcp__search__searxng_web_search` → `web search`.
+ * The server prefix goes, and so does a prefix every tool shares (`searxng_`).
+ */
+export function toolNames(server: string, tools: string[]): string[] {
+    const bare = tools.map((t) => t.replace(new RegExp(`^mcp__${server}__`), ''))
+    const words = bare.map((t) => t.split('_'))
+    let shared = 0
+    while (words.length > 1 && words.every((w) => w.length > shared + 1 && w[shared] === words[0][shared])) shared++
+    return words.map((w) => w.slice(shared).join(' '))
+}
 
 export function ProvidersSection() {
     const data = useAsync(() => api.providers(), [], 30_000)
@@ -651,8 +647,7 @@ export function ProvidersSection() {
                             ? `${overview.providers.length} provider${overview.providers.length === 1 ? '' : 's'} besides the subscription`
                             : 'No other providers yet'
                         : 'Loading…'}{' '}
-                    · a task runs on one when its routine, its chat or the agent it runs as says so; keys stay in .env
-                    and go out only from the factory's gateway
+                    · Edit sets the endpoint, models and MCP; a routine, a chat or an agent picks one; keys stay in .env
                 </span>
                 <Button
                     size='sm'
@@ -708,35 +703,28 @@ export function ProvidersSection() {
                                     own CA
                                 </span>
                             )}
-                            {p.mcp?.map((m) => (
-                                <span
-                                    key={m.name}
-                                    className={`badge ${m.token_set ? 'plain' : 'failed'}`}
-                                    title={
-                                        m.token_set
-                                            ? `${m.url}${m.token ? ` · ${m.token}` : ''}`
-                                            : `${m.token} is not set in .env`
-                                    }
-                                >
-                                    MCP {m.name}
-                                    {m.token_set ? '' : ' key missing'}
-                                </span>
-                            ))}
-                            {p.running > 0 && <span className='badge running'>{p.running} running</span>}
                             {p.mcp?.map((m) => {
                                 const tools = toolsOf(m.name)
+                                const names = toolNames(m.name, tools)
                                 return (
                                     <span
-                                        key={`${m.name}-tools`}
-                                        className='dim small mono'
-                                        title={`what an agent file lists under tools: — mcp__${m.name} alone means every tool of ${m.name}`}
+                                        key={m.name}
+                                        className={`badge ${m.token_set ? 'plain' : 'failed'}`}
+                                        title={[
+                                            m.token_set ? m.url : `${m.token} is not set in .env`,
+                                            names.length
+                                                ? `Tools: ${names.join(', ')}`
+                                                : 'Its tools show up after the first task on this provider',
+                                            `An agent file lists mcp__${m.name} to get them all`
+                                        ].join('\n')}
                                     >
-                                        {tools.length
-                                            ? tools.join(' · ')
-                                            : `mcp__${m.name}__<tool> — the tools appear after the first task on this provider`}
+                                        MCP {m.name}
+                                        {tools.length ? ` · ${tools.length} tools` : ''}
+                                        {m.token_set ? '' : ' · key missing'}
                                     </span>
                                 )
                             })}
+                            {p.running > 0 && <span className='badge running'>{p.running} running</span>}
                         </span>
                         <span className='host-projects'>
                             <span

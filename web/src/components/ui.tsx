@@ -98,6 +98,23 @@ export function StatusBadge({ status }: { status: TaskStatus }) {
     return <span className={`badge ${status}`}>{status}</span>
 }
 
+/**
+ * The heading of a form's section (Pipeline, Schedule, Hosts, the body…): a title, one short
+ * line under it, actions on the right, a rule above it. Sections split a long form into the
+ * parts the owner looks for; a plain field never gets one (DESIGN.md).
+ */
+export function SectionHead({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children?: ReactNode }) {
+    return (
+        <div className='section-head'>
+            <div className='stack'>
+                <div className='section-title'>{title}</div>
+                {hint && <div className='dim'>{hint}</div>}
+            </div>
+            {children}
+        </div>
+    )
+}
+
 export function PageHead({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) {
     return (
         <div className='page-head'>

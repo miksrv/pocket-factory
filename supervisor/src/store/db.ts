@@ -225,10 +225,7 @@ const MIGRATIONS: string[] = [
     ALTER TABLE tasks ADD COLUMN parent_id TEXT;
     CREATE INDEX tasks_parent ON tasks(parent_id) WHERE parent_id IS NOT NULL;
     `,
-    // v17: Telegram topics. With topics on for the bot (BotFather), a private
-    // chat is a list of topics and every conversation gets one: the owner's
-    // chats, a routine's thread, a web chat that reached Telegram. The bot
-    // keeps which topic is which conversation and the name it gave the topic.
+    // v17 (1.5.0): `telegram_threads` for topics in the private chat.
     `
     CREATE TABLE telegram_threads (
         chat_id         INTEGER NOT NULL,
@@ -239,15 +236,25 @@ const MIGRATIONS: string[] = [
         PRIMARY KEY (chat_id, thread_id)
     );
     CREATE INDEX telegram_threads_conversation ON telegram_threads(conversation_id);
+    `,
+    // v18 (1.6.0): topics were given up (the clients handle a bot's topics badly), the table goes.
+    `
+    DROP TABLE IF EXISTS telegram_threads;
+    `,
+    // v19 (1.6.0): every run keeps how each of its steps went (name, ok, time, the head of its output).
+    `
+    ALTER TABLE schedule_runs ADD COLUMN steps TEXT;
     `
 ]
 
 export function openDatabase(file: string): DatabaseSync {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const db = new DatabaseSync(file)
+    // The timeout first: a supervisor that starts while the previous one still closes its connection
+    // (`tsx watch`, a quick restart) would otherwise fail at the WAL switch with "database is locked".
+    db.exec('PRAGMA busy_timeout = 5000')
     db.exec('PRAGMA journal_mode = WAL')
     db.exec('PRAGMA foreign_keys = ON')
-    db.exec('PRAGMA busy_timeout = 5000')
 
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number }
     let version = row.user_version

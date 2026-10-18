@@ -19,8 +19,10 @@ export interface ModalProps {
     /** Asked to close: Escape, a click on the backdrop, the × or a Cancel button. Ignored while `busy`. */
     onClose: () => void
     title: ReactNode
-    /** One or two sentences under the title; also the dialog's accessible description. */
+    /** One line under the title in the header (cut with an ellipsis, whole in its tooltip); also the dialog's accessible description. Longer text goes into the body. */
     description?: ReactNode
+    /** Longer text at the top of the body (a confirmation's consequence); the dialog's accessible description when there is no `description`. */
+    message?: ReactNode
     /** The tile in the top-left corner; `tone: 'danger'` paints it red. */
     icon?: IconName
     tone?: 'danger'
@@ -30,8 +32,8 @@ export interface ModalProps {
     busy?: boolean
     /** The × in the corner; off for a confirmation, whose Cancel is the way out. */
     closeButton?: boolean
-    /** `wide` for a window with a form in it (720px instead of 440px). */
-    size?: 'wide'
+    /** `wide` for a window with a form in it (720px instead of 440px), `large` for an editor (1040px). */
+    size?: 'wide' | 'large'
     children?: ReactNode
     /** Long content under the head, across the whole window (a preset's README): it scrolls, the head and the footer stay. */
     content?: ReactNode
@@ -42,6 +44,7 @@ export function Modal({
     onClose,
     title,
     description,
+    message,
     icon,
     tone,
     footer,
@@ -92,7 +95,7 @@ export function Modal({
             ref={ref}
             className={`modal${tone ? ` ${tone}` : ''}${size ? ` ${size}` : ''}${content ? ' has-content' : ''}`}
             aria-labelledby={`${id}-title`}
-            aria-describedby={description ? `${id}-desc` : undefined}
+            aria-describedby={description ? `${id}-desc` : message ? `${id}-msg` : undefined}
             aria-busy={busy || undefined}
             onCancel={onCancel}
             // The browser closed the element on its own (a forced close): mirror it. Our own close() also fires this,
@@ -101,14 +104,14 @@ export function Modal({
             onPointerDown={onPointerDown}
             onClick={onClick}
         >
-            <div className='modal-body'>
+            <div className='modal-head'>
                 {icon && (
                     <Tile
                         icon={icon}
                         color={tone === 'danger' ? 'red' : 'gray'}
                     />
                 )}
-                <div className='grow modal-main'>
+                <div className='grow modal-heading'>
                     <h2
                         id={`${id}-title`}
                         className='modal-title'
@@ -119,11 +122,11 @@ export function Modal({
                         <div
                             id={`${id}-desc`}
                             className='modal-text'
+                            title={typeof description === 'string' ? description : undefined}
                         >
                             {description}
                         </div>
                     )}
-                    {children}
                 </div>
                 {closeButton && (
                     <CloseButton
@@ -134,6 +137,19 @@ export function Modal({
                     />
                 )}
             </div>
+            {(message || children) && (
+                <div className='modal-body'>
+                    {message && (
+                        <div
+                            id={`${id}-msg`}
+                            className='modal-message'
+                        >
+                            {message}
+                        </div>
+                    )}
+                    {children}
+                </div>
+            )}
             {content && <div className='modal-content'>{content}</div>}
             {footer && <div className='modal-foot'>{footer}</div>}
         </dialog>
@@ -186,7 +202,7 @@ export function ConfirmDialog({
             open={open}
             onClose={onCancel}
             title={title}
-            description={message}
+            message={message}
             icon={icon ?? (danger ? 'warning' : undefined)}
             tone={danger ? 'danger' : undefined}
             busy={busy}

@@ -6,7 +6,7 @@ import { setUnsaved, useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { useConfirm } from './Modal'
 import { Tile } from './Tile'
-import { Button, Empty, ErrorBox, Intro, Markdown, PageHead, Tabs, useToast } from './ui'
+import { Button, Empty, ErrorBox, Intro, Markdown, PageHead, SectionHead, Tabs, useToast } from './ui'
 
 export interface EditorProps {
     kind: Kind
@@ -23,12 +23,16 @@ export interface EditorProps {
     /** Default body for a new entry. */
     template: string
     bodyLabel?: string
+    /** One line under the body's heading, before the line count. */
+    bodyHint?: string
     describe?: (entry: CatalogEntry) => ReactNode
     /** Where the page's back link goes (the agents grid, for instance). */
     backTo?: { to: string; label: string }
     /** What the empty form pane says before an entry is picked, and the label of its create button. */
     intro?: string
     newLabel?: string
+    /** Under the intro while no entry is picked: an overview of them all (every routine's pipeline). */
+    overview?: ReactNode
     /** Rendered above the form for an existing entry: live state that is not in the file (a routine's runs). */
     aside?: (entry: CatalogEntry) => ReactNode
     /** More of the frontmatter form, rendered under the body (a routine's triggers come after its instructions). */
@@ -55,14 +59,16 @@ export function Editor({
     form,
     defaults,
     template,
-    bodyLabel = 'Instructions (Markdown)',
+    bodyLabel = 'Instructions',
+    bodyHint,
     describe,
     backTo,
     intro = 'Select an entry or create a new one.',
     newLabel = 'New',
     aside,
     below,
-    validate
+    validate,
+    overview
 }: EditorProps) {
     const { name } = useParams()
     const navigate = useNavigate()
@@ -167,6 +173,7 @@ export function Editor({
                         aside={aside}
                         validate={validate}
                         bodyLabel={bodyLabel}
+                        bodyHint={bodyHint}
                         taken={names}
                         onDirty={setDirty}
                         onReload={() => {
@@ -185,12 +192,20 @@ export function Editor({
                         }}
                     />
                 ) : (
-                    <div className='card form-pane'>
-                        <Intro
-                            text={intro}
-                            action={newLabel}
-                            onAction={startNew}
-                        />
+                    // The overview pads itself the way a picked entry's form does; the card's own padding would double it.
+                    <div className={`card form-pane${overview ? ' pad0' : ''}`}>
+                        {overview ? (
+                            <div className='form-body'>
+                                <p className='dim small overview-intro'>{intro}</p>
+                                {overview}
+                            </div>
+                        ) : (
+                            <Intro
+                                text={intro}
+                                action={newLabel}
+                                onAction={startNew}
+                            />
+                        )}
                     </div>
                 )}
             </div>
@@ -209,6 +224,7 @@ function Form({
     aside,
     validate,
     bodyLabel,
+    bodyHint,
     taken,
     onDirty,
     onReload,
@@ -224,6 +240,7 @@ function Form({
     aside?: EditorProps['aside']
     validate?: EditorProps['validate']
     bodyLabel: string
+    bodyHint?: string
     /** Names that exist already: a new entry may not take one (the agent's file would be replaced). */
     taken: Set<string>
     onDirty: (dirty: boolean) => void
@@ -313,6 +330,8 @@ function Form({
     // ⌘S / Ctrl+S saves from anywhere on the page.
     useEffect(() => {
         const onKey = (e: globalThis.KeyboardEvent) => {
+            // A code editor on the page saved its own file with it already.
+            if (e.defaultPrevented) return
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
                 e.preventDefault()
                 void save()
@@ -329,8 +348,15 @@ function Form({
             title: `Delete ${kind.slice(0, -1)} “${entry.name}”?`,
             message: (
                 <>
-                    This removes <code>{entry.path.split('/').slice(-2).join('/')}</code> from the volume. There is no
-                    undo: the factory keeps no history of its files.
+                    This removes{' '}
+                    {kind === 'routines' && entry.path.endsWith('/ROUTINE.md') ? (
+                        <>
+                            the folder <code>{entry.name}/</code> with its scripts and data
+                        </>
+                    ) : (
+                        <code>{entry.path.split('/').slice(-2).join('/')}</code>
+                    )}{' '}
+                    from the volume. There is no undo: the factory keeps no history of its files.
                 </>
             ),
             action: 'Delete',
@@ -445,19 +471,16 @@ function Form({
                 )}
                 {entry && aside?.(entry)}
                 <div className='form-grid'>{form(fm, set, entry)}</div>
-                <div className='field-head'>
-                    <div>
-                        <div>{bodyLabel}</div>
-                        <div className='dim'>
-                            {lines} lines · {body.length.toLocaleString()} chars
-                        </div>
-                    </div>
+                <SectionHead
+                    title={bodyLabel}
+                    hint={`${bodyHint ? `${bodyHint} · ` : ''}${lines} lines · ${body.length.toLocaleString()} chars`}
+                >
                     <Tabs
                         items={MODES}
                         value={mode}
                         onChange={setMode}
                     />
-                </div>
+                </SectionHead>
                 {mode === 'edit' ? (
                     <textarea
                         ref={textarea}
@@ -506,14 +529,27 @@ export function Field({
     hint,
     wide,
     group,
+    section,
     children
 }: {
     label?: string
     hint?: ReactNode
     wide?: boolean
     group?: boolean
+    /** A section of the form rather than a field: the label is a section heading with the hint under it. */
+    section?: boolean
     children: ReactNode
 }) {
+    if (section)
+        return (
+            <div className='field wide group section'>
+                <SectionHead
+                    title={label}
+                    hint={hint}
+                />
+                {children}
+            </div>
+        )
     const className = `field${wide ? ' wide' : ''}${group ? ' group' : ''}`
     const body = (
         <>

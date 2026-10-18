@@ -16,7 +16,7 @@ import {
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { Modal, useConfirm } from './Modal'
-import { Button, GrowingTextarea } from './ui'
+import { Button, GrowingTextarea, SectionHead } from './ui'
 
 /**
  * Shared SSH hosts, the way an IDE keeps SSH configurations once: the list
@@ -322,10 +322,10 @@ export function HostDialog({
             size='wide'
             description={
                 project
-                    ? `The connection goes into the shared list (Settings → Hosts) and this ${owner} refers to it by name; the path and notes stay with the ${owner}.`
+                    ? `Saved to the shared hosts; the path and notes stay with the ${owner}.`
                     : editing
-                      ? 'The connection every project on this server uses. A new name renames it in those projects too.'
-                      : 'The connection is saved to Settings → Hosts; any project can pick it and add its own path and notes.'
+                      ? 'Shared by every project on this server; a new name renames it there too.'
+                      : 'Saved to the shared hosts; a project adds its own path and notes.'
             }
             busy={busy}
             footer={
@@ -588,15 +588,10 @@ export function ProjectHosts({
 
     return (
         <div className='field wide hosts'>
-            <div className='field-head'>
-                <span>
-                    Hosts — servers this {owner} {owner === 'project' ? 'runs' : 'works'} on
-                    <span className='dim'>
-                        {' '}
-                        · the connection is shared (Settings → Hosts); path and notes are this {owner}'s
-                    </span>
-                </span>
-            </div>
+            <SectionHead
+                title='Hosts'
+                hint={`Servers this ${owner} ${owner === 'project' ? 'runs' : 'works'} on; the connection is shared (Settings → Hosts), path and notes are this ${owner}'s.`}
+            />
             <select
                 className='add-host'
                 value=''

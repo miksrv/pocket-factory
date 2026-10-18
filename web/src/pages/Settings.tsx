@@ -5,6 +5,7 @@ import { HostsSection } from '../components/Hosts'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
 import { ProvidersSection } from '../components/Providers'
+import { SecretsSection } from '../components/Secrets'
 import { SecuritySection } from '../components/Security'
 import { ToolchainsSection } from '../components/Toolchains'
 import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
@@ -44,7 +45,7 @@ export function SettingsPage() {
         <div className='page'>
             <PageHead
                 title='Settings'
-                sub='The running configuration. The model is chosen here (or with /model in Telegram); the rest comes from .env — edit it on the host and restart the container.'
+                sub='The running configuration. The model, secrets and variables are set here; the rest comes from .env — edit it on the host and restart the container.'
             />
             <ErrorBox error={status.error} />
             {s && (
@@ -71,23 +72,6 @@ export function SettingsPage() {
                             model={s.claude.model}
                             onSaved={status.reload}
                         />
-                        <Row
-                            k='Permission mode'
-                            v={s.claude.permission_mode}
-                        />
-                        <Row
-                            k='Caps per task'
-                            v={`${s.claude.max_turns} turns; no dollar budget, the subscription's windows are the limit`}
-                        />
-                        <Row
-                            k='Concurrent sessions'
-                            v={String(s.max_concurrent_sessions)}
-                        />
-                        <Row
-                            k='Config dir'
-                            v={s.claude.config_dir}
-                            mono
-                        />
                     </Section>
                     <Section
                         id='appearance'
@@ -100,6 +84,12 @@ export function SettingsPage() {
                         title='Security'
                     >
                         <SecuritySection telegram={s.telegram.enabled} />
+                    </Section>
+                    <Section
+                        id='secrets'
+                        title='Secrets and variables'
+                    >
+                        <SecretsSection />
                     </Section>
                     <Section
                         id='github'

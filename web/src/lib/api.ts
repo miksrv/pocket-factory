@@ -231,7 +231,7 @@ export interface Stats {
         on: number
         /** Files that cannot fire (bad cron, unknown project). */
         invalid: number
-        /** Routines whose last firing was a prefilter error. */
+        /** Routines whose last firing ended in a step's error. */
         failing: string[]
         /** Routines whose last firing was a minute the factory slept through. */
         missed: string[]
@@ -580,6 +580,8 @@ export interface McpOverview {
 /** Tool names for an agent's `tools:`: common ones, the rest the CLI reported, and MCP tools grouped by server. */
 export interface ToolList {
     common: string[]
+    /** The factory's own tools (`mcp__factory__…`): delegation to a role on another provider. */
+    factory: string[]
     reported: string[]
     /** Sub-agent types the CLI listed at its last session start (built-ins, agent files, a checkout's and plugins' agents); empty until a session ran. */
     agents: string[]
@@ -675,25 +677,87 @@ export interface RoutineRun {
     schedule: string
     fired_at: string
     trigger: 'schedule' | 'poll' | 'manual' | 'cron'
-    /** `queued`: a task was created; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: the prefilter failed; `missed`: the factory was off at the minute. */
-    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed'
+    /** `queued`: a task was created; `done`: the steps ran and there is no agent; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: a step failed; `missed`: the factory was off at the minute. */
+    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed' | 'done'
     note: string | null
     items: number
     task_id: string | null
     duration_ms: number
+    /** How each step went, like a CI job's steps; null for a firing that ran none. */
+    steps: RoutineStepResult[] | null
     /** How the task ended (or where it is), when the run queued one. */
     task_status: TaskStatus | null
 }
 
-/** One of a routine's triggers as the scheduler reads it: a schedule (a cron) or a poll (a cron + a prefilter). */
+/** One step of a run: ok or not, its time, the head of its output. */
+export interface RoutineStepResult {
+    index: number
+    name: string
+    kind: 'run' | 'github-prs' | 'trac'
+    ok: boolean
+    ms: number
+    log: string
+    items?: number
+}
+
+/** A variable a step reads, and whether a run of the routine gets it. */
+export interface EnvNeed {
+    name: string
+    /** Where a run's value comes from; null = nowhere, the step will miss it. */
+    from: 'secret' | 'variable' | 'env' | null
+    /** The vault has it, but its scope leaves this routine out. */
+    out_of_scope?: boolean
+    /** What to add it as from the card. */
+    kind: 'secret' | 'variable'
+    optional?: boolean
+}
+
+/** The file a script step runs and what its header says. */
+export interface StepScript {
+    scope: 'routine' | 'skill'
+    path: string
+    exists: boolean
+    description: string
+    declared: string[]
+    variables: string[]
+    referenced: string[]
+}
+
+/** "Run this step": its whole output and exit code; nothing recorded. */
+export interface StepRun {
+    kind: 'run' | 'github-prs' | 'trac'
+    ok: boolean
+    ms: number
+    stdout: string
+    stderr: string
+    code: number | null
+    timed_out: boolean
+    items?: PrefilterItem[]
+    error?: string
+}
+
+/** One of a routine's triggers as the scheduler reads it: a cron with its zone and window. */
 export interface RoutineTrigger {
-    kind: 'schedule' | 'poll'
+    kind: 'schedule'
     cron: string
     cron_text: string
     tz: string
     window: { days: number[] | null; hours: string | null }
-    prefilter: string | null
     next_run: string | null
+}
+
+/** One step of a routine's pipeline as the scheduler reads it. */
+export interface RoutineStepView {
+    kind: 'run' | 'github-prs' | 'trac' | 'agent'
+    name: string
+    /** The step finds items (a source): nothing found means the agent does not run. */
+    source: boolean
+    new_only: boolean
+    /** A script step's command. */
+    command?: string
+    /** The file it runs, when it is the routine's or the skill's. */
+    script?: StepScript
+    needs: EnvNeed[]
 }
 
 /** What the scheduler knows about a routine file beyond its text. */
@@ -706,10 +770,12 @@ export interface RoutineView {
     /** Empty: the routine runs only by hand (Run now). */
     triggers: RoutineTrigger[]
     project: string | null
+    /** The agent step's agent (null = the orchestrator) and skill; `has_agent` false = a pipeline of scripts only. */
     agent: string | null
     skill: string | null
-    /** The prefilter kind Run now and the preview use (the first poll's); null = none. */
-    prefilter: string | null
+    has_agent: boolean
+    /** The pipeline, in order. */
+    steps: RoutineStepView[]
     notify: 'telegram' | 'none' | null
     session: 'fresh' | 'continue' | null
     /** Switches itself off after queueing one task. */
@@ -726,6 +792,8 @@ export interface RoutineView {
     conversation_id: string | null
     /** Prefilter items handed over (or seeded) so far. */
     seen: number
+    /** The routine's folder (ROUTINE_DIR). */
+    dir: string
 }
 
 export type CronCheck =
@@ -741,9 +809,71 @@ export interface PrefilterItem {
 }
 
 export interface RoutinePreview {
+    /** What the sources find now, every item. */
     items: PrefilterItem[]
+    /** The items a run would hand over now. */
     new_keys: string[]
+    /** What the scripts printed. */
+    outputs: StepOutput[]
+    steps: RoutineStepResult[]
     ms: number
+}
+
+/** A file next to a skill's SKILL.md or a routine's ROUTINE.md: a script, data, a reference. */
+export interface FolderFile {
+    path: string
+    size: number
+    /** Small enough and text: the editor can show it. */
+    text: boolean
+    exec: boolean
+    updated_at: string
+}
+
+/** The folder kinds: their files are listed and edited next to the form. */
+export type FolderKind = 'skills' | 'routines'
+
+export type SecretScope = { all: true } | { all: false; routines: string[]; projects: string[] }
+
+/** A secret or a variable of Settings → Secrets and variables; a secret's value never comes back. */
+export interface VaultEntry {
+    name: string
+    secret: boolean
+    value?: string
+    scope: SecretScope
+    created_at: string
+    updated_at: string
+    used_by: Array<{ kind: 'routine' | 'config'; name: string; step?: string }>
+}
+
+/** What a skill's scripts read, and which routines running the skill get each name. */
+export interface SkillNeeds {
+    needs: Array<{
+        name: string
+        kind: 'secret' | 'variable'
+        files: string[]
+        /** The vault's entry (a secret without its value), or null. */
+        entry: Omit<VaultEntry, 'used_by'> | null
+        /** Set in .env. */
+        env: boolean
+        /** Routines running the skill that get it. */
+        reaches: string[]
+    }>
+    /** Routines whose agent step uses the skill. */
+    routines: string[]
+}
+
+export interface VaultOverview {
+    entries: VaultEntry[]
+    routines: string[]
+    projects: string[]
+}
+
+/** What one of a routine's steps printed when run by hand. */
+export interface StepOutput {
+    name: string
+    output: string
+    ms: number
+    truncated: boolean
 }
 
 export interface Preset {
@@ -798,6 +928,11 @@ export class ApiError extends Error {
     ) {
         super(message)
     }
+}
+
+/** A file's path in a URL: each segment encoded, the slashes kept. */
+function encodeFilePath(file: string): string {
+    return file.split('/').map(encodeURIComponent).join('/')
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1040,8 +1175,55 @@ export const api = {
     routineRuns: (name: string, limit = 30, all = false) =>
         request<RoutineRun[]>(`/routines/${encodeURIComponent(name)}/runs?limit=${limit}${all ? '&all=1' : ''}`),
     /** Fire now: ignores the cron, the window and the soft-stop; never overlaps a run in progress. */
-    runRoutine: (name: string) => request<RoutineRun>(`/routines/${encodeURIComponent(name)}/run`, { method: 'POST' }),
-    /** Run the prefilter and show what it finds without marking anything. */
+    runRoutine: (name: string, all = false) =>
+        request<RoutineRun & { found?: number }>(`/routines/${encodeURIComponent(name)}/run${all ? '?all=1' : ''}`, {
+            method: 'POST'
+        }),
+    /** The files of a skill's or a routine's folder, next to its main file. */
+    folderFiles: (kind: FolderKind, name: string) =>
+        request<FolderFile[]>(`/${kind}/${encodeURIComponent(name)}/files`),
+    folderFile: (kind: FolderKind, name: string, file: string) =>
+        request<{ path: string; text: string; updated_at: string }>(
+            `/${kind}/${encodeURIComponent(name)}/files/${encodeFilePath(file)}`
+        ),
+    /** Text from the editor (with the version it opened: a file changed since is refused), or an upload as base64. */
+    saveFolderFile: (
+        kind: FolderKind,
+        name: string,
+        file: string,
+        content: { text: string; updated_at?: string; exec?: boolean } | { base64: string }
+    ) =>
+        request<FolderFile>(`/${kind}/${encodeURIComponent(name)}/files/${encodeFilePath(file)}`, {
+            method: 'PUT',
+            body: JSON.stringify(content)
+        }),
+    renameFolderFile: (kind: FolderKind, name: string, from: string, to: string) =>
+        request<FolderFile>(`/${kind}/${encodeURIComponent(name)}/rename`, {
+            method: 'POST',
+            body: JSON.stringify({ from, to })
+        }),
+    removeFolderFile: (kind: FolderKind, name: string, file: string) =>
+        request<void>(`/${kind}/${encodeURIComponent(name)}/files/${encodeFilePath(file)}`, { method: 'DELETE' }),
+    /** A download link for a file the editor does not show. */
+    folderFileUrl: (kind: FolderKind, name: string, file: string) =>
+        `/api/${kind}/${encodeURIComponent(name)}/files/${encodeFilePath(file)}?raw=1`,
+    /** One step of the pipeline alone, in a run's environment; `step` runs the card's draft instead of the file's. */
+    runRoutineStep: (name: string, index: number, step?: Record<string, unknown>) =>
+        request<StepRun>(`/routines/${encodeURIComponent(name)}/steps/${index}/run`, {
+            method: 'POST',
+            body: JSON.stringify(step ? { step } : {})
+        }),
+
+    secrets: () => request<VaultOverview>('/secrets'),
+    /** Create (`create`: refuse a name that exists) or change; a secret without `value` keeps its value. */
+    saveSecret: (name: string, body: { value?: string; secret?: boolean; scope?: SecretScope }, create = false) =>
+        request<VaultEntry>(`/secrets/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
+            method: 'PUT',
+            body: JSON.stringify(body)
+        }),
+    skillNeeds: (name: string) => request<SkillNeeds>(`/secrets/skills/${encodeURIComponent(name)}`),
+    removeSecret: (name: string) => request<void>(`/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    /** Run the pipeline's steps (never the agent) and show what they find, marking nothing. */
     previewRoutine: (name: string) =>
         request<RoutinePreview>(`/routines/${encodeURIComponent(name)}/preview`, { method: 'POST' }),
     enableRoutine: (name: string, enabled: boolean) =>
@@ -1105,6 +1287,13 @@ export function streamConversation(
  */
 export const taskTokens = (t: Pick<Task, 'input_tokens' | 'output_tokens' | 'cache_creation_tokens'>) =>
     t.input_tokens + t.output_tokens + t.cache_creation_tokens
+
+/**
+ * What a list calls a task: a routine's run by the routine's name (its prompt is the run frame, the
+ * same for every run), anything else by the first line of its prompt.
+ */
+export const taskTitle = (t: Pick<Task, 'prompt' | 'schedule'>): string =>
+    t.schedule ? `⏱ ${t.schedule}` : (t.prompt.split(/\r?\n/).find((l) => l.trim()) ?? '').slice(0, 120)
 
 /** The same for an event's payload (`llm`: `tokens` + `cacheReadTokens`, a finished `status`: `tokens` + `cache_read_tokens`). */
 export const eventTokens = (p: Record<string, unknown>) =>

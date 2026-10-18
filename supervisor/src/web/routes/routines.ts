@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
 import { describeCron, isTimeZone, nextRun, parseCron } from '../../routines/cron.js'
-import { PrefilterError } from '../../routines/prefilters.js'
+import { StepError } from '../../routines/steps.js'
 import type { Env } from '../context.js'
 
 /**
@@ -50,18 +50,40 @@ export function routineRoutes(): Hono<Env> {
         const { routines } = c.get('app')
         const name = c.req.param('name')
         if (!routines.get(name)) return c.json({ error: 'routine not found' }, 404)
-        return c.json(await routines.fire(name, 'manual'))
+        // `?all=1`: "Run with all", the seen items handed over again.
+        return c.json(await routines.fire(name, 'manual', null, { everything: c.req.query('all') === '1' }))
     })
 
-    /** Run the prefilter and show what it finds, marking nothing. */
+    /** Run the pipeline's steps (never the agent) and show what they find, marking nothing. */
     app.post('/:name/preview', async (c) => {
         const { routines } = c.get('app')
         const name = c.req.param('name')
         if (!routines.get(name)) return c.json({ error: 'routine not found' }, 404)
+        // What a step prints may carry a secret: masked as in every stored log (the owner's screen may be shared).
+        const { store } = c.get('app')
         try {
-            return c.json(await routines.preview(name))
+            return c.json(store.redactDeep(await routines.preview(name)))
         } catch (error) {
-            if (error instanceof PrefilterError) return c.json({ error: error.message }, 422)
+            if (error instanceof StepError) return c.json({ error: store.redactDeep(error.message) }, 422)
+            throw error
+        }
+    })
+
+    /** "Run this step": one step alone, in a run's environment; its whole output and exit code, nothing recorded. */
+    app.post('/:name/steps/:index/run', async (c) => {
+        const { routines } = c.get('app')
+        const name = c.req.param('name')
+        if (!routines.get(name)) return c.json({ error: 'routine not found' }, 404)
+        const index = Number(c.req.param('index'))
+        if (!Number.isInteger(index) || index < 0) return c.json({ error: 'index must be a step number from 0' }, 400)
+        // `{ step }`: the card's draft, run as it stands before Save; without it, the step as the file has it.
+        const body = (await c.req.json().catch(() => ({}))) as { step?: unknown }
+        try {
+            // The owner's screen may be shared: secret values are masked here as in every stored log.
+            const run = await routines.runStep(name, index, body.step)
+            return c.json(c.get('app').store.redactDeep(run))
+        } catch (error) {
+            if (error instanceof StepError) return c.json({ error: c.get('app').store.redactDeep(error.message) }, 422)
             throw error
         }
     })

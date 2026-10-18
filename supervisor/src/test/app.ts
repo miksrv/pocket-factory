@@ -14,6 +14,7 @@ import { KnownHosts } from '../files/knownHosts.js'
 import { Providers } from '../files/providers.js'
 import { Presets } from '../presets/index.js'
 import { Routines } from '../routines/service.js'
+import { Vault } from '../secrets/vault.js'
 import { Transcripts } from '../sessions/transcripts.js'
 import { openDatabase } from '../store/db.js'
 import { Store } from '../store/index.js'
@@ -74,7 +75,8 @@ export function testConfig(dataRoot: string): Config {
             dataRoot,
             workspacesRoot: path.join(dataRoot, 'workspaces'),
             configRoot: path.join(dataRoot, 'config'),
-            dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
+            dbFile: path.join(dataRoot, 'db', 'factory.sqlite'),
+            vaultFile: path.join(dataRoot, 'vault', 'secrets.json')
         },
         stt: { groqApiKey: undefined, model: 'whisper-large-v3-turbo', language: undefined },
         web: {
@@ -146,7 +148,9 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         projectProviders: (slug) => projectProviders(catalog, slug)
     }
     const providers = new Providers(path.join(config.paths.configRoot, 'providers.yaml'))
-    const tasks = new TaskService(store, config, workspace, providers)
+    const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())
+    store.setRedactor({ redact: (text) => vault.redact(text), active: () => vault.hasSecrets() })
+    const tasks = new TaskService(store, config, workspace, providers, vault)
     // The gateway's address for tasks on other providers; tests never listen, so any port.
     tasks.setGatewayPort(8080)
     const routines = new Routines(store, catalog, tasks, config, {
@@ -160,7 +164,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         providerLight: (name) => providers.get(name)?.light ?? false,
         agentProvider: () => ({ provider: null, model: null }),
         agentFile: (name) => agentFile(catalog, name),
-        agentEnv: () => tasks.agentEnv()
+        agentEnv: (scope) => tasks.agentEnv(scope),
+        vault
     })
     const auth = new WebAuth(store, config.web)
     const toolchains = new Toolchains({
@@ -181,7 +186,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         presets: new Presets(config.presetsDir),
         routines,
         auth,
-        toolchains
+        toolchains,
+        vault
     }
     const app = createApp(ctx)
 

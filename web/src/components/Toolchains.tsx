@@ -279,10 +279,11 @@ export function ProjectToolchainField({ slug }: { slug: string }) {
     return (
         <Field
             label='Toolchain'
+            section
             hint={
                 d && !d.tools.length && !d.services.length
-                    ? 'Nothing recognised in the checkout (go.mod, .nvmrc, package.json, composer.json, .python-version, a compose file). The agent still has mise and PHP.'
-                    : 'Read from the checkout. The agent installs a missing runtime itself before the checks (mise install); Install here does it now. Services come from the compose file, started by the agent on the factory’s Docker and stopped when its task ends.'
+                    ? 'Nothing recognised in the checkout; the agent still has mise and PHP.'
+                    : 'Read from the checkout; the agent installs what is missing, Install does it now.'
             }
             wide
             group

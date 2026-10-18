@@ -5,6 +5,7 @@ import type { KnownHosts } from '../files/knownHosts.js'
 import type { Providers } from '../files/providers.js'
 import type { Presets } from '../presets/index.js'
 import type { Routines } from '../routines/service.js'
+import type { Vault } from '../secrets/vault.js'
 import type { Transcripts } from '../sessions/transcripts.js'
 import type { Store } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
@@ -25,6 +26,7 @@ export interface AppContext {
     routines: Routines
     auth: WebAuth
     toolchains: Toolchains
+    vault: Vault
 }
 
 import type { WebSession } from '../store/index.js'

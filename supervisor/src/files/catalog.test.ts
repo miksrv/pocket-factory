@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { BadName, Catalog, migrateSchedulesDir, NotFound } from './catalog.js'
+import { BadName, Catalog, migrateRoutineActions, migrateSchedulesDir, NotFound } from './catalog.js'
 
 describe('Catalog', () => {
     let dir: string
@@ -27,7 +27,7 @@ describe('Catalog', () => {
         expect(catalog.fileFor('agents', 'reviewer')).toBe(path.join(claude, 'agents', 'reviewer.md'))
         expect(catalog.fileFor('skills', 'pr-review')).toBe(path.join(claude, 'skills', 'pr-review', 'SKILL.md'))
         expect(catalog.fileFor('projects', 'shop')).toBe(path.join(config, 'projects', 'shop.md'))
-        expect(catalog.fileFor('routines', 'nightly')).toBe(path.join(config, 'routines', 'nightly.md'))
+        expect(catalog.fileFor('routines', 'nightly')).toBe(path.join(config, 'routines', 'nightly', 'ROUTINE.md'))
     })
 
     it.each(['', '../etc/passwd', 'a/b', '.hidden', '-dash', 'a b', 'x'.repeat(65), 'a\\b', '..'])(
@@ -124,6 +124,31 @@ describe('Catalog', () => {
         catalog.remove('skills', 's')
         expect(fs.existsSync(path.join(claude, 'agents', 'a.md'))).toBe(false)
         expect(fs.existsSync(path.join(claude, 'skills', 's'))).toBe(false)
+    })
+
+    describe('migrateRoutineActions (action: → the instructions, 1.6.0)', () => {
+        it('moves the mode into the first line of the body and leaves other files alone', () => {
+            catalog.save('routines', 'watch', { frontmatter: { action: 'report', enabled: false }, body: 'Look.\n' })
+            catalog.save('routines', 'fixer', { frontmatter: { action: 'fix' }, body: '\nFix it.\n' })
+            catalog.save('routines', 'plain', { frontmatter: { enabled: true }, body: 'As is.\n' })
+            const dir = path.join(config, 'routines')
+            fs.writeFileSync(path.join(dir, 'flat.md'), '---\naction: publish\nenabled: true\n---\n\nPost.\n')
+            const before = fs.statSync(catalog.fileFor('routines', 'plain')).mtimeMs
+
+            expect(migrateRoutineActions(catalog).sort()).toEqual(['fixer', 'flat', 'watch'])
+            expect(catalog.get('routines', 'watch')).toMatchObject({
+                frontmatter: { name: 'watch', enabled: false },
+                body: '\nMode: report — look and report; change nothing, post nothing.\n\nLook.\n'
+            })
+            expect(catalog.get('routines', 'fixer').body).toBe('\nMode: fix.\n\nFix it.\n')
+            expect(catalog.get('routines', 'flat')).toMatchObject({
+                path: path.join(dir, 'flat.md'),
+                frontmatter: { enabled: true },
+                body: '\nMode: publish.\n\nPost.\n'
+            })
+            expect(fs.statSync(catalog.fileFor('routines', 'plain')).mtimeMs).toBe(before)
+            expect(migrateRoutineActions(catalog)).toEqual([])
+        })
     })
 
     describe('migrateSchedulesDir (schedules/ → routines/, 1.5.0)', () => {

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { createBot } from './bot.js'
 import { loadConfig } from './config.js'
 import { agentFile } from './files/agentFiles.js'
-import { Catalog, migrateSchedulesDir } from './files/catalog.js'
+import { Catalog, migrateRoutineActions, migrateSchedulesDir } from './files/catalog.js'
 import { delegateAgents, projectProviders } from './files/delegates.js'
 import { Hosts } from './files/hosts.js'
 import { KnownHosts } from './files/knownHosts.js'
@@ -12,6 +12,7 @@ import { Providers } from './files/providers.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
 import { Routines } from './routines/service.js'
+import { Vault } from './secrets/vault.js'
 import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
@@ -48,6 +49,9 @@ async function main(): Promise<void> {
             `config/schedules still has ${migrated.kept.join(', ')}: a routine of the same name exists; merge by hand and delete the old file`
         )
     const catalog = new Catalog(config.claude.configDir, config.paths.configRoot)
+    // A routine's `action:` (1.6.0: gone) becomes the first line of its instructions, once.
+    for (const name of migrateRoutineActions(catalog))
+        log.info(`routine ${name}: its mode moved from action: into the instructions`)
     const hosts = new Hosts(path.join(config.paths.configRoot, 'hosts.yaml'), catalog)
     const knownHosts = new KnownHosts(
         path.join(config.paths.configRoot, 'known_hosts'),
@@ -122,7 +126,10 @@ async function main(): Promise<void> {
             return entry ? projectProviders(catalog, entry.name) : null
         }
     }
-    const tasks = new TaskService(store, config, workspace, providers)
+    // Secrets and variables set in the UI (Settings → Secrets and variables): scoped into runs, masked in the store.
+    const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())
+    store.setRedactor({ redact: (text) => vault.redact(text), active: () => vault.hasSecrets() })
+    const tasks = new TaskService(store, config, workspace, providers, vault)
     // Routines: an agent's recurring work, files in data/config/routines, fired by their triggers through the same queue.
     const routines = new Routines(store, catalog, tasks, config, {
         projectExists: (slug) => workspace.projectPath(slug) !== null,
@@ -146,7 +153,8 @@ async function main(): Promise<void> {
             }
         },
         agentFile: (name) => agentFile(catalog, name),
-        agentEnv: () => tasks.agentEnv()
+        agentEnv: (scope) => tasks.agentEnv(scope),
+        vault
     })
     // Telegram is optional: without a token the factory is web-only (also
     // handy for a second dev instance next to the container, which would
@@ -160,7 +168,7 @@ async function main(): Promise<void> {
         projects: () => catalog.list('projects').map((entry) => entry.name)
     })
     tasks.docker = toolchains.docker
-    const bot = config.telegram.botToken ? createBot(config, tasks, store, routines, auth) : null
+    const bot = config.telegram.botToken ? createBot(config, tasks, store, routines, auth, vault) : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({
@@ -175,7 +183,8 @@ async function main(): Promise<void> {
         presets: new Presets(config.presetsDir),
         routines,
         auth,
-        toolchains
+        toolchains,
+        vault
     })
     auth.start()
 
@@ -202,12 +211,12 @@ async function main(): Promise<void> {
         // Registers the command menu in Telegram, so the client autocompletes them, and the
         // bot's profile text (what an empty chat and the profile page show).
         await bot.api.setMyCommands([
-            { command: 'routines', description: 'The routines on buttons: run, switch on / off, preview, last runs' },
+            { command: 'routines', description: 'Every routine with its buttons: run, switch on / off, details' },
             { command: 'run', description: 'Fire a routine now: /run <name>' },
             { command: 'status', description: 'What is going on, with a Stop button' },
             { command: 'usage', description: 'Subscription limits: 5-hour and weekly windows' },
             { command: 'model', description: "The orchestrator's model on buttons; /model <provider>:<model>" },
-            { command: 'new', description: 'Start a fresh session, optionally in a project: /new <name>' },
+            { command: 'new', description: 'A new chat: pick the project on buttons, or /new <name>' },
             { command: 'mode', description: 'A new chat per message, or one thread until /new' },
             { command: 'stop', description: 'Cancel the running task (reply /stop to a message: that chat)' },
             { command: 'help', description: 'How this bot works' }

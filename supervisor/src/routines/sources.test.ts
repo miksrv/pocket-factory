@@ -1,10 +1,15 @@
-import os from 'node:os'
-
 import { describe, expect, it } from 'vitest'
 
-import { parseCsv, parseItems, PrefilterError, repoSlug, runPrefilter } from './prefilters.js'
+import { parseCsv, parseItems, repoSlug, SourceError } from './sources.js'
 
 describe('parseItems', () => {
+    it('keeps the first of a repeated key in a JSON array, as in the line form', () => {
+        expect(parseItems('[{"id":"1","title":"one"},{"id":"1","title":"again"},"2"]')).toEqual([
+            { key: '1', title: 'one', text: undefined, url: undefined },
+            { key: '2', title: '2' }
+        ])
+    })
+
     it.each(['', '   \n\n  '])('finds nothing in %j', (output) => {
         expect(parseItems(output)).toEqual([])
     })
@@ -46,7 +51,7 @@ describe('parseItems', () => {
         ['["a", null]', /item 1 is neither/],
         ['[{"text": "no key"}]', /item 0 has no key/]
     ])('rejects %j', (output, message) => {
-        expect(() => parseItems(output)).toThrow(PrefilterError)
+        expect(() => parseItems(output)).toThrow(SourceError)
         expect(() => parseItems(output)).toThrow(message)
     })
 })
@@ -103,38 +108,4 @@ describe('repoSlug', () => {
             expect(repoSlug(url)).toBeNull()
         }
     )
-})
-
-describe('runPrefilter (command)', () => {
-    const ctx = { cwd: os.tmpdir(), env: { PATH: process.env.PATH }, project: null }
-
-    it('runs the command with bash and parses its output', async () => {
-        const items = await runPrefilter({ kind: 'command', run: "printf 'a\\tA\\nb\\n'", timeout_s: 10 }, ctx)
-        expect(items).toEqual([
-            { key: 'a', title: 'A' },
-            { key: 'b', title: 'b' }
-        ])
-    })
-
-    it('runs in the given working directory with the given environment', async () => {
-        const items = await runPrefilter(
-            { kind: 'command', run: 'echo "$PWD_NAME:$(basename "$PWD")"', cwd: '/', timeout_s: 10 },
-            { ...ctx, env: { ...ctx.env, PWD_NAME: 'root' } }
-        )
-        expect(items).toEqual([{ key: 'root:/', title: 'root:/' }])
-    })
-
-    it('turns a failing command into a PrefilterError with the tail of its output', async () => {
-        const run = runPrefilter({ kind: 'command', run: 'echo boom >&2; exit 3', timeout_s: 10 }, ctx)
-        await expect(run).rejects.toThrow(PrefilterError)
-        await expect(
-            runPrefilter({ kind: 'command', run: 'echo boom >&2; exit 3', timeout_s: 10 }, ctx)
-        ).rejects.toThrow('bash exited with 3: boom')
-    })
-
-    it('stops a command that outlives its timeout', async () => {
-        await expect(runPrefilter({ kind: 'command', run: 'sleep 5', timeout_s: 0.2 }, ctx)).rejects.toThrow(
-            'timed out after 0.2 s'
-        )
-    })
 })

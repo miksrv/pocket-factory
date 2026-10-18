@@ -19,9 +19,10 @@ leave alone and still trust:
   edited in the UI or by the agent itself; presets bundle them for sharing; models and tools are
   picked from what your subscription and CLI actually offer.
 - **Pipelines** — skills such as `feature-to-pr` and `pr-review` chain sub-agents (developer,
-  reviewer, …) into repeatable task flows; **routines** give an agent standing instructions and
-  triggers — a schedule (a cron, down to a minute) or a poll behind a deterministic prefilter (a
-  shell command, a GitHub or Trac query), so an empty poll costs no tokens — and the routine
+  reviewer, …) into repeatable task flows; **routines** are pipelines on a schedule (a cron, down
+  to a minute): scripts (fetch statistics, make a backup), sources (open pull requests, Trac
+  tickets, a command that lists items) and the agent as the last step, which reads what they found
+  and the routine's instructions; nothing found means no agent and no tokens, and the routine
   file's body is the agent's memory between runs.
 
 Single-owner by design. You log in to Claude Code with **your own subscription**, create **your own**
@@ -42,7 +43,7 @@ that never leave your server, and it works behind an `ANTHROPIC_BASE_URL` proxy.
 | Telegram, with voice and photos | yes | no, the Claude app | no | no, the Claude app | no |
 | Queue that survives restarts | yes | no | jobs on disk, local | cloud | cloud |
 | Questions and permissions from the phone | yes, web and Telegram | yes | local peek panel | yes | no, runs unattended |
-| Routines | files, an agent + triggers, 1-minute cron, prefilter, zero tokens when idle | no | no | a Routines tab | from one hour, every run costs |
+| Routines | files, a pipeline of steps + the agent, 1-minute cron, zero tokens when idle | no | no | a Routines tab | from one hour, every run costs |
 | Audit per model call, tool call and sub-agent | yes | no | no | no | a run transcript |
 | Where the transcript lives | your server | Anthropic | your machine | Anthropic | Anthropic |
 | Behind an `ANTHROPIC_BASE_URL` proxy | yes | no | yes | no | no |
@@ -59,9 +60,11 @@ lists what is taken from each.
   plus the task's project and how full the 5-hour and weekly windows are. Every message starts a
   new chat, so the last task's context costs nothing; reply to any message (a report, a question,
   your own earlier task) to continue that chat, or `/mode thread` for one session until `/new`.
-  `/new [project]`, `/stop`, `/status`, `/usage`, `/model`, `/routines`, `/run <name>`. New chats
-  get a short title by meaning (one Haiku call). Telegram is optional: leave the token empty for a
-  web-only factory.
+  Your message carries the task's state as a reaction, a draft under the chat counts its steps.
+  `/routines` lists every routine with its own Run / Off / Details buttons inside the message (rich
+  messages); `/new` picks the project on buttons; `/stop`, `/status`, `/usage`, `/model`,
+  `/run <name>`. New chats get a short title by meaning (one Haiku call). Telegram is optional:
+  leave the token empty for a web-only factory.
 - **Photos and files** — send a screenshot, a log or a PDF with the task, from Telegram (with a
   caption, or first and then the text) or the web (paperclip, paste, drop). The agent gets the
   file's path and opens it with the Read tool, which shows images and PDFs to the model.
@@ -84,7 +87,9 @@ lists what is taken from each.
   agent and project), Settings (Claude Code model, MCP servers with browser-driven sign-in, SSH
   hosts with host-key trust, Security). Installs as a PWA from the phone.
 - **Factory files** — sub-agents `developer` / `reviewer`, skills `feature-to-pr` /
-  `onboard-project`, one Markdown file per project (repo, branches, hosts, MCP allowlist, notes
+  `onboard-project` (a skill is a directory: SKILL.md plus the scripts and references next to it,
+  listed and edited in the UI; the `engineering` preset brings eight skills from
+  [mattpocock/skills](https://github.com/mattpocock/skills)), one Markdown file per project (repo, branches, hosts, MCP allowlist, notes
   with the checks and the tracker), one per routine (agent, triggers, instructions and the agent's own notes). The UI,
   the owner and the agent edit the same files; what the agent changes shows up in the Audit log
   as file events.
@@ -143,7 +148,8 @@ Then:
    write the file after inspecting the checkout.
 3. Send the bot a task: *"In shop change product URLs from ids to SEO slugs"*.
 4. **Routines → New** for anything recurring: a nightly PR review, a tracker poll, an inbox
-   summary. Start with `action: report` and graduate it once you trust the runs.
+   summary. Start with "look and report, change nothing" in its instructions and graduate it once you trust
+   the runs.
 
 ## Layout
 

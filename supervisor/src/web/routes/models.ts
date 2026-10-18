@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 
+import { FACTORY_MCP } from '../../tasks/service.js'
 import type { Env } from '../context.js'
 
 /**
@@ -43,6 +44,8 @@ export function toolRoutes(): Hono<Env> {
         const reported = tasks.tools()
         return c.json({
             common: COMMON_TOOLS,
+            // The factory's own MCP server (`/factory/<task>/mcp`): its tools exist in every orchestrator session.
+            factory: [`mcp__${FACTORY_MCP}__delegate`],
             reported: reported.filter((t) => !COMMON_TOOLS.includes(t) && !t.startsWith('mcp__')),
             // The sub-agent types of the last session start: the Agents page tells a built-in from a deleted file by it.
             agents: tasks.agents(),

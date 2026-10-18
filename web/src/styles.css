@@ -1256,6 +1256,10 @@ button:disabled,
     padding: 3px 9px;
     font-size: 11.5px;
 }
+/* A button beside a field is the field's height (DESIGN.md, Forms). */
+.row:has(> input, > select) > .btn {
+    align-self: stretch;
+}
 .icon-btn.btn {
     width: 34px;
     height: 34px;
@@ -1387,8 +1391,17 @@ label.field > span:first-child,
 div.field.group > span:first-child {
     color: var(--text-2);
 }
+/* Every checkbox and radio, and the label that wraps one, reads as clickable. */
+input[type='checkbox'],
+input[type='radio'],
+label:has(> input[type='checkbox']),
+label:has(> input[type='radio']) {
+    cursor: pointer;
+}
 /* A checkbox with its caption in a flex row: the global 100 % input width would otherwise push the caption into a sliver. */
-label.row > input[type='checkbox'] {
+label.row > input[type='checkbox'],
+label.row > input[type='radio'],
+.chip-check > input[type='checkbox'] {
     width: 15px;
     height: 15px;
     margin: 0;
@@ -1415,47 +1428,23 @@ label.row > input[type='checkbox'] {
     border-top: 1px solid var(--border);
     max-height: 320px;
 }
-.form-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 12px 16px;
-    align-items: start;
-}
-/* Label, control and hint line up across a row whatever their lengths (subgrid; older engines fall back to top alignment). */
-.form-grid > label.field,
-.form-grid > div.field.group {
-    display: grid;
-    grid-template-rows: subgrid;
-    grid-row: span 3;
-    gap: 4px;
-    align-content: start;
-}
-.form-grid > label.field > span:first-child,
-.form-grid > div.field.group > span:first-child {
-    align-self: end;
-}
-.form-grid > .field.wide {
-    grid-column: 1 / -1;
-}
-/* Two fields that belong together (Agent + Skill, First poll + Max items): half the row each, whatever the grid's column count. */
-.form-grid > .field.pair {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px 16px;
-    grid-row: auto;
-}
-/* A full-width field has no neighbours to line up with, and a group may hold more than three lines
-   (a TLS badge row, one row per MCP server): the three-row subgrid would stack the extra ones on top of each other. */
-.form-grid > label.field.wide,
-.form-grid > div.field.wide.group {
+/* Form rows (DESIGN.md): fields wrap in a flex row and the fields of a row share its whole width,
+   so two selects never leave an empty third column. A field is at least 260px; `.wide` takes a row alone. */
+.form-grid,
+.trigger-card {
     display: flex;
-    flex-direction: column;
-    grid-row: auto;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px 16px;
 }
-/* In that flex column the subgrid's `align-self: end` would push the caption to the right edge. */
-.form-grid > label.field.wide > span:first-child,
-.form-grid > div.field.wide.group > span:first-child {
-    align-self: auto;
+.form-grid > *,
+.trigger-card > * {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+.form-grid > .wide,
+.trigger-card > .wide {
+    flex-basis: 100%;
 }
 .tool-picker {
     display: flex;
@@ -1467,7 +1456,6 @@ label.row > input[type='checkbox'] {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    grid-row: auto;
 }
 .field.hosts > .field-head {
     color: var(--text-2);
@@ -1483,7 +1471,6 @@ label.row > input[type='checkbox'] {
     min-width: 360px;
     max-width: 100%;
 }
-/* Four named columns, not auto-fit: the full-width Notes row would otherwise keep an empty fifth track alive. */
 /* Shared hosts (Settings → Hosts and the project form's section; `components/Hosts.tsx`). */
 .host-list {
     display: flex;
@@ -1629,6 +1616,10 @@ label.row > input[type='checkbox'] {
 .tool-more summary {
     cursor: pointer;
     font-size: 11.5px;
+}
+/* The folded servers keep the list's spacing. */
+.tool-more > .mcp-server {
+    margin-top: 6px;
 }
 /* MCP servers inside the tool picker: one fold per server, the box in the summary. */
 .mcp-servers {
@@ -1924,11 +1915,21 @@ dialog.modal {
 dialog.modal.wide {
     width: min(720px, calc(100vw - 32px));
 }
+dialog.modal.large {
+    width: min(1040px, calc(100vw - 32px));
+    height: min(860px, calc(100vh - 32px));
+}
+dialog.modal.large .modal-content {
+    flex: 1 1 auto;
+}
 /* Long content scrolls inside the window and the footer with its buttons stays in view; with a `content` slot
    (a preset's README, across the whole window under a hairline) only that scrolls and the head stays too. */
 dialog.modal[open] {
     display: flex;
     flex-direction: column;
+}
+dialog.modal .modal-head {
+    flex-shrink: 0;
 }
 dialog.modal .modal-body {
     flex: 0 1 auto;
@@ -1938,7 +1939,6 @@ dialog.modal .modal-body {
 dialog.modal.has-content .modal-body {
     flex-shrink: 0;
     overflow: visible;
-    padding-bottom: 13px;
 }
 dialog.modal .modal-foot {
     flex-shrink: 0;
@@ -1947,8 +1947,12 @@ dialog.modal .modal-foot {
     flex: 0 1 auto;
     min-height: 0;
     overflow-y: auto;
-    padding: 14px 20px 18px;
+    padding: 16px 20px 18px;
     border-top: 1px solid var(--border);
+}
+/* Straight under the header there is a rule already. */
+.modal-head + .modal-content {
+    border-top: 0;
 }
 dialog.modal::backdrop {
     background: var(--backdrop);
@@ -1970,17 +1974,37 @@ dialog.modal[open]::backdrop {
         opacity: 0;
     }
 }
-.modal-body {
+/* The header: the tile, the title with one line under it, the close button; a rule under it. */
+.modal-head {
     display: flex;
-    gap: 14px;
-    align-items: flex-start;
-    padding: 18px 20px;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 14px 14px 18px;
+    border-bottom: 1px solid var(--border);
 }
-.modal-main {
+.modal-heading {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
     min-width: 0;
+}
+.modal-heading .modal-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Everything under the header runs the whole width of the window. */
+.modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 20px 18px;
+}
+.modal-message {
+    color: var(--text-2);
+    font-size: 12.5px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
 }
 .modal-title {
     margin: 0;
@@ -2005,7 +2029,8 @@ dialog.modal[open]::backdrop {
     margin-top: 4px;
 }
 .modal-close.btn {
-    margin: -6px -8px 0 0;
+    flex-shrink: 0;
+    align-self: center;
 }
 .modal-foot {
     display: flex;
@@ -2807,11 +2832,9 @@ dialog.modal[open]::backdrop {
     .form-body {
         overflow: visible;
     }
-    .form-grid {
-        grid-template-columns: 1fr;
-    }
-    .form-grid > .field.pair {
-        grid-template-columns: 1fr;
+    .form-grid > *,
+    .trigger-card > * {
+        flex-basis: 100%;
     }
     .host-card {
         grid-template-columns: 1fr 1fr;
@@ -2902,7 +2925,8 @@ dialog.modal[open]::backdrop {
         width: auto;
     }
     dialog.modal,
-    dialog.modal.wide {
+    dialog.modal.wide,
+    dialog.modal.large {
         width: 100%;
         max-width: 100%;
         margin: auto 0 0;
@@ -2915,8 +2939,11 @@ dialog.modal[open]::backdrop {
             transform: translateY(24px);
         }
     }
+    .modal-head {
+        padding: 12px 10px 12px 16px;
+    }
     .modal-body {
-        padding: 18px 16px;
+        padding: 16px;
     }
     .modal-content {
         padding: 14px 16px 18px;
@@ -3119,7 +3146,6 @@ dialog.modal[open]::backdrop {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    grid-row: auto;
 }
 .field.triggers > .field-head {
     color: var(--text-2);
@@ -3131,16 +3157,11 @@ dialog.modal[open]::backdrop {
 }
 /* One trigger: its own small grid of fields, like a host card. */
 .trigger-card {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 10px 14px;
     padding: 12px 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface-2);
-}
-.trigger-card > .wide {
-    grid-column: 1 / -1;
 }
 .trigger-foot {
     display: flex;
@@ -3165,4 +3186,671 @@ details.more[open] > summary::before {
 }
 details.more > .form-grid {
     margin-top: 12px;
+}
+/* A pipeline step's head: its number in a circle and its kind. */
+.step-no {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 11px;
+    color: var(--text-2);
+}
+.step-kind {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+.form-grid > .field.skill-files {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+/* Sections of a form (DESIGN.md): a heading with a rule above, one short line under it. */
+.section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 11.5px;
+    color: var(--text-2);
+}
+.section-head > .stack {
+    flex: 1 1 240px;
+    min-width: 0;
+    gap: 2px;
+}
+.section-title {
+    font-size: 13px;
+    color: var(--text);
+}
+.form-grid > .field:first-child > .section-head {
+    padding-top: 0;
+    border-top: 0;
+}
+.field.section {
+    gap: 10px;
+}
+/* "More" folds the rest of a form; its summary is a section heading too. A plain .more (a routine's
+   project and report) is the same part of the form without the fold: only the line above it. */
+.more {
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+details.more > summary {
+    font-size: 13px;
+    color: var(--text);
+}
+
+/* ---- Code editor (CodeMirror), a folder's files, a routine's pipeline (1.6.0) ---------------- */
+
+.code-editor {
+    width: 100%;
+    min-width: 0;
+}
+.code-editor .cm-editor {
+    min-height: calc(var(--code-rows, 12) * 19px + 16px);
+    max-height: 70vh;
+}
+.code-editor .cm-scroller {
+    overflow: auto;
+}
+.code-editor textarea {
+    width: 100%;
+}
+
+/* A folder's files: one row per file under its directory; a click opens it in a window. */
+.file-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    overflow: hidden;
+}
+.files-dir {
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 8px 12px 4px;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border);
+}
+.file-list > div:first-child > .files-dir {
+    border-top: 0;
+}
+.file-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 12px;
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text);
+    font-size: 12.5px;
+    text-align: left;
+}
+.files-dir + .file-row {
+    border-top: 0;
+}
+.file-row:hover {
+    background: var(--surface-2);
+}
+.file-row-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.file-row-when {
+    width: 72px;
+    text-align: right;
+}
+.files-empty {
+    padding: 12px 8px;
+}
+.file-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.file-head {
+    align-items: center;
+}
+.file-path {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+.csv-table {
+    max-height: 60vh;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.csv-table table {
+    font-size: 12px;
+}
+.csv-table td,
+.csv-table th {
+    white-space: nowrap;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.csv-foot {
+    padding: 6px 10px;
+}
+
+/* A step card: what the script is for, its file, what it reads, a run of it alone. */
+.step-name {
+    font-size: 12.5px;
+    color: var(--text-2);
+}
+.step-about {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.step-description {
+    font-size: 13px;
+    color: var(--text);
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+.step-script {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+.step-output {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+.step-output pre {
+    max-height: 320px;
+    overflow: auto;
+    margin: 0;
+}
+.step-stderr {
+    color: var(--red);
+}
+.step-items {
+    margin: 0;
+    padding-left: 18px;
+}
+.needs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+.need {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px 2px 8px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+.need.ok {
+    border-color: transparent;
+    background: var(--green-bg);
+    color: var(--green);
+}
+.need.missing {
+    border-color: transparent;
+    background: var(--amber-bg);
+    color: var(--amber);
+}
+.need.optional {
+    color: var(--text-dim);
+}
+.need-state {
+    opacity: 0.85;
+}
+.need-set {
+    border: 0;
+    border-radius: 999px;
+    padding: 1px 8px;
+    font: inherit;
+    font-weight: 600;
+    background: var(--ink);
+    color: var(--on-ink);
+    cursor: pointer;
+}
+.need-set:hover {
+    background: var(--ink-hover);
+}
+.need:not(.missing) .need-set {
+    background: var(--surface-3);
+    color: var(--text);
+}
+.need:not(.missing) .need-set:hover {
+    background: var(--surface-2);
+}
+
+/* Settings → Secrets and variables. */
+.vault-list {
+    display: flex;
+    flex-direction: column;
+}
+.vault-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    font-size: 12.5px;
+    border-bottom: 1px dashed var(--border);
+    flex-wrap: wrap;
+}
+.vault-row:last-child {
+    border-bottom: 0;
+}
+.vault-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 2 1 280px;
+    min-width: 0;
+}
+.vault-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+}
+.vault-uses {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    flex: 1 1 200px;
+}
+.vault-uses a.badge:hover {
+    text-decoration: none;
+    background: var(--surface-3);
+}
+.vault-actions {
+    display: inline-flex;
+    gap: 8px;
+    margin-left: auto;
+}
+.vault-scope {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+}
+.chip-check {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--surface);
+}
+.chip-check:has(input:checked) {
+    background: var(--blue-bg);
+    border-color: transparent;
+}
+/* A secret's value is dotted as it is typed, where the browser can. */
+textarea[data-secret] {
+    -webkit-text-security: disc;
+}
+
+/* The runs table: a run opens into its steps. */
+.run-row.clickable {
+    cursor: pointer;
+}
+.run-row.clickable:hover td {
+    background: var(--surface-2);
+}
+.run-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 4px;
+}
+.run-detail > td {
+    background: var(--surface-2);
+}
+.run-step {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+}
+.run-step .row {
+    gap: 8px;
+}
+.run-step pre {
+    margin: 0;
+    max-height: 200px;
+    overflow: auto;
+}
+
+/* Every routine's pipeline on the Routines page before one is picked. */
+.pipelines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.overview-intro {
+    margin: 0 0 16px;
+    max-width: 760px;
+    line-height: 1.6;
+}
+.pipeline-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 8px;
+    border-bottom: 1px dashed var(--border);
+    color: var(--text);
+}
+.pipeline-row:hover {
+    text-decoration: none;
+    background: var(--surface-2);
+}
+/* The name on top, its steps on the line under it. */
+.pipeline-main {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.pipeline-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.pipeline-flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.pipeline-step {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    background: var(--gray-bg);
+    color: var(--gray);
+    white-space: nowrap;
+}
+.pipeline-step.agent {
+    background: var(--purple-bg);
+    color: var(--purple);
+}
+.pipeline-step.trac,
+.pipeline-step.github-prs {
+    background: var(--sky-bg);
+    color: var(--sky);
+}
+.pipeline-step.ok {
+    background: var(--green-bg);
+    color: var(--green);
+}
+.pipeline-step.failed {
+    background: var(--red-bg);
+    color: var(--red);
+}
+.pipeline-last {
+    flex: none;
+    white-space: nowrap;
+}
+
+/* The pipeline as a graph of cards, like a GitHub Actions workflow drawn top to bottom. */
+.pipeline-graph {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background-color: var(--surface-2);
+    background-image: radial-gradient(var(--bg-dot) 1px, transparent 1px);
+    background-size: 14px 14px;
+}
+.pipeline-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+.pipeline-edge {
+    position: relative;
+    width: 2px;
+    height: 16px;
+    margin-left: 25px;
+    background: var(--border-strong);
+}
+.pipeline-edge::after {
+    content: '';
+    position: absolute;
+    left: -4px;
+    bottom: -1px;
+    border: 5px solid transparent;
+    border-top-color: var(--border-strong);
+    border-bottom-width: 0;
+}
+.step-node {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 5px;
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    text-align: left;
+    white-space: normal;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    transition: border-color 0.12s;
+}
+.step-node:hover {
+    background: var(--surface);
+    border-color: var(--text-dim);
+}
+.step-node:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+}
+.step-node.agent {
+    border-color: color-mix(in srgb, var(--purple) 40%, var(--border-strong));
+}
+.step-node.failed {
+    border-color: color-mix(in srgb, var(--red) 55%, var(--border-strong));
+}
+.step-node.edited {
+    border-style: dashed;
+}
+.step-node-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.step-node-state {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1.5px solid var(--border-strong);
+    flex-shrink: 0;
+}
+.step-node-state.ok {
+    background: var(--green);
+    border-color: var(--green);
+    color: var(--surface);
+}
+.step-node-state.failed {
+    background: var(--red);
+    border-color: var(--red);
+    color: var(--surface);
+}
+.step-node-state.edited {
+    border-color: var(--amber);
+    color: var(--amber);
+}
+.step-node-name {
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.step-node-kind {
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: var(--gray-bg);
+    color: var(--gray);
+}
+.step-node.trac .step-node-kind,
+.step-node.github-prs .step-node-kind {
+    background: var(--sky-bg);
+    color: var(--sky);
+}
+.step-node.agent .step-node-kind {
+    background: var(--purple-bg);
+    color: var(--purple);
+}
+.step-node-time {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+.step-node-about {
+    padding-left: 26px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+.step-node-needs {
+    margin-left: 26px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    align-self: flex-start;
+    max-width: calc(100% - 26px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.step-node-needs.missing {
+    background: var(--amber-bg);
+    color: var(--amber);
+}
+.step-node-needs.ok {
+    background: var(--green-bg);
+    color: var(--green);
+}
+.step-node.add {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 7px 14px;
+    border-style: dashed;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-dim);
+}
+.step-node.add:hover {
+    background: transparent;
+    color: var(--text);
+}
+.step-node-plus {
+    width: 18px;
+    text-align: center;
+    font-size: 15px;
+    line-height: 1;
+}
+/* The step's window: the card's fields without the card around them. */
+.modal-content > .step-card {
+    border: 0;
+    padding: 0;
+    background: transparent;
+}
+.step-file {
+    align-self: flex-start;
+}
+.step-choices {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 6px;
+}
+.step-choice {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    white-space: normal;
+    gap: 6px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+button.step-choice:hover {
+    background: var(--surface);
+    border-color: var(--text-dim);
+}
+.step-choice.script {
+    grid-column: 1 / -1;
+    cursor: default;
+    background: var(--surface-2);
+}
+@media (max-width: 900px) {
+    .step-choices {
+        grid-template-columns: 1fr;
+    }
 }

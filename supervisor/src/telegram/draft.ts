@@ -4,14 +4,12 @@ import type { Api } from 'grammy'
 
 import { createLogger } from '../logger.js'
 import type { TaskEvent } from '../store/index.js'
-import { markdownToTelegramHtml } from './format.js'
 
 const log = createLogger('draft')
 
 /** How long a draft stays on the screen without an update (Telegram's rule), and how often one is refreshed before that. */
 const KEEP_ALIVE_MS = 20_000
 const MIN_INTERVAL_MS = 1500
-const PROSE_MAX = 1200
 
 export interface DraftState {
     /** The task's title (first line of its prompt) or the routine's name. */
@@ -24,8 +22,6 @@ export interface DraftState {
     steps: number
     /** The tool call under way, `Bash: yarn test`. */
     step: string | null
-    /** The agent's last prose. */
-    prose: string
 }
 
 /** What the agent is doing, in one line: the command, the file, the pattern, the question. */
@@ -54,7 +50,13 @@ function elapsed(ms: number): string {
     return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`
 }
 
-/** The draft's text: Telegram HTML, or plain text for the retry after Telegram rejected the markup. */
+/**
+ * The draft's text: Telegram HTML, or plain text for the retry after Telegram
+ * rejected the markup. Two lines, never the agent's prose: a draft is
+ * ephemeral, and words that appear in the chat and vanish read as a reply
+ * that was deleted (2026-10-16). The reply itself is the message that ends
+ * the task.
+ */
 export function draftText(state: DraftState, now = Date.now(), html = true): string {
     const esc = html ? escapeHtml : (text: string) => text
     const lines = [`${state.head} ${html ? `<b>${esc(state.title)}</b>` : state.title}`]
@@ -63,10 +65,6 @@ export function draftText(state: DraftState, now = Date.now(), html = true): str
         const parts = [`${state.steps} step${state.steps === 1 ? '' : 's'}`, elapsed(now - state.startedAt)]
         if (state.step) parts.push(esc(state.step))
         lines.push(parts.join(' · '))
-    }
-    if (state.prose) {
-        const prose = state.prose.length > PROSE_MAX ? `…${state.prose.slice(-PROSE_MAX)}` : state.prose
-        lines.push('', html ? markdownToTelegramHtml(prose) : prose)
     }
     return lines.join('\n')
 }
@@ -77,43 +75,46 @@ export const draftId = (taskId: string): number =>
 
 interface Live {
     chatId: number
-    thread: number | undefined
     draftId: number
     state: DraftState
     lastSentAt: number
     timer: NodeJS.Timeout | null
     dirty: boolean
+    /** The request on its way to Telegram, if any: the reply that ends the task waits for it, or it would land after the reply and show for 30 s under it. */
+    inFlight: Promise<unknown> | null
 }
 
 /**
  * The task as it runs, streamed into the chat as a message draft
- * (`sendMessageDraft`, Bot API 9.3): the step count, the tool under way and
- * the agent's last words, refreshed as events arrive (at most one request
- * every 1.5 s) and kept alive every 20 s, since Telegram drops a draft after
- * 30 s of silence. The client shows a Stop button under it; a press stops the
- * task. The reply that ends the task replaces the draft.
+ * (`sendMessageDraft`, Bot API 9.3): the step count and the tool under way,
+ * refreshed as events arrive (at most one request every 1.5 s) and kept
+ * alive every 20 s, since Telegram drops a draft after 30 s of silence. The
+ * client shows a Stop button under it; a press stops the task. The reply
+ * that ends the task replaces the draft.
  */
 export class LiveDraft {
     private readonly live = new Map<string, Live>()
+    /** The last request of a draft that ended, until it lands: a second `end()` (two listeners end the same task) waits for it too. */
+    private readonly ending = new Map<string, Promise<unknown>>()
 
     constructor(
         private readonly api: Api,
         private readonly onStop: (taskId: string) => void
     ) {}
 
-    start(taskId: string, chatId: number, state: DraftState, thread?: number): void {
+    start(taskId: string, chatId: number, state: DraftState): void {
         if (this.live.has(taskId)) {
             this.update(taskId, () => state)
             return
         }
         const entry: Live = {
             chatId,
-            thread,
             draftId: draftId(taskId),
             state,
             lastSentAt: 0,
             timer: null,
-            dirty: true
+            dirty: true,
+            inFlight: null
         }
         this.live.set(taskId, entry)
         this.flush(taskId)
@@ -132,7 +133,7 @@ export class LiveDraft {
         this.schedule(taskId)
     }
 
-    /** A stream event of the task: counts the step, remembers the tool and the prose of the orchestrator. */
+    /** A stream event of the task: counts the step and remembers the tool. */
     event(event: TaskEvent): void {
         const entry = this.live.get(event.task_id)
         if (!entry) return
@@ -142,25 +143,33 @@ export class LiveDraft {
             entry.state.step = toolSummary(p.name ?? 'tool', p.input)
         } else if (event.type === 'agent') {
             const p = event.payload as { phase?: string; description?: string }
-            if (p.phase === 'started') {
-                entry.state.steps++
-                entry.state.step = `sub-agent ${event.agent ?? ''}${p.description ? `: ${p.description}` : ''}`.trim()
-            }
-        } else if (event.type === 'text' && !event.agent) {
-            const p = event.payload as { text?: string }
-            if (p.text?.trim()) entry.state.prose = p.text.trim()
+            if (p.phase !== 'started') return
+            entry.state.steps++
+            entry.state.step = `sub-agent ${event.agent ?? ''}${p.description ? `: ${p.description}` : ''}`.trim()
         } else return
         entry.state.waiting = null
         entry.dirty = true
         this.schedule(event.task_id)
     }
 
-    /** The task ended (its reply is about to replace the draft) — or lost its chat. */
-    end(taskId: string): void {
+    /**
+     * The task ended (its reply is about to replace the draft), asked a
+     * question (the question is a message; the draft comes back with the
+     * answer) or lost its chat. Resolves once nothing is on its way to
+     * Telegram any more, so the caller's next message lands after the draft.
+     */
+    async end(taskId: string): Promise<void> {
         const entry = this.live.get(taskId)
-        if (!entry) return
+        if (!entry) {
+            await this.ending.get(taskId)
+            return
+        }
         if (entry.timer) clearTimeout(entry.timer)
         this.live.delete(taskId)
+        if (!entry.inFlight) return
+        const landing = entry.inFlight.catch(() => undefined).finally(() => this.ending.delete(taskId))
+        this.ending.set(taskId, landing)
+        await landing
     }
 
     /** The task behind a draft the owner stopped from the client. */
@@ -194,21 +203,29 @@ export class LiveDraft {
         const entry = this.live.get(taskId)
         if (!entry) return
         entry.timer = null
+        // One request at a time: the next text goes when this one has landed (its `finally` schedules it),
+        // so drafts never land out of order and `end()` always waits for the last one.
+        if (entry.inFlight) {
+            entry.dirty = true
+            return
+        }
         entry.dirty = false
         entry.lastSentAt = Date.now()
         const send = (text: string, parse: boolean) =>
             this.api.sendMessageDraft(entry.chatId, entry.draftId, text, {
-                message_thread_id: entry.thread,
                 parse_mode: parse ? 'HTML' : undefined,
                 can_stop: true
             })
-        send(draftText(entry.state), true)
+        const request: Promise<void> = send(draftText(entry.state), true)
             .catch(() => send(draftText(entry.state, Date.now(), false), false))
             .catch((error) =>
                 log.warn(`draft for ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`)
             )
+            .then(() => undefined)
             .finally(() => {
+                if (entry.inFlight === request) entry.inFlight = null
                 if (this.live.get(taskId) === entry) this.schedule(taskId)
             })
+        entry.inFlight = request
     }
 }

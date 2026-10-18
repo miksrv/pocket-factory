@@ -1,6 +1,6 @@
 {
     "name": "@pocket-factory/web",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "private": true,
     "type": "module",
     "scripts": {
@@ -10,24 +10,37 @@
         "test": "yarn run -T vitest run"
     },
     "dependencies": {
-        "dompurify": "^3.2.0",
+        "@codemirror/autocomplete": "^6.20.3",
+        "@codemirror/commands": "^6.11.1",
+        "@codemirror/lang-javascript": "^6.2.5",
+        "@codemirror/lang-json": "^6.0.2",
+        "@codemirror/lang-markdown": "^6.5.2",
+        "@codemirror/lang-python": "^6.2.1",
+        "@codemirror/lang-yaml": "^6.1.3",
+        "@codemirror/language": "^6.13.1",
+        "@codemirror/legacy-modes": "^6.5.5",
+        "@codemirror/search": "^6.7.2",
+        "@codemirror/state": "^6.7.6",
+        "@codemirror/view": "^6.43.14",
+        "@lezer/highlight": "^1.2.5",
+        "dompurify": "^3.4.17",
         "highlight.js": "^11.12.0",
-        "lucide-react": "^1.54.0",
+        "lucide-react": "^1.58.0",
         "marked": "^18.0.14",
-        "react": "^19.1.0",
-        "react-dom": "^19.1.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
         "react-router-dom": "^7.6.0"
     },
     "devDependencies": {
         "@testing-library/dom": "^10",
         "@testing-library/jest-dom": "^7.0.1",
         "@testing-library/react": "^16.3.3",
-        "@testing-library/user-event": "^14.6.7",
+        "@testing-library/user-event": "^14.6.8",
         "@types/jsdom": "^30",
         "@types/react": "^19.1.0",
         "@types/react-dom": "^19.1.0",
         "@vitejs/plugin-react": "^6.1.1",
-        "jsdom": "^30.1.2",
+        "jsdom": "^30.1.3",
         "typescript": "^5.9.0",
         "vite": "^8.3.2"
     }

@@ -11,7 +11,6 @@ const state = (patch: Partial<DraftState> = {}): DraftState => ({
     waiting: null,
     steps: 0,
     step: null,
-    prose: '',
     ...patch
 })
 
@@ -33,16 +32,17 @@ describe('draftText', () => {
         expect(draftText(state({ steps: 1 }), 12_000)).toBe('▶️ <b>Fix the login page</b>\n1 step · 12 s')
     })
 
-    it('tells a wait instead of the steps, and the last prose under it', () => {
-        expect(draftText(state({ waiting: 'waiting for a free slot', prose: 'Looking at **it**' }), 1000)).toBe(
-            '▶️ <b>Fix the login page</b>\n⏳ waiting for a free slot\n\nLooking at <b>it</b>'
+    it('tells a wait instead of the steps', () => {
+        expect(draftText(state({ waiting: 'waiting for a free slot' }), 1000)).toBe(
+            '▶️ <b>Fix the login page</b>\n⏳ waiting for a free slot'
         )
     })
 
-    it('escapes the title and keeps the prose to its tail', () => {
+    it('escapes the title, and plain text has no tags', () => {
         expect(draftText(state({ title: 'a <b> & c' }), 0)).toContain('<b>a &lt;b&gt; &amp; c</b>')
-        const long = 'x'.repeat(2000)
-        expect(draftText(state({ prose: long }), 0)).toContain(`…${'x'.repeat(1200)}`)
+        expect(draftText(state({ title: 'a <b> & c', step: 'Bash: x' }), 0, false)).toBe(
+            '▶️ a <b> & c\n0 steps · 0 s · Bash: x'
+        )
     })
 
     it('gives every task a stable non-zero draft id', () => {
@@ -76,13 +76,37 @@ describe('LiveDraft', () => {
         // Nothing happens for a while: the keep-alive refreshes it before Telegram drops it.
         await vi.advanceTimersByTimeAsync(20_000)
         expect(sendMessageDraft).toHaveBeenCalledTimes(3)
-        draft.end('t1')
+        await draft.end('t1')
         await vi.advanceTimersByTimeAsync(60_000)
         expect(sendMessageDraft).toHaveBeenCalledTimes(3)
         vi.useRealTimers()
     })
 
-    it('counts sub-agents, keeps the orchestrator prose only, and stops the task behind a stopped draft', async () => {
+    it('ends only once the request on its way to Telegram has landed', async () => {
+        vi.useFakeTimers()
+        let release: () => void = () => undefined
+        const sendMessageDraft = vi.fn().mockImplementation(
+            () =>
+                new Promise<boolean>((resolve) => {
+                    release = () => resolve(true)
+                })
+        )
+        const draft = new LiveDraft({ sendMessageDraft } as unknown as Api, () => undefined)
+        draft.start('t1', 42, state())
+        let ended = false
+        const ending = draft.end('t1').then(() => {
+            ended = true
+        })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(ended).toBe(false)
+        release()
+        await ending
+        expect(ended).toBe(true)
+        expect(draft.has('t1')).toBe(false)
+        vi.useRealTimers()
+    })
+
+    it('counts sub-agents, shows no prose, and stops the task behind a stopped draft', async () => {
         vi.useFakeTimers()
         const sendMessageDraft = vi.fn().mockResolvedValue(true)
         const stopped: string[] = []
@@ -95,7 +119,7 @@ describe('LiveDraft', () => {
         const text = sendMessageDraft.mock.calls.at(-1)![2] as string
         expect(text).toContain('1 step')
         expect(text).toContain('sub-agent reviewer: Review')
-        expect(text).toContain('Done with it.')
+        expect(text).not.toContain('Done with it.')
         expect(text).not.toContain('from a sub-agent')
         expect(text).not.toContain('waiting')
         draft.stopped(42, draftId('t1'))

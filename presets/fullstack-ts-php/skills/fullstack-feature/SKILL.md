@@ -9,8 +9,8 @@ Use this when the project file names it in `skill:` and the task is a change to 
 
 ## Steps
 
-1. **Project.** Read `/data/config/projects/<project>.md`: `path`, `default_branch`, `pr_base`, and the notes (the checks to run, the tracker). `cd` into `path`. Read the repository's `CLAUDE.md` for its layout and commands.
-2. **Sync.** `git fetch origin`; make sure `default_branch` is up to date locally. Never work on `default_branch` itself.
+1. **Project.** Read `/data/config/projects/<project>.md`: `path` and the notes (the checks to run, the tracker). `cd` into `path`. Read the repository's `CLAUDE.md` for its layout and commands.
+2. **Sync.** `git fetch origin`; the default branch is the remote's (`git symbolic-ref --short refs/remotes/origin/HEAD`; if unset, `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`). Branch from it up to date; never work on it itself.
 3. **Branch.** `feature/<short-kebab-summary>` for a feature, `fix/<short-kebab-summary>` for a defect, with the ticket id when the task has one (e.g. `feature/DEV-1234-seo-slugs`); the repository's `CLAUDE.md` or the project notes may name another convention, and a `branch_prefix` in the project file, if present, overrides both. If the branch already exists, continue on it.
 4. **Plan.** In two to five lines: what changes, in which areas — `server`, `client` or both — and the order. If the task is ambiguous in a way that changes the outcome, stop and ask the owner all questions in one message.
 5. **Pick the developers.** One per area. The project file's notes may name the repository's own agent per area (`server → go-backend-dev`); use it when named, or when the repository's `.claude/agents/` ships an agent whose description covers the area — it carries the repository's memory and MCP servers, which the factory's agents lack. Otherwise fall back to the factory's agents: `web-developer` for `client`; for `server` the developer of its stack — `go-developer` when the server has a `go.mod`, `php-developer` when it has a `composer.json`. A server with neither, or with both, is a question for the owner. Do not mix: one agent per area for the whole task, fix loop included.
@@ -23,7 +23,7 @@ Use this when the project file names it in `skill:` and the task is a change to 
 7. **Review.** Spawn `reviewer` with the project file, the task, the branch and the paths of the convention files for the areas touched: `/data/claude/skills/go-conventions/SKILL.md` or `/data/claude/skills/php-conventions/SKILL.md` for the server (whichever matches the stack from step 5), `/data/claude/skills/typescript-conventions/SKILL.md` for the client. It answers `APPROVE` or `REQUEST CHANGES` with findings.
 8. **Fix loop.** On `REQUEST CHANGES`, route each finding to the developer of its area (the same agents as in step 5), then review again. At most three rounds in total; after that report the open findings to the owner instead of looping.
 9. **Checks.** Run the project's checks yourself on the final state, from the repository root: the commands the project notes name, or, when they name none, the repository's own. Failing checks mean the task is not done. Run only what this environment can run; when the project notes say some checks run in CI only, say so in the PR and in the report instead of claiming them.
-10. **Push & PR.** `git push -u origin <branch>`, then `gh pr create --base <pr_base or default_branch> --title … --body …` with this body:
+10. **Push & PR.** `git push -u origin <branch>`, then `gh pr create --base <base> --title … --body …` (the base is the one the task names, else the one the project notes name (an older file's `pr_base` counts), else the default branch) with this body:
 
    ```
    ## Summary
