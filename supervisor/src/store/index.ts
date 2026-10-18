@@ -116,15 +116,6 @@ export interface Task {
     finished_at: string | null
 }
 
-/** A topic of the owner's private chat with the bot, and the conversation it is. */
-export interface TelegramThread {
-    chat_id: number
-    thread_id: number
-    conversation_id: string
-    /** The name the bot gave the topic (the project, or the chat's title). */
-    name: string
-}
-
 export interface TaskEvent {
     id: number
     task_id: string
@@ -237,15 +228,29 @@ export interface RoutineRun {
     id: number
     schedule: string
     fired_at: string
-    /** Which trigger fired: a schedule, a poll, or the owner's Run now; `cron` in rows before 1.5.0. */
+    /** Which trigger fired: a schedule, or the owner's Run now; `poll` in rows of 1.5.0, `cron` before. */
     trigger: 'schedule' | 'poll' | 'manual' | 'cron'
-    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed'
+    /** `done`: a pipeline without an agent ran its steps to the end (1.6.0). */
+    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed' | 'done'
     note: string | null
     items: number
     task_id: string | null
     duration_ms: number
+    /** How each step went (1.6.0); null for a firing that ran no step (skipped, missed) and in older rows. */
+    steps: RoutineStepResult[] | null
     /** How the task ended (or where it is), when the run queued one. */
     task_status: TaskStatus | null
+}
+
+/** One step of a run, as the run list shows it (the shape of `StepResult` in routines/steps.ts). */
+export interface RoutineStepResult {
+    index: number
+    name: string
+    kind: string
+    ok: boolean
+    ms: number
+    log: string
+    items?: number
 }
 
 /** Runs kept per routine; older firings are pruned on insert. */
@@ -368,6 +373,19 @@ const CONVERSATION = `c.*, ${UNREAD} AS unread, ${NEEDS_REPLY} AS needs_reply, $
 /** A routine run with the status of the task it queued, if any. */
 const ROUTINE_RUN = `r.*, t.status AS task_status FROM schedule_runs r LEFT JOIN tasks t ON t.id = r.task_id`
 
+type RoutineRunRow = Omit<RoutineRun, 'steps'> & { steps: string | null }
+
+function routineRunOf(row: RoutineRunRow): RoutineRun {
+    try {
+        return { ...row, steps: row.steps ? (JSON.parse(row.steps) as RoutineStepResult[]) : null }
+    } catch {
+        return { ...row, steps: null }
+    }
+}
+
+/** The task fields that carry text from the agent or the owner, masked when stored. */
+const TEXT_FIELDS = new Set(['prompt', 'result', 'error'])
+
 type ConversationRow = Omit<Conversation, 'unread' | 'needs_reply' | 'active'> & {
     unread: number
     needs_reply: number
@@ -395,7 +413,29 @@ const taskOf = (row: TaskRow): Task => ({
 const tasksOf = (rows: TaskRow[]): Task[] => rows.map(taskOf)
 
 export class Store {
+    /** Masks secret values in what is stored (task prompts and results, events, run notes): the vault's, set at start. */
+    private redact: (text: string) => string = (text) => text
+    /** Whether there is anything to mask: an event's payload is walked only then. */
+    private masking: () => boolean = () => false
+
     constructor(private readonly db: DatabaseSync) {}
+
+    setRedactor(redactor: { redact: (text: string) => string; active: () => boolean }): void {
+        this.redact = redactor.redact
+        this.masking = redactor.active
+    }
+
+    /** Every string inside a value, masked. */
+    private redactDeep<T>(value: T): T {
+        if (!this.masking()) return value
+        if (typeof value === 'string') return this.redact(value) as T
+        if (Array.isArray(value)) return value.map((v) => this.redactDeep(v as unknown)) as T
+        if (value && typeof value === 'object')
+            return Object.fromEntries(
+                Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, this.redactDeep(v)])
+            ) as T
+        return value
+    }
 
     // ---- conversations ----------------------------------------------------
 
@@ -457,7 +497,8 @@ export class Store {
     ): void {
         const sets: string[] = ['updated_at = ?']
         const values: unknown[] = [now()]
-        for (const [key, value] of Object.entries(patch)) {
+        for (const [key, raw] of Object.entries(patch)) {
+            const value = typeof raw === 'string' && TEXT_FIELDS.has(key) ? this.redact(raw) : raw
             sets.push(`${key} = ?`)
             values.push(value)
         }
@@ -514,7 +555,7 @@ export class Store {
             id: randomUUID(),
             conversation_id: conversationId,
             source,
-            prompt,
+            prompt: this.redact(prompt),
             status: 'queued',
             session_id: null,
             result: null,
@@ -552,7 +593,7 @@ export class Store {
                 task.id,
                 conversationId,
                 source,
-                prompt,
+                task.prompt,
                 project,
                 schedule,
                 model,
@@ -779,12 +820,23 @@ export class Store {
         return row && taskOf(row)
     }
 
-    addRoutineRun(run: Omit<RoutineRun, 'id' | 'task_status'>): RoutineRun {
+    addRoutineRun(input: Omit<RoutineRun, 'id' | 'task_status'>): RoutineRun {
+        const run = { ...input, note: input.note && this.redact(input.note), steps: this.redactDeep(input.steps) }
         const result = this.db
             .prepare(
-                'INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO schedule_runs (schedule, fired_at, trigger, status, note, items, task_id, duration_ms, steps) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )
-            .run(run.schedule, run.fired_at, run.trigger, run.status, run.note, run.items, run.task_id, run.duration_ms)
+            .run(
+                run.schedule,
+                run.fired_at,
+                run.trigger,
+                run.status,
+                run.note,
+                run.items,
+                run.task_id,
+                run.duration_ms,
+                run.steps ? JSON.stringify(run.steps) : null
+            )
         this.db
             .prepare(
                 'DELETE FROM schedule_runs WHERE schedule = ? AND id NOT IN (SELECT id FROM schedule_runs WHERE schedule = ? ORDER BY id DESC LIMIT ?)'
@@ -799,7 +851,8 @@ export class Store {
         const filter = all ? '' : "AND r.status NOT IN ('empty', 'skipped')"
         return this.db
             .prepare(`SELECT ${ROUTINE_RUN} WHERE r.schedule = ? ${filter} ORDER BY r.id DESC LIMIT ?`)
-            .all(schedule, limit) as unknown as RoutineRun[]
+            .all(schedule, limit)
+            .map((row) => routineRunOf(row as unknown as RoutineRunRow))
     }
 
     /** The last firing of every routine, by name; with `withTask`, the last one that queued a task. */
@@ -809,7 +862,8 @@ export class Store {
             .prepare(
                 `SELECT ${ROUTINE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`
             )
-            .all() as unknown as RoutineRun[]
+            .all()
+            .map((row) => routineRunOf(row as unknown as RoutineRunRow))
         return new Map(rows.map((r) => [r.schedule, r]))
     }
 
@@ -924,59 +978,6 @@ export class Store {
             .get(chatId, messageId) as { conversation_id: string; task_id: string | null } | undefined
     }
 
-    // ---- telegram threads (topics in the private chat) ---------------------
-
-    /** The conversation a topic of the chat is, while the conversation lives. */
-    telegramThread(chatId: number, threadId: number): TelegramThread | undefined {
-        return this.db
-            .prepare(
-                `SELECT tt.chat_id, tt.thread_id, tt.conversation_id, tt.name FROM telegram_threads tt
-                 JOIN conversations c ON c.id = tt.conversation_id
-                 WHERE tt.chat_id = ? AND tt.thread_id = ? AND c.deleted_at IS NULL`
-            )
-            .get(chatId, threadId) as TelegramThread | undefined
-    }
-
-    /** The topic of a conversation in a chat, if the bot made one. */
-    threadOf(conversationId: string, chatId: number): TelegramThread | undefined {
-        return this.db
-            .prepare(
-                'SELECT chat_id, thread_id, conversation_id, name FROM telegram_threads WHERE conversation_id = ? AND chat_id = ?'
-            )
-            .get(conversationId, chatId) as TelegramThread | undefined
-    }
-
-    setTelegramThread(chatId: number, threadId: number, conversationId: string, name: string): void {
-        this.db
-            .prepare(
-                `INSERT INTO telegram_threads (chat_id, thread_id, conversation_id, name, created_at) VALUES (?, ?, ?, ?, ?)
-                 ON CONFLICT(chat_id, thread_id) DO UPDATE SET conversation_id = excluded.conversation_id, name = excluded.name`
-            )
-            .run(chatId, threadId, conversationId, name, now())
-    }
-
-    renameTelegramThread(chatId: number, threadId: number, name: string): void {
-        this.db
-            .prepare('UPDATE telegram_threads SET name = ? WHERE chat_id = ? AND thread_id = ?')
-            .run(name, chatId, threadId)
-    }
-
-    dropTelegramThread(chatId: number, threadId: number): void {
-        this.db.prepare('DELETE FROM telegram_threads WHERE chat_id = ? AND thread_id = ?').run(chatId, threadId)
-    }
-
-    /** The names of the chat's topics whose conversations still live: a new topic of the same project needs another name. */
-    telegramThreadNames(chatId: number): string[] {
-        return (
-            this.db
-                .prepare(
-                    `SELECT tt.name FROM telegram_threads tt JOIN conversations c ON c.id = tt.conversation_id
-                     WHERE tt.chat_id = ? AND c.deleted_at IS NULL`
-                )
-                .all(chatId) as Array<{ name: string }>
-        ).map((r) => r.name)
-    }
-
     // ---- meta -------------------------------------------------------------
 
     getMeta<T>(key: string): T | undefined {
@@ -1049,12 +1050,13 @@ export class Store {
         origin: EventOrigin = { agent: null, parent_tool_use_id: null }
     ): TaskEvent {
         const ts = now()
+        const masked = this.redactDeep(payload)
         const result = this.db
             .prepare(
                 'INSERT INTO task_events (task_id, ts, type, payload, agent, parent_tool_use_id) VALUES (?, ?, ?, ?, ?, ?)'
             )
-            .run(taskId, ts, type, JSON.stringify(payload), origin.agent, origin.parent_tool_use_id)
-        return { id: Number(result.lastInsertRowid), task_id: taskId, ts, type, payload, ...origin }
+            .run(taskId, ts, type, JSON.stringify(masked), origin.agent, origin.parent_tool_use_id)
+        return { id: Number(result.lastInsertRowid), task_id: taskId, ts, type, payload: masked, ...origin }
     }
 
     // ---- audit log --------------------------------------------------------

@@ -120,6 +120,7 @@ describe('routineNotice', () => {
         items: 0,
         task_id: null,
         duration_ms: 0,
+        steps: null,
         task_status: null
     })
     const spec = (notify?: string) => ({ notify }) as unknown as RoutineSpec

@@ -1,9 +1,20 @@
-import type { Bot, InlineKeyboard } from 'grammy'
-import type { ReplyParameters } from 'grammy/types'
+import type { Bot } from 'grammy'
 
 import { createLogger } from '../logger.js'
 import { markdownToTelegramHtml } from './format.js'
 import { RICH_MAX_LENGTH, richMarkdown } from './rich.js'
+import {
+    type Button,
+    errorText,
+    escapeHtml,
+    inlineKeyboard,
+    replyParameters,
+    retryAfter,
+    richButtonRows,
+    withRetry
+} from './view.js'
+
+export { retryAfter, withRetry } from './view.js'
 
 const log = createLogger('telegram')
 
@@ -46,54 +57,25 @@ export function chunk(text: string, limit = TELEGRAM_MAX_LENGTH): string[] {
     return parts
 }
 
-/** Telegram's "Too Many Requests: retry after N" as the seconds to wait, else null. */
-function retryAfter(error: unknown): number | null {
-    const parameters = (error as { parameters?: { retry_after?: number } } | undefined)?.parameters
-    return typeof parameters?.retry_after === 'number' ? parameters.retry_after : null
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-/** Runs one API call, waiting out Telegram's flood limit up to three times. */
-export async function withRetry<T>(call: () => Promise<T>): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
-        try {
-            return await call()
-        } catch (error) {
-            const wait = retryAfter(error)
-            if (wait === null || attempt >= 3) throw error
-            await sleep((wait + 1) * 1000)
-        }
-    }
-}
-
 export interface SendOptions {
-    /** The topic of the chat the message goes to (private-chat topics), none for the General topic or a flat chat. */
-    thread?: number
     /** Lines under the reply (project, changes, windows): a footer block in a rich message, dashed lines in HTML. */
     footer?: string[]
     /** The owner's message this answers: Telegram shows it quoted above the reply. */
     replyTo?: number
-    /** Buttons under the last message. */
-    markup?: InlineKeyboard
+    /** Buttons under the last message: inside a rich message, a keyboard under an HTML one. */
+    buttons?: Button[][]
     /** A message effect (`EFFECT`), private chats only. */
     effect?: string
 }
 
-const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
 /** The footer lines as a rich message's footer block (small type under the text). */
 export const richFooter = (lines: string[]): string => `<footer>${lines.map(escapeHtml).join('<br>')}</footer>`
-
-const replyParameters = (id: number | undefined): ReplyParameters | undefined =>
-    id ? { message_id: id, allow_sending_without_reply: true } : undefined
 
 /** Sends one HTML message, plain text when Telegram rejects the markup; returns its id. */
 async function sendOne(bot: Bot, chatId: number, part: string, options: SendOptions): Promise<number> {
     const other = {
-        message_thread_id: options.thread,
         reply_parameters: replyParameters(options.replyTo),
-        reply_markup: options.markup,
+        reply_markup: options.buttons ? inlineKeyboard(options.buttons) : undefined,
         message_effect_id: options.effect,
         link_preview_options: { is_disabled: true }
     }
@@ -105,9 +87,7 @@ async function sendOne(bot: Bot, chatId: number, part: string, options: SendOpti
     } catch (error) {
         if (retryAfter(error) !== null) throw error
         // Telegram rejected the markup — better a plain message than none.
-        log.warn(
-            `html reply rejected, falling back to plain text: ${error instanceof Error ? error.message : String(error)}`
-        )
+        log.warn(`html reply rejected, falling back to plain text: ${errorText(error)}`)
         const sent = await bot.api.sendMessage(chatId, part, other)
         return sent.message_id
     }
@@ -126,21 +106,22 @@ export async function sendMarkdown(
 ): Promise<number[]> {
     let failed = 0
     const ids: number[] = []
-    const parts = chunk(text || '(empty reply)')
-    if (options.footer?.length) parts[parts.length - 1] += `\n\n${options.footer.map((line) => `— ${line}`).join('\n')}`
+    // The footer goes under the last part, so every part leaves room for it.
+    const footer = options.footer?.length ? `\n\n${options.footer.map((line) => `— ${line}`).join('\n')}` : ''
+    const parts = chunk(text || '(empty reply)', TELEGRAM_MAX_LENGTH - footer.length)
+    parts[parts.length - 1] += footer
     for (const [i, part] of parts.entries()) {
         try {
             ids.push(
                 await sendOne(bot, chatId, part, {
-                    thread: options.thread,
                     replyTo: i === 0 ? options.replyTo : undefined,
-                    markup: i === parts.length - 1 ? options.markup : undefined,
+                    buttons: i === parts.length - 1 ? options.buttons : undefined,
                     effect: i === 0 ? options.effect : undefined
                 })
             )
         } catch (error) {
             failed++
-            log.error(`chunk to chat ${chatId} failed: ${error instanceof Error ? error.message : String(error)}`)
+            log.error(`chunk to chat ${chatId} failed: ${errorText(error)}`)
         }
     }
     if (failed) throw new Error(`${failed} chunk(s) not delivered`)
@@ -150,9 +131,10 @@ export async function sendMarkdown(
 /**
  * An agent's reply: a rich message, which Telegram renders from the Markdown
  * itself (headings, tables, lists, code with a language, quotes), 30k
- * characters at a time. A rich message Telegram refuses (a construct its
- * parser dislikes) goes as the HTML chunks instead, so the reply always
- * arrives. Returns the ids of the messages sent.
+ * characters at a time, with the footer in small type and the buttons inside
+ * the message. A rich message Telegram refuses (a construct its parser
+ * dislikes) goes as the HTML chunks with a keyboard instead, so the reply
+ * always arrives. Returns the ids of the messages sent.
  */
 export async function sendReply(
     bot: Bot,
@@ -162,36 +144,55 @@ export async function sendReply(
 ): Promise<number[]> {
     const parts = chunk(markdown || '(empty reply)', RICH_MAX_LENGTH)
     const ids: number[] = []
+    let failed = 0
     for (const [i, part] of parts.entries()) {
         const last = i === parts.length - 1
         const footer = last && options.footer?.length ? options.footer : undefined
+        const buttons = last && options.buttons?.length ? richButtonRows(options.buttons) : ''
         try {
             const sent = await withRetry(() =>
                 bot.api.sendRichMessage(
                     chatId,
-                    { markdown: richMarkdown(part) + (footer ? `\n\n${richFooter(footer)}` : '') },
                     {
-                        message_thread_id: options.thread,
+                        markdown: [richMarkdown(part), footer ? richFooter(footer) : '', buttons]
+                            .filter(Boolean)
+                            .join('\n\n')
+                    },
+                    {
                         reply_parameters: replyParameters(i === 0 ? options.replyTo : undefined),
-                        reply_markup: last ? options.markup : undefined,
                         message_effect_id: i === 0 ? options.effect : undefined
                     }
                 )
             )
             ids.push(sent.message_id)
         } catch (error) {
-            log.warn(
-                `rich message rejected, sending HTML instead: ${error instanceof Error ? error.message : String(error)}`
-            )
-            ids.push(
-                ...(await sendMarkdown(bot, chatId, part, {
-                    thread: options.thread,
-                    footer,
-                    replyTo: i === 0 ? options.replyTo : undefined,
-                    markup: last ? options.markup : undefined
-                }))
-            )
+            if (retryAfter(error) !== null) throw new DeliveryError(errorText(error), ids)
+            log.warn(`rich message rejected, sending HTML instead: ${errorText(error)}`)
+            try {
+                ids.push(
+                    ...(await sendMarkdown(bot, chatId, part, {
+                        footer,
+                        replyTo: i === 0 ? options.replyTo : undefined,
+                        buttons: last ? options.buttons : undefined
+                    }))
+                )
+            } catch (fallback) {
+                // The rest still goes; what arrived is remembered by the caller, so a reply to it continues the chat.
+                failed++
+                log.error(`part ${i + 1} to chat ${chatId} failed: ${errorText(fallback)}`)
+            }
         }
     }
+    if (failed) throw new DeliveryError(`${failed} part(s) not delivered`, ids)
     return ids
+}
+
+/** A reply that arrived only in part: `ids` are the messages that did. */
+export class DeliveryError extends Error {
+    constructor(
+        message: string,
+        readonly ids: number[]
+    ) {
+        super(message)
+    }
 }
