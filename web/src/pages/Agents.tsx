@@ -7,6 +7,7 @@ import { ModelPicker } from '../components/Providers'
 import { Tile } from '../components/Tile'
 import { Button, Empty, ErrorBox, GrowingTextarea, PageHead } from '../components/ui'
 import { api, fmt, type ToolList } from '../lib/api'
+import { toolLabel, toolTitle } from '../lib/tools'
 import { useAsync } from '../lib/useAsync'
 
 /**
@@ -69,7 +70,11 @@ function mcpServersOf(
         const total = server?.tools.length ?? selected
         return {
             key,
-            label: server?.label ?? key.replace(/^claude_ai_/, 'claude.ai ').replace(/_/g, ' '),
+            label:
+                server?.label ??
+                (key === 'factory'
+                    ? 'Factory (delegate)'
+                    : key.replace(/^claude_ai_/, 'claude.ai ').replace(/_/g, ' ')),
             selected,
             total,
             partial: selected < total
@@ -242,10 +247,17 @@ function ToolPicker({
     onChange: (next: string) => void
 }) {
     const common = tools?.common ?? []
+    const factory = tools?.factory ?? []
     const reported = tools?.reported ?? []
-    const mcp = tools?.mcp ?? []
+    // The factory's own server has its own line above, with its tools named.
+    const mcp = (tools?.mcp ?? []).filter(
+        (m) => !(tools?.factory ?? []).some((t) => t.startsWith(`mcp__${m.server}__`))
+    )
+    // A server with tools (connected, or ticked in this file already) is offered; the rest wait for a sign-in.
     const selected = splitTools(value)
-    const known = [...common, ...reported, ...mcp.flatMap((m) => m.tools)]
+    const usable = mcp.filter((m) => m.tools.length || m.tools.some((t) => selected.includes(t)))
+    const unusable = mcp.filter((m) => !usable.includes(m))
+    const known = [...common, ...factory, ...reported, ...mcp.flatMap((m) => m.tools)]
     const extra = selected.filter((t) => !known.includes(t))
     // The field keeps what was typed (", " included) until it parses to something else.
     const [extraText, setExtraText] = useState(extra.join(', '))
@@ -260,15 +272,16 @@ function ToolPicker({
             : selected.filter((t) => !names.includes(t))
         onChange(next.join(', '))
     }
-    const chip = (tool: string, text = tool) => (
+    // A chip says what the tool is; the identifier the file holds is in its tooltip.
+    const chip = (tool: string) => (
         <Button
             key={tool}
             className={`chip${selected.includes(tool) ? ' on' : ''}`}
             onClick={() => toggle(tool)}
             aria-pressed={selected.includes(tool)}
-            title={tool}
+            title={toolTitle(tool, mcp)}
         >
-            {text}
+            {toolLabel(tool, mcp).label}
         </Button>
     )
     return (
@@ -294,10 +307,24 @@ function ToolPicker({
                     </div>
                 </details>
             )}
+            {factory.length > 0 && (
+                <div
+                    className='row wrap'
+                    style={{ gap: 6 }}
+                >
+                    <span
+                        className='dim small'
+                        title="The factory's own tools: every orchestrator session has them"
+                    >
+                        Factory:
+                    </span>
+                    {factory.map((t) => chip(t))}
+                </div>
+            )}
             {mcp.length > 0 && (
                 <div className='mcp-servers'>
                     <div className='dim'>MCP servers the sessions have seen — a whole server, or single tools:</div>
-                    {mcp.map((m) => (
+                    {usable.map((m) => (
                         <McpServerRow
                             key={m.server}
                             server={m}
@@ -306,6 +333,23 @@ function ToolPicker({
                             chip={chip}
                         />
                     ))}
+                    {/* Servers without tools (not authorized yet) are folded: a role for one of them is made after Settings → MCP → Authorize. */}
+                    {unusable.length > 0 && (
+                        <details className='tool-more'>
+                            <summary className='dim'>
+                                {unusable.length} more need authentication (Settings → MCP → Authorize), or failed
+                            </summary>
+                            {unusable.map((m) => (
+                                <McpServerRow
+                                    key={m.server}
+                                    server={m}
+                                    selected={selected}
+                                    onAll={(on) => setMany(m.tools, on)}
+                                    chip={chip}
+                                />
+                            ))}
+                        </details>
+                    )}
                 </div>
             )}
             <input
@@ -319,7 +363,12 @@ function ToolPicker({
             />
             <span className='dim'>
                 {selected.length
-                    ? `${selected.length} allowed: ${selected.join(', ')}`
+                    ? `${selected.length} allowed: ${selected
+                          .map((t) => {
+                              const l = toolLabel(t, mcp)
+                              return l.server ? `${l.server} · ${l.label}` : l.label
+                          })
+                          .join(', ')}`
                     : 'None selected — the agent inherits every tool.'}
                 {tools?.source === 'default' ? ' · The CLI reports its full list after the first task.' : ''}
             </span>
@@ -337,7 +386,7 @@ function McpServerRow({
     server: ToolList['mcp'][number]
     selected: string[]
     onAll: (on: boolean) => void
-    chip: (tool: string, text?: string) => ReactNode
+    chip: (tool: string) => ReactNode
 }) {
     const on = server.tools.filter((t) => selected.includes(t)).length
     const all = on === server.tools.length
@@ -345,7 +394,6 @@ function McpServerRow({
     useEffect(() => {
         if (box.current) box.current.indeterminate = on > 0 && !all
     }, [on, all])
-    const short = (tool: string) => tool.slice(`mcp__${server.server}__`.length)
     const usable = server.tools.length > 0
     const tone =
         server.status === 'connected'
@@ -394,7 +442,7 @@ function McpServerRow({
                 className='row wrap'
                 style={{ gap: 6, marginTop: 8 }}
             >
-                {server.tools.map((t) => chip(t, short(t)))}
+                {server.tools.map((t) => chip(t))}
             </div>
         </details>
     )
@@ -410,7 +458,8 @@ function AgentEditor() {
             sub='Claude Code sub-agents: roles with their own tools, model and system prompt. Files in data/claude/agents/.'
             defaults={{ description: '', tools: 'Read, Edit, Write, Bash, Grep, Glob', model: 'sonnet' }}
             template={TEMPLATE}
-            bodyLabel='System prompt (Markdown)'
+            bodyLabel='System prompt'
+            bodyHint='Markdown'
             backTo={{ to: '/agents', label: 'All agents' }}
             form={(fm, set) => {
                 const model = str(fm.model)
@@ -422,8 +471,8 @@ function AgentEditor() {
                         <Field
                             hint={
                                 provider
-                                    ? 'A role on another model: a Claude orchestrator hands it work with the delegate tool (never as its own sub-agent), and a routine naming it runs on this provider. In light mode the body below is its whole system prompt.'
-                                    : 'An alias follows the CLI to the current model of that tier; a full id (claude-sonnet-5-5) pins one — type it in the file. A provider (Settings → Providers) takes the role off the subscription for routines that name it.'
+                                    ? 'A role off the subscription: the orchestrator delegates to it, a routine runs on it.'
+                                    : 'An alias follows the current model of its tier; a full id pins one (type it in the file).'
                             }
                             group
                             wide
@@ -443,7 +492,7 @@ function AgentEditor() {
                         {provider && (
                             <Field
                                 label='When the provider is unavailable'
-                                hint="The box does not answer, fails mid-run, or the task's project does not allow it: the role runs on the subscription instead, or the orchestrator hears that it did not run."
+                                hint='Down, failing, or not allowed here.'
                             >
                                 <select
                                     value={str(fm.fallback) || 'inherit'}
@@ -474,7 +523,8 @@ function AgentEditor() {
                         </Field>
                         <Field
                             label='Tools the agent may use'
-                            hint="An allowlist of Claude Code tool names. Read-only agents: Read, Bash, Grep, Glob. MCP servers are the ones the factory is connected to (claude.ai connectors, the project's .mcp.json, Settings → MCP); pick a server to make this a role for it, or only some of its tools (the email assistant has Gmail without send)."
+                            section
+                            hint='An allowlist; read-only agents: Read, Bash, Grep, Glob. A whole MCP server or single tools.'
                             wide
                             group
                         >
