@@ -13,6 +13,7 @@ import {
     type Stats,
     type Status,
     type Task,
+    taskTitle,
     taskTokens
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
@@ -207,7 +208,7 @@ export function OverviewPage() {
                             label='MCP servers'
                             detail={mcpDetail(d?.mcp)}
                         />
-                        {/* Red: a file that cannot fire or a prefilter that fails. Amber: a firing the factory slept through. */}
+                        {/* Red: a file that cannot fire or a step that fails. Amber: a firing the factory slept through. */}
                         <Check
                             ok={Boolean(
                                 s && !s.routines.invalid && !s.routines.failing.length && !s.routines.missed.length
@@ -393,7 +394,7 @@ function RecentTasks({ tasks, doneToday }: { tasks: Task[] | undefined; doneToda
                         >
                             <StatusBadge status={task.status} />
                             <div className='grow'>
-                                <div className='title'>{task.prompt}</div>
+                                <div className='title'>{taskTitle(task)}</div>
                                 <div className='desc'>
                                     {task.source} · {fmt.plural(task.num_turns, 'turn')} ·{' '}
                                     {fmt.tokens(taskTokens(task))} tokens
@@ -460,7 +461,7 @@ function routinesDetail(s: Stats['routines'] | undefined): string {
     if (!s.total) return 'none yet — Routines'
     const parts: string[] = []
     if (s.invalid) parts.push(`${s.invalid} invalid`)
-    if (s.failing.length) parts.push(`${s.failing.length} prefilter failing`)
+    if (s.failing.length) parts.push(`${s.failing.length} with a failing step`)
     if (s.missed.length) parts.push(`${s.missed.length} missed a firing`)
     return parts.length ? parts.join(' · ') : 'all fine'
 }

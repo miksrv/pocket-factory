@@ -7,7 +7,7 @@ import { Changes } from '../components/Changes'
 import { EventFeed } from '../components/EventFeed'
 import { LoadMore } from '../components/LoadMore'
 import { Empty, ErrorBox, FilterSelect, PageHead, Stat, StatusBadge, StopButton, Tabs } from '../components/ui'
-import { api, fmt, taskDuration, type TaskStatus, taskTokens } from '../lib/api'
+import { api, fmt, taskDuration, type TaskStatus, taskTitle, taskTokens } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { useNow } from '../lib/useNow'
 import { usePaged } from '../lib/usePaged'
@@ -89,7 +89,12 @@ export function TasksPage() {
                                             <StatusBadge status={task.status} />
                                         </td>
                                         <td className='col-main'>
-                                            <Link to={`/tasks/${task.id}`}>{task.prompt.slice(0, 120)}</Link>
+                                            <Link
+                                                to={`/tasks/${task.id}`}
+                                                title={task.prompt.slice(0, 300)}
+                                            >
+                                                {taskTitle(task)}
+                                            </Link>
                                             {task.error && task.status === 'failed' && (
                                                 <div className='error small'>{task.error.slice(0, 160)}</div>
                                             )}

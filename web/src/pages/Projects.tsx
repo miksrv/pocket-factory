@@ -31,19 +31,17 @@ export function ProjectsPage() {
         <Editor
             kind='projects'
             title='Projects'
-            sub='Knowledge base: one file per repository — where it is, how to branch, what to run, which hosts it lives on. Files in data/config/projects/.'
+            sub='Knowledge base: one file per repository — its repository, workflow, hosts and notes for the agent. Files in data/config/projects/.'
             defaults={{
-                name: '',
                 repo: '',
-                default_branch: 'main',
-                pr_base: 'main',
                 skill: 'feature-to-pr',
                 hosts: []
             }}
             template={TEMPLATE}
-            bodyLabel='Notes for the agent (Markdown)'
-            describe={(e) => [e.frontmatter.name, e.frontmatter.repo].filter(Boolean).join(' · ')}
-            intro='A project file tells the agent where a repository lives, how to branch, what to run and which hosts it touches. Pick one from the list to edit it, or describe a new one.'
+            bodyLabel='Notes for the agent'
+            bodyHint='Markdown: conventions, checks, tracker, deploys'
+            describe={(e) => str(e.frontmatter.repo).replace(/^https?:\/\/(www\.)?github\.com\//, '')}
+            intro='A project file tells the agent which repository it is, how work becomes a PR, what to run and which hosts it touches. Pick one from the list to edit it, or describe a new one.'
             newLabel='New project'
             form={(fm, set) => {
                 const hosts = (Array.isArray(fm.hosts) ? fm.hosts : []).filter(
@@ -51,32 +49,6 @@ export function ProjectsPage() {
                 )
                 return (
                     <>
-                        <Field label='Display name'>
-                            <input
-                                value={str(fm.name)}
-                                onChange={(e) => set({ name: e.target.value })}
-                            />
-                        </Field>
-                        <Field
-                            label='Checkout'
-                            hint='Directory under the workspaces root. Defaults to the file name.'
-                        >
-                            <input
-                                className='mono'
-                                list='workspaces'
-                                value={str(fm.path)}
-                                onChange={(e) => set({ path: e.target.value })}
-                                placeholder={`${status.data?.paths.workspaces ?? '/data/workspaces'}/<name>`}
-                            />
-                            <datalist id='workspaces'>
-                                {workspaces.map((w) => (
-                                    <option
-                                        key={w.name}
-                                        value={`${status.data?.paths.workspaces}/${w.name}`}
-                                    />
-                                ))}
-                            </datalist>
-                        </Field>
                         <Field label='Repository URL'>
                             <input
                                 className='mono'
@@ -87,7 +59,7 @@ export function ProjectsPage() {
                         </Field>
                         <Field
                             label='Development workflow'
-                            hint='The skill that turns a change request into a pull request in this repository. Other kinds of task (a ticket, a review, a host check) pick their own skill.'
+                            hint='Turns a request into a PR.'
                         >
                             <select
                                 value={str(fm.skill)}
@@ -104,23 +76,6 @@ export function ProjectsPage() {
                                 ))}
                             </select>
                         </Field>
-                        <Field
-                            label='Default branch'
-                            hint='Branches are cut from it: feature/… for features, fix/… for defects, unless the notes say otherwise.'
-                        >
-                            <input
-                                className='mono'
-                                value={str(fm.default_branch)}
-                                onChange={(e) => set({ default_branch: e.target.value })}
-                            />
-                        </Field>
-                        <Field label='PR base branch'>
-                            <input
-                                className='mono'
-                                value={str(fm.pr_base)}
-                                onChange={(e) => set({ pr_base: e.target.value })}
-                            />
-                        </Field>
                         <McpField
                             slug={str(fm.slug)}
                             allowed={Array.isArray(fm.mcp) ? (fm.mcp as string[]) : null}
@@ -128,46 +83,6 @@ export function ProjectsPage() {
                             registry={mcp.data?.servers ?? []}
                             onChange={(next) => set({ mcp: next })}
                         />
-                        {(providers.data?.providers.length ?? 0) > 0 && (
-                            <Field
-                                label='Providers this project may delegate to'
-                                hint="A role on another provider (an agent file with a provider) gets this project's work only when its provider is ticked here; otherwise the orchestrator's own model runs the role. Keep work code off a box you would not give it to."
-                                wide
-                                group
-                            >
-                                <div
-                                    className='row wrap'
-                                    style={{ gap: 6 }}
-                                >
-                                    {providers.data!.providers.map((p) => {
-                                        const allowed = Array.isArray(fm.providers) ? (fm.providers as string[]) : []
-                                        const on = allowed.includes(p.name)
-                                        return (
-                                            <Button
-                                                key={p.name}
-                                                className={`chip${on ? ' on' : ''}`}
-                                                aria-pressed={on}
-                                                onClick={() => {
-                                                    const next = on
-                                                        ? allowed.filter((n) => n !== p.name)
-                                                        : [...allowed, p.name]
-                                                    set({ providers: next.length ? next : undefined })
-                                                }}
-                                            >
-                                                {p.name}
-                                            </Button>
-                                        )
-                                    })}
-                                </div>
-                                {roles.length > 0 && !(Array.isArray(fm.providers) && fm.providers.length > 0) && (
-                                    <span className='warn-text small'>
-                                        None ticked: {roles.join(', ')} {roles.length === 1 ? 'has' : 'have'} a
-                                        provider, so in this project {roles.length === 1 ? 'it runs' : 'they run'} on
-                                        the subscription with the orchestrator's model, and each reply says so.
-                                    </span>
-                                )}
-                            </Field>
-                        )}
                         <ProjectToolchainField slug={str(fm.slug)} />
                         <ProjectHosts
                             value={hosts}
@@ -176,6 +91,77 @@ export function ProjectsPage() {
                             onSharedChanged={sharedHosts.reload}
                             keys={keys.data}
                         />
+                        <details
+                            className='field wide more'
+                            open={Boolean(str(fm.path)) && !str(fm.path).endsWith(`/${str(fm.slug)}`)}
+                        >
+                            <summary>
+                                More<span className='dim'> · checkout folder, delegation to providers</span>
+                            </summary>
+                            <div className='form-grid'>
+                                <Field
+                                    label='Checkout'
+                                    hint='Only when the folder is not named like the project.'
+                                >
+                                    <input
+                                        className='mono'
+                                        list='workspaces'
+                                        value={str(fm.path)}
+                                        onChange={(e) => set({ path: e.target.value })}
+                                        placeholder={`${status.data?.paths.workspaces ?? '/data/workspaces'}/<name>`}
+                                    />
+                                    <datalist id='workspaces'>
+                                        {workspaces.map((w) => (
+                                            <option
+                                                key={w.name}
+                                                value={`${status.data?.paths.workspaces}/${w.name}`}
+                                            />
+                                        ))}
+                                    </datalist>
+                                </Field>
+                                {(providers.data?.providers.length ?? 0) > 0 && (
+                                    <Field
+                                        label='Delegate to providers'
+                                        hint='Roles with a provider may run there for this project; unticked = on the subscription.'
+                                        wide
+                                        group
+                                    >
+                                        <div
+                                            className='row wrap'
+                                            style={{ gap: 6 }}
+                                        >
+                                            {providers.data!.providers.map((p) => {
+                                                const allowed = Array.isArray(fm.providers)
+                                                    ? (fm.providers as string[])
+                                                    : []
+                                                const on = allowed.includes(p.name)
+                                                return (
+                                                    <Button
+                                                        key={p.name}
+                                                        className={`chip${on ? ' on' : ''}`}
+                                                        aria-pressed={on}
+                                                        onClick={() => {
+                                                            const next = on
+                                                                ? allowed.filter((n) => n !== p.name)
+                                                                : [...allowed, p.name]
+                                                            set({ providers: next.length ? next : undefined })
+                                                        }}
+                                                    >
+                                                        {p.name}
+                                                    </Button>
+                                                )
+                                            })}
+                                        </div>
+                                        {roles.length > 0 &&
+                                            !(Array.isArray(fm.providers) && fm.providers.length > 0) && (
+                                                <span className='dim small'>
+                                                    {`${roles.join(', ')} ${roles.length === 1 ? 'runs' : 'run'} on the subscription here.`}
+                                                </span>
+                                            )}
+                                    </Field>
+                                )}
+                            </div>
+                        </details>
                     </>
                 )
             }}
@@ -229,10 +215,11 @@ function McpField({
     return (
         <Field
             label='MCP servers from the repository'
+            section
             hint={
                 declared.length
-                    ? "Declared in the checkout's .mcp.json; a session bound to this project loads the ones switched on. Statuses come from the last sessions and Settings → MCP → Refresh, where a sign-in is done once (Authorize). claude.ai connectors and factory-wide servers apply to every session and are not listed here; a server with a connector's URL is that connector, and the entry adds nothing."
-                    : 'The checkout has no .mcp.json. claude.ai connectors and factory-wide servers (Settings → MCP) apply to every session anyway.'
+                    ? "From the checkout's .mcp.json; sessions load the ones switched on. Sign in under Settings → MCP."
+                    : 'No .mcp.json in the checkout; connectors and Settings → MCP still apply.'
             }
             wide
             group

@@ -155,10 +155,7 @@ export function McpLoginDialog({
             closeButton={false}
             footer={footer}
         >
-            <div
-                className='stack'
-                style={{ marginTop: 8 }}
-            >
+            <div className='stack'>
                 {!login && !error && (
                     <div className='dim small'>Asking the CLI for the sign-in link… (a few seconds)</div>
                 )}
