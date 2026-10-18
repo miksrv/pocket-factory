@@ -24,6 +24,7 @@ export interface Config {
         workspacesRoot: string
         configRoot: string
         dbFile: string
+        vaultFile: string
     }
     stt: {
         groqApiKey: string | undefined
@@ -125,6 +126,8 @@ export function loadConfig(): Config {
             workspacesRoot:
                 optional('WORKSPACES_ROOT') ?? optional('WORKSPACES_DIR') ?? path.join(dataRoot, 'workspaces'),
             configRoot: path.join(dataRoot, 'config'),
+            // Secrets and variables set in the UI: owner-only, outside config/ (which gets copied around).
+            vaultFile: path.join(dataRoot, 'vault', 'secrets.json'),
             dbFile: path.join(dataRoot, 'db', 'factory.sqlite')
         },
         stt: {

@@ -11,7 +11,10 @@ mkdir -p "$CLAUDE_CONFIG_DIR" \
     "$DATA_ROOT/db" \
     "$DATA_ROOT/logs" \
     "$DATA_ROOT/secrets" \
-    "$DATA_ROOT/tools"
+    "$DATA_ROOT/tools" \
+    "$DATA_ROOT/vault"
+# The vault holds what the owner sets in the UI: nobody but the factory's user reads it.
+chmod 700 "$DATA_ROOT/vault" 2>/dev/null || true
 
 # Seed Claude Code's config dir from the templates. `cp -n` never overwrites
 # the owner's edited files, so new template files (agents, skills) appear on

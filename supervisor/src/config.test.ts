@@ -65,7 +65,8 @@ describe('loadConfig', () => {
                 dataRoot: data,
                 workspacesRoot: path.join(data, 'workspaces'),
                 configRoot: path.join(data, 'config'),
-                dbFile: path.join(data, 'db', 'factory.sqlite')
+                dbFile: path.join(data, 'db', 'factory.sqlite'),
+                vaultFile: path.join(data, 'vault', 'secrets.json')
             },
             stt: { groqApiKey: undefined, model: 'whisper-large-v3-turbo', language: undefined },
             web: {
@@ -116,7 +117,8 @@ describe('loadConfig', () => {
             dataRoot: '/srv/data',
             workspacesRoot: '/home/me/ws',
             configRoot: '/srv/data/config',
-            dbFile: '/srv/data/db/factory.sqlite'
+            dbFile: '/srv/data/db/factory.sqlite',
+            vaultFile: '/srv/data/vault/secrets.json'
         })
         expect(config.claude.configDir).toBe('/srv/data/claude')
         expect(config.claude.taskTimeoutMs).toBe(30 * 60_000)

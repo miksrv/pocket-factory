@@ -31,6 +31,7 @@ import {
     type TaskGit
 } from '../git/changes.js'
 import { createLogger } from '../logger.js'
+import type { ScopeContext, Vault } from '../secrets/vault.js'
 import type {
     Ask,
     AskQuestion,
@@ -91,8 +92,6 @@ export interface TaskServiceEvents {
     event: [event: TaskEvent]
     /** The CLI reported the subscription's rate-limit status (during a task or a probe). */
     limits: [snapshot: RateLimitSnapshot]
-    /** A conversation was named (its Haiku title landed) or deleted. */
-    conversation: [conversation: Conversation, change: 'titled' | 'deleted']
 }
 
 const fmtTokens = (n: number) =>
@@ -392,7 +391,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         private readonly store: Store,
         private readonly config: Config,
         private readonly workspace: Workspace,
-        private readonly providers: Providers
+        private readonly providers: Providers,
+        /** Secrets and variables set in the UI; a run gets the ones in its scope. */
+        private readonly vault: Vault | null = null
     ) {
         super()
         this.gatewayBase = `http://127.0.0.1:${config.web.port}/gateway`
@@ -564,11 +565,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     deleteConversation(conversationId: string): void {
         if (this.activeTask(conversationId) || this.queuedTask(conversationId))
             throw new Error('a task of this conversation is still queued or running; stop it first')
-        const conversation = this.store.getConversation(conversationId)
         this.store.deleteConversation(conversationId)
         this.inbox.remove(conversationId)
-        if (conversation)
-            this.emit('conversation', { ...conversation, deleted_at: new Date().toISOString() }, 'deleted')
     }
 
     /** The project slugs a conversation can be bound to (the files in `data/config/projects`). */
@@ -1165,8 +1163,6 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 if (!title || this.store.getConversation(conversationId)?.title !== placeholder) return
                 this.store.updateConversation(conversationId, { title })
                 log.info(`conversation ${conversationId} named "${title}"`)
-                const named = this.store.getConversation(conversationId)
-                if (named) this.emit('conversation', named, 'titled')
             } catch (error) {
                 log.warn(`naming a conversation failed: ${error instanceof Error ? error.message : String(error)}`)
             }
@@ -1203,7 +1199,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         )
     }
 
-    agentEnv(): NodeJS.ProcessEnv {
+    /**
+     * The CLI's environment (and every script's a routine runs): the supervisor's minus its own
+     * secrets, plus the vault's values that reach this run (scoped to all, to its routine or to
+     * its project); a name in the vault wins over .env.
+     */
+    agentEnv(scope: ScopeContext = {}): NodeJS.ProcessEnv {
         const env: NodeJS.ProcessEnv = {
             // In -p the CLI waits for background tasks after the orchestrator's last turn only
             // 10 minutes by default, then kills them and answers with whatever was said last
@@ -1216,7 +1217,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         for (const name of PRIVATE_ENV) delete env[name]
         // Provider keys stay with the gateway, which adds them to the forwarded request.
         for (const name of this.providers.tokenVars()) delete env[name]
+        if (this.vault) Object.assign(env, this.vault.envFor(scope))
         return env
+    }
+
+    /** Whose values a task's run gets: its routine (a delegated role's: its parent's) and its project. */
+    private scopeOf(task: Task, project: string | null): ScopeContext {
+        const parent = task.parent_id ? this.store.getTask(task.parent_id) : undefined
+        return { routine: task.schedule ?? parent?.schedule ?? null, project: task.project ?? project }
     }
 
     /**
@@ -1225,8 +1233,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * every model tier pointed at the task's model (`small` for the haiku tier)
      * and the base URL at the factory's gateway, which holds the provider's key.
      */
-    providerEnv(provider: Provider, model: string): NodeJS.ProcessEnv {
-        const env = this.agentEnv()
+    providerEnv(provider: Provider, model: string, scope: ScopeContext = {}): NodeJS.ProcessEnv {
+        const env = this.agentEnv(scope)
         delete env.CLAUDE_CODE_OAUTH_TOKEN
         delete env.ANTHROPIC_API_KEY
         const small = provider.small ?? model
@@ -1652,7 +1660,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (disabled.length) settings.disabledMcpjsonServers = disabled
             for (const name of declared) if (!disabled.includes(name)) servers.add(name)
         }
-        if (servers.size) settings.permissions = { allow: [...servers].map((name) => `mcp__${name}`) }
+        const permissions: Record<string, string[]> = {}
+        if (servers.size) permissions.allow = [...servers].map((name) => `mcp__${name}`)
+        // The vault's file is the supervisor's: a session gets the values in its scope through its
+        // environment, never the whole file through Read or Edit.
+        if (this.vault) {
+            const dir = path.dirname(this.vault.file)
+            permissions.deny = [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]
+        }
+        if (Object.keys(permissions).length) settings.permissions = permissions
         return settings
     }
 
@@ -1847,7 +1863,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         // A routine's run on the subscription that is its agent itself (`--agent`), not an orchestrator spawning it.
         const asAgentFile = !provider && !task.parent_id ? agentFile : null
         const asAgent = asAgentFile ? task.agent! : undefined
-        const env = provider ? this.providerEnv(provider, model) : this.agentEnv()
+        const scope = this.scopeOf(task, conversation.project)
+        const env = provider ? this.providerEnv(provider, model, scope) : this.agentEnv(scope)
         // An orchestrator on the subscription may hand roles to other providers (`delegate`); the
         // roles themselves never reach the CLI's Agent tool, which would run them on Claude.
         const delegates = this.delegates()
