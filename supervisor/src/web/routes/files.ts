@@ -1,9 +1,12 @@
+import path from 'node:path'
+
 import { Hono } from 'hono'
 
-import type { Kind } from '../../files/catalog.js'
+import type { FolderKind, Kind } from '../../files/catalog.js'
 import type { Env } from '../context.js'
 
 const KINDS: Kind[] = ['agents', 'skills', 'projects', 'routines']
+const FOLDER_KINDS: FolderKind[] = ['skills', 'routines']
 
 /** CRUD for agents, skills, projects and routines — the same files the agent edits. */
 export function fileRoutes(): Hono<Env> {
@@ -63,6 +66,64 @@ export function fileRoutes(): Hono<Env> {
 
         app.delete(`/${kind}/:name`, (c) => {
             c.get('app').catalog.remove(kind, c.req.param('name'))
+            return c.body(null, 204)
+        })
+    }
+
+    // A skill and a routine are folders: the scripts, data and references next to the main file are listed and edited here.
+    for (const kind of FOLDER_KINDS) {
+        const relOf = (p: string) => decodeURIComponent(p.split('/files/').slice(1).join('/files/'))
+        app.get(`/${kind}/:name/files`, (c) => c.json(c.get('app').catalog.folderFiles(kind, c.req.param('name'))))
+        app.get(`/${kind}/:name/files/*`, (c) => {
+            const { catalog } = c.get('app')
+            const name = c.req.param('name')
+            const rel = relOf(c.req.path)
+            if (c.req.query('raw')) {
+                // A download, never rendered: the file is whatever a run or an upload put there.
+                const bytes = catalog.readFolderBytes(kind, name, rel)
+                c.header('Content-Type', 'application/octet-stream')
+                c.header(
+                    'Content-Disposition',
+                    `attachment; filename="${path.basename(rel).replace(/["\\\r\n]/g, '_')}"`
+                )
+                c.header('Content-Security-Policy', "default-src 'none'; sandbox")
+                c.header('X-Content-Type-Options', 'nosniff')
+                return c.body(new Uint8Array(bytes))
+            }
+            return c.json({ path: rel, ...catalog.readFolderFile(kind, name, rel) })
+        })
+        /** Text from the editor (`text`, with the `updated_at` it opened), or an upload (`base64`); `exec` sets the executable bit. */
+        app.put(`/${kind}/:name/files/*`, async (c) => {
+            const rel = relOf(c.req.path)
+            const body = (await c.req.json().catch(() => ({}))) as {
+                text?: unknown
+                base64?: unknown
+                updated_at?: unknown
+                exec?: unknown
+            }
+            const content =
+                typeof body.text === 'string'
+                    ? body.text
+                    : typeof body.base64 === 'string'
+                      ? Buffer.from(body.base64, 'base64')
+                      : null
+            if (content === null) return c.json({ error: 'text or base64 is required' }, 400)
+            return c.json(
+                c.get('app').catalog.writeFolderFile(kind, c.req.param('name'), rel, content, {
+                    updatedAt: typeof body.updated_at === 'string' ? body.updated_at : undefined,
+                    exec: typeof body.exec === 'boolean' ? body.exec : undefined
+                })
+            )
+        })
+        /** Rename or move a file inside the folder. */
+        app.post(`/${kind}/:name/rename`, async (c) => {
+            const body = (await c.req.json().catch(() => ({}))) as { from?: unknown; to?: unknown }
+            if (typeof body.from !== 'string' || typeof body.to !== 'string')
+                return c.json({ error: 'from and to are required' }, 400)
+            return c.json(c.get('app').catalog.renameFolderFile(kind, c.req.param('name'), body.from, body.to))
+        })
+        app.delete(`/${kind}/:name/files/*`, (c) => {
+            c.get('app').catalog.removeFolderFile(kind, c.req.param('name'), relOf(c.req.path))
             return c.body(null, 204)
         })
     }
