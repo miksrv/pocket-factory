@@ -1,0 +1,5 @@
+{
+    "title": "Engineering skills (Matt Pocock)",
+    "description": "Eight skills from mattpocock/skills, the way a seasoned engineer works with an agent: test-driven development, a two-axis code review, a disciplined bug diagnosis loop, the shape of a PR body, research against primary sources, deep-module design, writing for agents, a retro. MIT, kept as upstream ships them.",
+    "tags": ["engineering", "tdd", "review", "debugging", "upstream"]
+}

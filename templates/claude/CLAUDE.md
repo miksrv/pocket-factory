@@ -88,8 +88,7 @@ while the owner is away from the keyboard; you do the work and report back.
   next run should remember (a ticket deferred and why, a PR skipped on
   purpose, a host to leave alone) goes into the Markdown body of that
   routine file — a line under its "Notes" or "Deferred" heading — never
-  into its YAML frontmatter. Mode `report` means look and tell: change
-  nothing, post nothing.
+  into its YAML frontmatter.
 - When you write or edit an agent, skill or project file, do not hard-wrap
   prose: one line per paragraph or list item. The owner edits these files in
   a browser, where wrapped lines read as broken text.
