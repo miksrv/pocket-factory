@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 
-import type { GithubPrefilter, Prefilter, TracPrefilter } from './spec.js'
+import type { GithubStep, TracStep } from './spec.js'
 
-/** What a prefilter found: one thing the agent should look at. `key` is what dedup works on. */
+/** What a source found: one thing the agent should look at. `key` is what dedup works on. */
 export interface Item {
     key: string
     title: string
@@ -12,30 +12,22 @@ export interface Item {
     seen_before?: string
 }
 
-export interface PrefilterContext {
+export interface SourceContext {
     cwd: string
     env: NodeJS.ProcessEnv
     /** The routine's project, when it has one. */
     project: { slug: string; repo: string | null } | null
 }
 
-export class PrefilterError extends Error {}
+export class SourceError extends Error {}
 
 /**
- * Deterministic pollers, no LLM: the scheduler runs one before it spends a
- * single token. Each returns the current items; the scheduler subtracts what
- * earlier runs already handed over and only a non-empty remainder becomes a
- * task.
+ * The built-in sources of a routine's pipeline, no LLM: GitHub pull requests
+ * and Trac tickets. A `run` step with `items` is the third kind; `steps.ts`
+ * runs it and parses its output with `parseItems`.
  */
-export function runPrefilter(spec: Prefilter, ctx: PrefilterContext): Promise<Item[]> {
-    switch (spec.kind) {
-        case 'command':
-            return runCommand(spec.run, spec.cwd ?? ctx.cwd, ctx.env, spec.timeout_s * 1000)
-        case 'github-prs':
-            return runGithub(spec, ctx)
-        case 'trac':
-            return runTrac(spec, ctx.env)
-    }
+export function runSource(step: GithubStep | TracStep, ctx: SourceContext): Promise<Item[]> {
+    return step.kind === 'github-prs' ? runGithub(step, ctx) : runTrac(step, ctx.env)
 }
 
 function exec(
@@ -49,7 +41,7 @@ function exec(
                 const killed = (error as NodeJS.ErrnoException & { killed?: boolean }).killed
                 const tail = (stderr || stdout || '').trim().split('\n').slice(-5).join('\n')
                 reject(
-                    new PrefilterError(
+                    new SourceError(
                         killed
                             ? `timed out after ${options.timeout / 1000} s`
                             : `${file} exited with ${(error as { code?: number }).code ?? 'an error'}${tail ? `: ${tail}` : ''}`
@@ -60,18 +52,7 @@ function exec(
     })
 }
 
-// ---- command --------------------------------------------------------------
-
-/**
- * Lines of the command's output are the items (`key<TAB>title`, or the line
- * as both). A JSON array works too: strings, or objects with key / title /
- * text / url. Exit code 0 and no output = nothing to do.
- */
-async function runCommand(run: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number): Promise<Item[]> {
-    const { stdout } = await exec('bash', ['-c', run], { cwd, env, timeout })
-    return parseItems(stdout)
-}
-
+/** A source's output as items: one per line (`key<TAB>title`, or the line as both), or a JSON array of strings / {key, title, text, url}. */
 export function parseItems(output: string): Item[] {
     const text = output.trim()
     if (!text) return []
@@ -80,15 +61,16 @@ export function parseItems(output: string): Item[] {
         try {
             parsed = JSON.parse(text)
         } catch {
-            throw new PrefilterError('output starts with "[" but is not a JSON array')
+            throw new SourceError('output starts with "[" but is not a JSON array')
         }
-        if (!Array.isArray(parsed)) throw new PrefilterError('output is not a JSON array')
-        return parsed.flatMap((raw, i): Item[] => {
+        if (!Array.isArray(parsed)) throw new SourceError('output is not a JSON array')
+        const seen = new Set<string>()
+        const list = parsed.flatMap((raw, i): Item[] => {
             if (typeof raw === 'string') return raw.trim() ? [{ key: raw.trim(), title: raw.trim() }] : []
-            if (!raw || typeof raw !== 'object') throw new PrefilterError(`item ${i} is neither a string nor an object`)
+            if (!raw || typeof raw !== 'object') throw new SourceError(`item ${i} is neither a string nor an object`)
             const o = raw as Record<string, unknown>
             const key = String(o.key ?? o.id ?? o.title ?? '').trim()
-            if (!key) throw new PrefilterError(`item ${i} has no key`)
+            if (!key) throw new SourceError(`item ${i} has no key`)
             return [
                 {
                     key,
@@ -98,6 +80,8 @@ export function parseItems(output: string): Item[] {
                 }
             ]
         })
+        // The first of a repeated key wins, as in the line form.
+        return list.filter((item) => !seen.has(item.key) && Boolean(seen.add(item.key)))
     }
     const items: Item[] = []
     const keys = new Set<string>()
@@ -116,10 +100,10 @@ export function parseItems(output: string): Item[] {
 
 // ---- GitHub pull requests -------------------------------------------------
 
-/** `https://github.com/owner/name(.git)` or `git@github.com:owner/name.git` → `owner/name`. */
+/** `https://github.com/owner/name(.git)`, a page under it (`…/pulls`) or `git@github.com:owner/name.git` → `owner/name`. */
 export function repoSlug(url: string | null | undefined): string | null {
     if (!url) return null
-    const m = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(url.trim())
+    const m = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#].*)?$/.exec(url.trim())
     return m ? `${m[1]}/${m[2]}` : null
 }
 
@@ -135,14 +119,22 @@ interface GhPr {
 }
 
 /**
- * Open pull requests of the repository through `gh` (the owner's token, the
- * image's per-owner wrapper). The key carries the head commit, so a new push
- * to a reviewed PR brings it up again and an untouched one stays quiet.
+ * Open pull requests of the step's repositories through `gh` (the owner's
+ * token, the image's per-owner wrapper), one after another. The key carries
+ * the head commit, so a new push to a reviewed PR brings it up again and an
+ * untouched one stays quiet.
  */
-async function runGithub(spec: GithubPrefilter, ctx: PrefilterContext): Promise<Item[]> {
-    const repo = spec.repo ?? repoSlug(ctx.project?.repo)
-    if (!repo)
-        throw new PrefilterError('no repository: set prefilter.repo (owner/name) or a project with a GitHub repo URL')
+async function runGithub(spec: GithubStep, ctx: SourceContext): Promise<Item[]> {
+    const fallback = repoSlug(ctx.project?.repo)
+    const repos = spec.repos.length ? spec.repos : fallback ? [fallback] : []
+    if (!repos.length)
+        throw new SourceError('no repository: set repo (owner/name) on the step or a project with a GitHub repo URL')
+    const items: Item[] = []
+    for (const repo of repos) items.push(...(await githubPrs(repo, spec, ctx)))
+    return items
+}
+
+async function githubPrs(repo: string, spec: GithubStep, ctx: SourceContext): Promise<Item[]> {
     const search: string[] = []
     if (spec.filter === 'review-requested') search.push('review-requested:@me')
     if (spec.filter === 'mentioned') search.push('mentions:@me')
@@ -165,7 +157,7 @@ async function runGithub(spec: GithubPrefilter, ctx: PrefilterContext): Promise<
     try {
         prs = JSON.parse(stdout) as GhPr[]
     } catch {
-        throw new PrefilterError('gh returned something other than JSON')
+        throw new SourceError(`gh returned something other than JSON for ${repo}`)
     }
     return prs
         .filter((pr) => spec.drafts || !pr.isDraft)
@@ -239,16 +231,15 @@ const TRAC_COLUMNS = [
 ]
 
 /**
- * A Trac query as CSV (`/query?…&format=csv`). Credentials from the
- * environment: TRAC_USER + TRAC_PASSWORD as basic auth (point `url` at the
+ * A Trac query as CSV (`/query?…&format=csv`), the site and the query from
+ * the step. Credentials from the environment, shared by every Trac step: TRAC_USER + TRAC_PASSWORD as basic auth (point `url` at the
  * `/login` path when the server authenticates there), or TRAC_COOKIE with a
  * browser session's `trac_auth` value. The key is `id@changetime` by
  * default, so a ticket that changed after the agent looked at it (a reply,
  * a status change) comes up again.
  */
-async function runTrac(spec: TracPrefilter, env: NodeJS.ProcessEnv): Promise<Item[]> {
-    const base = (spec.url ?? env.TRAC_URL ?? '').trim().replace(/\/+$/, '')
-    if (!base) throw new PrefilterError('no Trac URL: set prefilter.url or TRAC_URL in .env')
+async function runTrac(spec: TracStep, env: NodeJS.ProcessEnv): Promise<Item[]> {
+    const base = spec.url
     const params = new URLSearchParams(spec.query)
     params.set('format', 'csv')
     params.set('max', String(spec.max))
@@ -268,27 +259,27 @@ async function runTrac(spec: TracPrefilter, env: NodeJS.ProcessEnv): Promise<Ite
     try {
         response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000), redirect: 'manual' })
     } catch (error) {
-        throw new PrefilterError(`Trac unreachable: ${error instanceof Error ? error.message : String(error)}`)
+        throw new SourceError(`Trac unreachable: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (response.status === 401 || response.status === 403)
-        throw new PrefilterError(
+        throw new SourceError(
             `Trac refused the credentials (${response.status}); check TRAC_USER / TRAC_PASSWORD or TRAC_COOKIE, and whether the URL needs /login`
         )
     if (response.status >= 300 && response.status < 400)
-        throw new PrefilterError(
+        throw new SourceError(
             `Trac redirected (${response.status} → ${response.headers.get('location') ?? '?'}): the query probably needs a login`
         )
-    if (!response.ok) throw new PrefilterError(`Trac answered ${response.status}`)
+    if (!response.ok) throw new SourceError(`Trac answered ${response.status}`)
     const text = await response.text()
     if (/<html/i.test(text.slice(0, 200)))
-        throw new PrefilterError(
+        throw new SourceError(
             'Trac answered with HTML instead of CSV: a login page, or format=csv is not allowed for this user'
         )
     const rows = parseCsv(text)
     if (rows.length === 0) return []
     const header = rows[0].map((h) => h.trim().toLowerCase())
     const idCol = header.indexOf('id')
-    if (idCol < 0) throw new PrefilterError(`Trac CSV has no id column (header: ${rows[0].join(', ')})`)
+    if (idCol < 0) throw new SourceError(`Trac CSV has no id column (header: ${rows[0].join(', ')})`)
     const col = (row: string[], name: string) => {
         const i = header.indexOf(name)
         return i >= 0 ? (row[i] ?? '').trim() : ''

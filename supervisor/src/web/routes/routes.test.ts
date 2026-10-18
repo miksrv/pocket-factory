@@ -47,6 +47,36 @@ describe('API routes (open mode)', () => {
         })
     })
 
+    describe('skill files', () => {
+        it('lists, reads, writes and removes the files next to SKILL.md, never outside the skill', async () => {
+            t.ctx.catalog.save('skills', 'stats', { frontmatter: { description: 'x' }, body: 'y' })
+            const dir = path.dirname(t.ctx.catalog.fileFor('skills', 'stats'))
+            fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
+            fs.writeFileSync(path.join(dir, 'scripts', 'old.sh'), 'echo old\n')
+            fs.writeFileSync(path.join(dir, 'blob.bin'), Buffer.from([0, 1, 2, 3]))
+            fs.writeFileSync(path.join(dir, '.hidden'), 'x')
+            const list = (await (await t.request('/api/skills/stats/files')).json()) as Array<Record<string, unknown>>
+            expect(list).toMatchObject([
+                { path: 'blob.bin', size: 4, text: false, exec: false },
+                { path: 'scripts/old.sh', size: 9, text: true }
+            ])
+            const saved = await put('/api/skills/stats/files/scripts/stats.sh', { text: '#!/bin/bash\necho 42\n' })
+            expect(saved.status).toBe(200)
+            expect(fs.statSync(path.join(dir, 'scripts', 'stats.sh')).mode & 0o111).toBeTruthy()
+            const read = (await (await t.request('/api/skills/stats/files/scripts/stats.sh')).json()) as {
+                text: string
+            }
+            expect(read.text).toBe('#!/bin/bash\necho 42\n')
+            expect((await t.request('/api/skills/stats/files/blob.bin')).status).toBe(400)
+            expect((await t.request('/api/skills/stats/files/..%2F..%2Fagents%2Fx.md')).status).toBe(400)
+            expect((await put('/api/skills/stats/files/SKILL.md', { text: 'no' })).status).toBe(400)
+            expect((await t.request('/api/skills/nope/files')).status).toBe(404)
+            const gone = await t.request('/api/skills/stats/files/scripts/old.sh', { method: 'DELETE' })
+            expect(gone.status).toBe(204)
+            expect(fs.existsSync(path.join(dir, 'scripts', 'old.sh'))).toBe(false)
+        })
+    })
+
     describe('GET /api/status', () => {
         it('reports the version, the stats and the environment', async () => {
             const res = await t.request('/api/status')
@@ -92,7 +122,7 @@ describe('API routes (open mode)', () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))
             t.ctx.catalog.save('routines', 'nightly', {
-                frontmatter: { cron: '0 9 * * *', enabled: true, action: 'report' },
+                frontmatter: { cron: '0 9 * * *', enabled: true },
                 body: 'Look around.'
             })
             const body = (await (await t.request('/api/status')).json()) as {
