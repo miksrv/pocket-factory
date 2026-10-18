@@ -50,6 +50,7 @@ try {
     // to sign in first (the SPA only trusts the session cookie) and go into a Cookie header; a factory without
     // a password answers 400 there and gets a Basic header instead, which its API accepts.
     const page = new URL(url)
+    let signOut = async () => {}
     if (page.username) {
         const username = decodeURIComponent(page.username)
         const password = decodeURIComponent(page.password)
@@ -68,6 +69,12 @@ try {
                 ? { Cookie: cookie }
                 : { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}` }
         })
+        // The session is this script's only: ended with it, so Settings → Security does not fill with "node" rows.
+        if (cookie)
+            signOut = () =>
+                fetch(new URL('/api/auth/logout', page), { method: 'POST', headers: { Cookie: cookie } })
+                    .then(() => undefined)
+                    .catch(() => undefined)
     }
     await call('Page.navigate', { url: page.toString() })
     await sleep(4000)
@@ -79,6 +86,7 @@ try {
     const { data } = await call('Page.captureScreenshot', { format: 'png' })
     fs.writeFileSync(out, Buffer.from(data, 'base64'))
     console.log('wrote', out)
+    await signOut()
 } finally {
     chrome.kill('SIGKILL')
 }
