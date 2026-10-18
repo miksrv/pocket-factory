@@ -148,7 +148,7 @@ export function FolderFiles({
             <ErrorBox error={files.error ?? error ?? undefined} />
             {naming && (
                 <form
-                    className='row wrap'
+                    className='row'
                     style={{ gap: 8, marginBottom: 10 }}
                     onSubmit={(e) => {
                         e.preventDefault()
@@ -156,13 +156,12 @@ export function FolderFiles({
                     }}
                 >
                     <input
-                        className='mono'
+                        className='mono grow'
                         value={adding}
                         onChange={(e) => setAdding(e.target.value)}
                         placeholder='scripts/stats.sh or data/queue.csv'
                         aria-label='New file path'
                         autoFocus
-                        style={{ maxWidth: 320 }}
                     />
                     <Button
                         size='sm'

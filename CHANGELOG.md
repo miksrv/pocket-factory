@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.1
+
+### Patch Changes
+
+- Skills and routines: the new file's path field under ＋ File takes the full width
+
 ## 1.6.0
 
 ### Minor Changes
