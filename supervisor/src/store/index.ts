@@ -212,6 +212,13 @@ export interface ProviderUsage {
     last_task_at: string | null
 }
 
+export interface TokensByDayRow {
+    day: number
+    provider: string | null
+    model: string | null
+    tokens: number
+}
+
 export interface ChatRef {
     id: string
     title: string | null
@@ -756,6 +763,33 @@ export class Store {
                  ORDER BY provider IS NOT NULL, provider`
             )
             .all(dayStart, dayStart) as unknown as ProviderUsage[]
+    }
+
+    /**
+     * Fresh tokens of every model call per day, model and backend (provider null = the
+     * subscription). `days` are the owner's days as [start, end) in ISO, oldest first; `day` in a row
+     * is the index into them. Built from the `llm` events, so a sub-agent's calls count under the model
+     * that made them, not the task's.
+     */
+    tokensByDay(days: Array<{ start: string; end: string }>): TokensByDayRow[] {
+        if (!days.length) return []
+        const bounds = days.map(() => '(?, ?, ?)').join(', ')
+        return this.db
+            .prepare(
+                `WITH d(i, a, b) AS (VALUES ${bounds})
+                 SELECT d.i AS day, t.provider, json_extract(e.payload, '$.model') AS model,
+                        SUM(${LLM_FRESH_TOKENS}) AS tokens
+                 FROM task_events e JOIN tasks t ON t.id = e.task_id JOIN d ON e.ts >= d.a AND e.ts < d.b
+                 WHERE e.type = 'llm' AND e.ts >= ? AND e.ts < ?
+                 -- By the call's model, never tasks.model (a bare model here would be that column).
+                 GROUP BY d.i, t.provider, json_extract(e.payload, '$.model')
+                 HAVING SUM(${LLM_FRESH_TOKENS}) > 0`
+            )
+            .all(
+                ...(days.flatMap((d, i) => [i, d.start, d.end]) as never[]),
+                days[0].start,
+                days[days.length - 1].end
+            ) as unknown as TokensByDayRow[]
     }
 
     /** `dayStart`: when "today" began (ISO), the owner's midnight, not UTC's. */

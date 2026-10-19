@@ -7,6 +7,7 @@ import {
     Bot,
     Box,
     Braces,
+    ChartColumnStacked,
     Check,
     ChevronDown,
     ChevronRight,
@@ -71,6 +72,8 @@ export const ICONS = {
     settings: Settings,
     control: Activity,
     limits: Gauge,
+    /** Tokens over time (the Overview's chart). */
+    usage: ChartColumnStacked,
     /** Channels a conversation comes from: a paper plane for Telegram, the chat bubble for the web. */
     telegram: Send,
     web: MessageSquare,

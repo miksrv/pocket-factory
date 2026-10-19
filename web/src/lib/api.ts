@@ -246,6 +246,22 @@ export interface RateLimitWindow {
 }
 
 /** Subscription rate-limit status as the CLI last reported it. */
+/** Fresh tokens per day (the owner's TIMEZONE), one series per model family on the subscription and per provider. */
+export interface DailyTokens {
+    days: string[]
+    series: Array<{
+        key: string
+        label: string
+        kind: 'subscription' | 'provider'
+        /** Its `--chart-<n>` colour, fixed per family / provider; null = past the palette. */
+        slot: number | null
+        values: number[]
+        total: number
+    }>
+}
+
+export type DailyRange = 7 | 30 | 90
+
 export interface RateLimits {
     id: number
     ts: string
@@ -1025,6 +1041,8 @@ export const api = {
 
     /** Tool names the CLI offers (from its last session start), or a built-in default list. */
     tools: () => request<ToolList>('/tools'),
+
+    dailyTokens: (days: DailyRange) => request<DailyTokens>(`/usage/daily?days=${days}`),
 
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 

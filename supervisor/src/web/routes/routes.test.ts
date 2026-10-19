@@ -123,6 +123,40 @@ describe('API routes (open mode)', () => {
             expect(body.models.removed).toEqual([{ name: 'gone', tokens_today: 10, tokens_total: 10 }])
         })
 
+        it('sums tokens per day and model family, a provider apart, cache reads left out', async () => {
+            vi.useFakeTimers({ toFake: ['Date'] })
+            t.ctx.providers.save('gpu', { url: 'http://127.0.0.1:1', models: ['small'], concurrency: 1 })
+            const conversation = t.ctx.tasks.newConversation('web', null, null, null)
+            // The task's own model must not decide the series: a sub-agent's calls run on another.
+            const sub = t.ctx.store.createTask(conversation.id, 'web', 'x', null, null, 'sonnet')
+            const box = t.ctx.store.createTask(conversation.id, 'web', 'y', null, null, null, null, 'gpu')
+            const call = (task: string, model: string, tokens: number, cacheReadTokens = 0) =>
+                t.ctx.store.addEvent(task, 'llm', { model, tokens: tokens + cacheReadTokens, cacheReadTokens })
+            vi.setSystemTime(new Date('2026-10-05T12:00:00.000Z'))
+            call(sub.id, 'claude-opus-4-7', 100, 5000)
+            vi.setSystemTime(new Date('2026-10-06T09:00:00.000Z'))
+            call(sub.id, 'claude-sonnet-4-6', 40)
+            call(sub.id, 'claude-sonnet-4-6', 2)
+            call(sub.id, 'claude-haiku-4-5', 3)
+            call(box.id, 'small', 7)
+            vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))
+            const body = (await (await t.request('/api/usage/daily?days=7')).json()) as {
+                days: string[]
+                series: Array<{ key: string; label: string; slot: number; values: number[]; total: number }>
+            }
+            expect(body.days).toHaveLength(7)
+            expect(body.days.slice(-2)).toEqual(['2026-10-05', '2026-10-06'])
+            expect(body.series.map((s) => [s.key, s.slot, s.values.slice(-2), s.total])).toEqual([
+                ['claude:sonnet', 1, [0, 42], 42],
+                ['claude:opus', 2, [100, 0], 100],
+                ['claude:haiku', 3, [0, 3], 3],
+                ['provider:gpu', 5, [0, 7], 7]
+            ])
+            // Anything but the offered ranges is a month.
+            const month = (await (await t.request('/api/usage/daily?days=1000')).json()) as { days: string[] }
+            expect(month.days).toHaveLength(30)
+        })
+
         it('counts routine files and names the next firing', async () => {
             vi.useFakeTimers({ toFake: ['Date'] })
             vi.setSystemTime(new Date('2026-10-06T10:00:00.000Z'))

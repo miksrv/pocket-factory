@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
 import { Tile } from '../components/Tile'
+import { TokensChart } from '../components/TokensChart'
 import { Button, Empty, PageHead, Stat, StatusBadge } from '../components/ui'
 import {
     api,
@@ -122,6 +123,9 @@ export function OverviewPage() {
                     </span>
                 </div>
             </div>
+
+            <h2>Tokens</h2>
+            <TokensChart />
 
             <ProvidersCard
                 models={d?.models}

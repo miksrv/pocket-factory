@@ -11,6 +11,7 @@
 - Routines: a step's script runs in its project's sandbox, with the tools the agent installed there
 - Toolchains: removed (mise, PHP and Docker in the image, the dind sidecar, Settings → Toolchains); the agent installs what a checkout needs in its sandbox
 - Projects: a Network section and the sandbox card above the form
+- Overview: tokens by day for 7 / 30 / 90 days, each subscription model and each provider apart
 
 ## 1.6.1
 
