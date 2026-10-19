@@ -142,8 +142,9 @@ export function statusRoutes(): Hono<Env> {
             models: modelsOverview(c.get('app'), startOfDay(new Date(), config.timezone).toISOString()),
             limits: tasks.limits() ?? null,
             claude: {
-                // In sandbox mode the CLI is Docker's, inside each sandbox: the supervisor has none.
-                version: sandboxed ? null : claude,
+                // In sandbox mode the CLI is Docker's, inside each sandbox: the supervisor has none, so the
+                // version is the one the last session reported.
+                version: sandboxed ? tasks.cliVersion() : claude,
                 model: tasks.model(),
                 permission_mode: config.claude.permissionMode,
                 max_turns: config.claude.maxTurns,

@@ -12,6 +12,8 @@
 - Routines: a step may continue if it fails (Continue if it fails on its card): the run goes on and the agent gets its error
 - Routines: a step can be switched off (Step on on its card): runs pass it by, Run on the card still tries it
 - Routines: a run shows from the moment it starts: its steps live on the routine's page and in its chat thread, then the agent step with its task's status
+- Telegram: Run on a routine says at once that it started, then what came of it once the steps are done
+- Fixed: the Claude Code version is back in the sidebar, the Overview and Settings with sandboxes (as the last session reported it)
 
 ## 1.7.0
 
