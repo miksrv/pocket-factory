@@ -106,6 +106,10 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
   - `gateway/` — the provider gateway (`/gateway/<name>`, outside `/api`), `translate.ts`
     Anthropic Messages ↔ OpenAI chat completions, streaming included; MCP pass-through;
     `factory.ts` the factory's own MCP server per task (`/factory/<task>/mcp`, tool `delegate`)
+  - `sharing/` — `zip.ts` (a dependency-free ZIP writer / reader: no links, no paths that climb out,
+    size limits), `bundle.ts` (the preset layout as a bundle: read a ZIP / a folder / one Markdown
+    file, install the picked items, export with masked secrets); `/api/share/export` and
+    `/api/share/import` in `web/routes/sharing.ts`; presets install through the same code
   - `git/changes.ts` — the Changes panel (start head recorded before the CLI starts, measured at
     the end of every attempt: branch, base, files / lines, uncommitted, `gh pr list --head`)
   - `claude/mcpLogin.ts` — `claude mcp login --no-browser` under a pseudo-terminal; `claude/models.ts`
@@ -145,7 +149,8 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
   Prose in agent / skill / project Markdown is not hard-wrapped (one line per paragraph or list
   item): the UI editor wraps it, previews render with `breaks: false`.
   `node scripts/reflow-md.mjs <files>` unwraps a file that was written wrapped.
-- `presets/<name>/` — `preset.json` + `agents/` `skills/` `projects/`, installed from the UI.
+- `presets/<name>/` — `preset.json` + `agents/` `skills/` `routines/` `projects/` (the bundle layout an
+  export writes), installed from the UI.
   Installed files are one flat namespace: files shared by presets (`fullstack-feature`,
   `web-developer`) must stay byte-identical across them.
 - `docker/` — `entrypoint.sh` (seeds the data directory, git identity + `safe.directory '*'`, links
@@ -466,6 +471,22 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   safety switch it never was, so what a run may do is written in its instructions. On start
   `migrateRoutineActions` moves an old file's `action:` into the first line of its body, once. A
   real read-only run would be deny rules in the session, not a field.
+
+### Sharing (1.7.0)
+
+- **One format for presets and sharing**: a ZIP in the preset layout (`sharing/bundle.ts`). Export:
+  an agent, a skill or a routine from its page (a routine with its agent step's agent and skill by
+  default, its `data/` only when asked: it may be personal), several on the Presets page. Import
+  (Presets, Agents, Skills, Routines): such a ZIP, a repository download, a `.skill` file, or one
+  Markdown file as a skill (or an agent); a preview lists each item (new / replaces yours, files,
+  what its scripts declare and whether the vault has it) and installs only what is ticked.
+- Owner's rules: **secrets and variables never travel** (the vault is not exported; a secret's value
+  found in an exported file is masked); **a routine arrives switched off** (also from a preset);
+  a routine whose agent, skill or project is missing is imported anyway, the form shows the default
+  and the preview says so. Projects are never exported (paths, hosts, notes are the owner's).
+- An agent and a skill go by their own `name:`; a replaced item keeps the files the bundle does not
+  bring (a routine's data). Import bodies get the upload limit (20 MB); the ZIP reader refuses links,
+  `..`, absolute paths, encryption, ZIP64 and more than 2000 entries / 8 MB a file / 64 MB in all.
 
 ### Hosts, GitHub, security
 

@@ -28,6 +28,8 @@ export interface CatalogEntry {
 /** Letters of both cases: Claude Code's built-in agents (`Explore`, `Plan`) are overridden by a file of the same name. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
+export const isValidName = (name: string): boolean => NAME.test(name)
+
 export class BadName extends Error {}
 export class NotFound extends Error {}
 export class Conflict extends Error {}
@@ -324,13 +326,13 @@ export class Catalog {
         name: string,
         rel: string,
         content: string | Buffer,
-        options: { updatedAt?: string; exec?: boolean } = {}
+        options: { updatedAt?: string; exec?: boolean; max?: number } = {}
     ): FolderFile {
         this.existingFolder(kind, name)
         this.toFolder(kind, name)
         const full = this.folderFilePath(kind, name, rel)
         const bytes = typeof content === 'string' ? Buffer.byteLength(content) : content.length
-        const max = typeof content === 'string' ? TEXT_MAX : UPLOAD_MAX
+        const max = options.max ?? (typeof content === 'string' ? TEXT_MAX : UPLOAD_MAX)
         if (bytes > max) throw new BadName(`the file is larger than ${Math.round(max / 1024)} KB`)
         fs.mkdirSync(path.dirname(full), { recursive: true })
         // One descriptor from the check to the write: a new file is created exclusively, an

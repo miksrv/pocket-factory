@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { AgentStatus, auditLink, rosterOf } from '../components/AgentsPanel'
 import { Editor, Field, str } from '../components/Editor'
 import { ModelPicker } from '../components/Providers'
+import { ImportButton } from '../components/Sharing'
 import { Tile } from '../components/Tile'
 import { Button, Empty, ErrorBox, GrowingTextarea, PageHead } from '../components/ui'
 import { api, fmt, type ToolList } from '../lib/api'
@@ -103,6 +104,7 @@ function AgentGrid() {
                 title='Agents'
                 sub='Claude Code sub-agents: roles with their own tools, model and system prompt. Files in data/claude/agents/; built-ins appear once the audit log has seen them.'
             >
+                <ImportButton onImported={entries.reload} />
                 <Button
                     variant='primary'
                     onClick={() => navigate('/agents/new')}

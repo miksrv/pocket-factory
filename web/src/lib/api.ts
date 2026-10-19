@@ -910,6 +910,40 @@ export interface Preset {
     installed: boolean
 }
 
+/** What an import would do, item by item (`POST /share/import` without `install`). */
+export interface ImportPreview {
+    title: string | null
+    description: string | null
+    items: Array<{
+        kind: Kind
+        name: string
+        description: string | null
+        /** One of that name is on the volume: installing it replaces it. */
+        exists: boolean
+        /** The folder's other files (scripts, references, data). */
+        files: string[]
+        /** What its scripts declare they read; `set`: the vault has it. */
+        needs: Array<{ name: string; secret: boolean; set: boolean }>
+        /** Why it cannot be installed. */
+        errors: string[]
+        notes: string[]
+    }>
+    /** Files that belong to no item, the first few by name. */
+    ignored: string[]
+    ignored_count: number
+}
+
+export interface ExportRequest {
+    agents?: string[]
+    skills?: string[]
+    routines?: string[]
+    /** A routine brings the agent and the skill of its agent step (default). */
+    with_deps?: boolean
+    /** A routine brings its data/ (off by default). */
+    with_data?: boolean
+    title?: string
+}
+
 /** Who the browser is to the API: the sign-in mode, whether this browser is signed in, and the lock policy. */
 export interface AuthState {
     /** `password`: sign-in required (WEB_AUTH_PASSWORD set); `open`: no password, whoever reaches the port is the owner. */
@@ -988,6 +1022,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         )
     return body as T
 }
+
+const importQuery = (file: File, as?: 'skills' | 'agents') =>
+    new URLSearchParams({ file: file.name || 'import', ...(as ? { as } : {}) }).toString()
 
 const targetBody = (target: HostTarget) =>
     'name' in target ? target : { ssh: target.ssh, key: target.key || undefined }
@@ -1239,6 +1276,41 @@ export const api = {
             method: 'POST',
             body: JSON.stringify(step ? { step } : {})
         }),
+
+    /** What a ZIP (a bundle, a `.skill`) or one Markdown file (`as`: a skill by default, or an agent) holds. */
+    previewImport: (file: File, as?: 'skills' | 'agents') =>
+        request<ImportPreview>(`/share/import?${importQuery(file, as)}`, {
+            method: 'POST',
+            body: file,
+            headers: { 'content-type': 'application/octet-stream' }
+        }),
+    /** Put the picked items (`kind/name`) of the same file on the volume; one that exists is replaced. */
+    installImport: (file: File, keys: string[], as?: 'skills' | 'agents') =>
+        request<{ installed: Array<{ kind: Kind; name: string }> }>(
+            `/share/import?${importQuery(file, as)}&install=${encodeURIComponent(keys.join(','))}`,
+            { method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream' } }
+        ),
+    /** The ZIP of the picked agents, skills and routines, saved by the browser as a download. */
+    exportBundle: async (body: ExportRequest): Promise<{ filename: string; masked: number }> => {
+        const response = await fetch('/api/share/export', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...activeHeaders() },
+            body: JSON.stringify(body)
+        })
+        if (!response.ok) {
+            const error = (await response.json().catch(() => null)) as { error?: string } | null
+            throw new ApiError(response.status, error?.error ?? `${response.status} ${response.statusText}`, error)
+        }
+        const filename =
+            /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'export.zip'
+        const url = URL.createObjectURL(await response.blob())
+        const link = document.createElement('a')
+        link.href = url
+        link.download = filename
+        link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 10_000)
+        return { filename, masked: Number(response.headers.get('x-masked-files') ?? 0) }
+    },
 
     secrets: () => request<VaultOverview>('/secrets'),
     /** Create (`create`: refuse a name that exists) or change; a secret without `value` keeps its value; `provider`: a provider key. */

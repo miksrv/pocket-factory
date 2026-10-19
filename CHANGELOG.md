@@ -15,6 +15,10 @@
 - Providers: the API key (and an MCP server's) is a secret with the access "model providers only", picked or added in the form; no `.env`
 - Providers: keys still in `.env` move into Secrets at start, once
 - Routines: the Trac login is no longer in `.env.example`; it is set in Secrets
+- Sharing: Export of an agent, a skill or a routine (with its agent, skill and scripts; `data/` on request) as a ZIP, several at once on the Presets page
+- Sharing: Import of such a ZIP, a `.skill` file or one Markdown file (a skill or an agent), with a preview of each item and what its scripts need; routines arrive switched off, secrets and variables never travel
+- Presets: a preset may carry routines
+- Skills: `pr-review` says it is for someone else's PR on GitHub, so `code-review` keeps the agent's own branch
 
 ## 1.6.1
 

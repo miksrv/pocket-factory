@@ -132,7 +132,7 @@ export interface FolderNeed {
     files: string[]
 }
 
-const SCRIPT_EXT = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|php)$/
+export const SCRIPT_EXT = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|php)$/
 
 /**
  * What every script of a folder (a skill's, a routine's) reads from the

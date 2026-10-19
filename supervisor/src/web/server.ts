@@ -32,6 +32,7 @@ import { sandboxRoutes } from './routes/sandboxes.js'
 import { secretRoutes } from './routes/secrets.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { settingsRoutes } from './routes/settings.js'
+import { sharingRoutes } from './routes/sharing.js'
 import { statusRoutes } from './routes/status.js'
 import { taskRoutes } from './routes/tasks.js'
 import { usageRoutes } from './routes/usage.js'
@@ -74,11 +75,12 @@ export function createApp(app: AppContext): Hono<Env> {
     hono.route('/preview', previewRoutes())
 
     // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
-    // An uploaded file (a photo, a log) gets Telegram's own ceiling instead.
+    // An uploaded file (a photo, a log, a bundle to import) gets Telegram's own ceiling instead.
     const smallBodies = bodyLimit({ maxSize: 2 * 1024 * 1024 })
     const uploads = bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES + 64 * 1024 })
     hono.use('/api/*', (c, next) =>
-        c.req.method === 'POST' && /^\/api\/conversations\/[^/]+\/attachments$/.test(c.req.path)
+        c.req.method === 'POST' &&
+        (/^\/api\/conversations\/[^/]+\/attachments$/.test(c.req.path) || c.req.path === '/api/share/import')
             ? uploads(c, next)
             : smallBodies(c, next)
     )
@@ -148,6 +150,7 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/conversations', conversationRoutes())
     api.route('/sessions', sessionRoutes())
     api.route('/presets', presetRoutes())
+    api.route('/share', sharingRoutes())
     api.route('/audit', auditRoutes())
     api.route('/activity', activityRoutes())
     api.route('/tools', toolRoutes())

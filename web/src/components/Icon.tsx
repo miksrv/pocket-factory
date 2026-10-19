@@ -14,6 +14,7 @@ import {
     CircleAlert,
     ClipboardList,
     Cpu,
+    Download,
     ExternalLink,
     Eye,
     EyeOff,
@@ -46,6 +47,7 @@ import {
     Ticket,
     Trash2,
     TriangleAlert,
+    Upload,
     X,
     Zap
 } from 'lucide-react'
@@ -123,7 +125,10 @@ export const ICONS = {
     ticket: Ticket,
     /** Where the agents run (Settings → Sandboxes, a project's card) and the app an agent shows. */
     sandbox: Box,
-    preview: AppWindow
+    preview: AppWindow,
+    // Sharing: a bundle leaves as a download, comes in as an upload.
+    export: Download,
+    import: Upload
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
