@@ -2,6 +2,7 @@
    faint dot grid, white cards with hairline borders, monospace everywhere,
    pastel status pills. */
 :root {
+    color-scheme: light;
     --bg: #f7f6f2;
     --bg-dot: #e4e1da;
     --surface: #fdfcfa;
@@ -9,19 +10,22 @@
     --surface-3: #ebe8e1;
     --border: #e6e3dc;
     --border-strong: #d6d2c9;
+    /* The edge of a field: 3:1 against the surface, so an empty input is still seen as one. */
+    --field-border: #8d8b85;
     --text: #1d1d1b;
     --text-2: #4d4b46;
-    --text-dim: #8a877f;
+    --text-dim: #706d67;
     --ink: #1d1d1b;
     --on-ink: #fff;
     --ink-hover: #333;
-    --placeholder: #b3b0a8;
+    --placeholder: #76746f;
     --backdrop: rgba(29, 29, 27, 0.35);
     --on-red: #fff;
+    --red-hover: #9a1e14;
     --green-bg: #e7f3ea;
-    --green: #2f7d43;
+    --green: #2d7840;
     --amber-bg: #fbeee1;
-    --amber: #b9560f;
+    --amber: #ac500e;
     --red-bg: #fbe9e7;
     --red: #b42318;
     --blue-bg: #e9edf9;
@@ -29,25 +33,28 @@
     --purple-bg: #efe9f8;
     --purple: #6b46b8;
     --teal-bg: #e3f2f2;
-    --teal: #1f7a78;
+    --teal: #1e7573;
     --gray-bg: #efede8;
     --gray: #6b6963;
     /* Five more tones for name tiles, so a dozen entries in a list rarely share one. */
     --rose-bg: #fbe6ee;
     --rose: #b12a5e;
     --lime-bg: #eef2dc;
-    --lime: #5c7714;
+    --lime: #597313;
     --sky-bg: #e3f0f9;
     --sky: #1d6d9c;
     --gold-bg: #f8f0d2;
-    --gold: #8a6a0a;
+    --gold: #84660a;
     --brown-bg: #f3e9e1;
     --brown: #7a4b2a;
-    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a877f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23706d67' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     --radius: 10px;
     --radius-sm: 6px;
+    --shadow-sm: 0 1px 2px rgba(29, 29, 27, 0.06);
     --shadow: 0 1px 2px rgba(29, 29, 27, 0.04), 0 8px 24px -12px rgba(29, 29, 27, 0.12);
+    --shadow-lg: 0 24px 64px -24px rgba(29, 29, 27, 0.35);
+    --shadow-drawer: 0 0 40px rgba(29, 29, 27, 0.25);
     --sidebar: 248px;
 }
 
@@ -64,15 +71,17 @@
     --surface-3: #2e2d29;
     --border: #2d2c28;
     --border-strong: #3d3b36;
+    --field-border: #6f6e6a;
     --text: #e6e4df;
     --text-2: #b4b1aa;
-    --text-dim: #7f7c74;
+    --text-dim: #8e8c85;
     --ink: #e6e4df;
     --on-ink: #171716;
     --ink-hover: #cfccc5;
-    --placeholder: #5f5c55;
+    --placeholder: #878580;
     --backdrop: rgba(0, 0, 0, 0.6);
     --on-red: #171716;
+    --red-hover: #f4a69e;
     --green-bg: #1b2f22;
     --green: #6cc784;
     --amber-bg: #352617;
@@ -97,8 +106,11 @@
     --gold: #e0c35c;
     --brown-bg: #32271f;
     --brown: #d2a380;
-    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237f7c74' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238e8c85' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 24px 64px -24px rgba(0, 0, 0, 0.7);
+    --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.6);
 }
 
 * {
@@ -164,7 +176,7 @@ pre.code[data-lang]:not([data-lang='plaintext'])::after {
     position: absolute;
     top: 4px;
     right: 8px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-dim);
     text-transform: lowercase;
     letter-spacing: 0.04em;
@@ -406,7 +418,7 @@ p {
 }
 .nav .section {
     padding: 16px 10px 6px;
-    font-size: 10.5px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.14em;
     color: var(--text-dim);
@@ -428,7 +440,7 @@ p {
 }
 .badge.count {
     padding: 0 7px;
-    font-size: 10.5px;
+    font-size: 11px;
 }
 .badge.count::before {
     display: none;
@@ -632,7 +644,7 @@ td.col-main {
     letter-spacing: -0.01em;
 }
 .stat .label {
-    font-size: 10.5px;
+    font-size: 11px;
 }
 .stat .small {
     margin-top: 4px;
@@ -687,7 +699,7 @@ td {
     vertical-align: top;
 }
 th {
-    font-size: 10.5px;
+    font-size: 11px;
     background: var(--surface);
 }
 tr:last-child td {
@@ -785,7 +797,7 @@ tr.selected td {
     margin-top: 6px;
 }
 .limits-foot .badge {
-    font-size: 10px;
+    font-size: 11px;
 }
 
 /* audit log */
@@ -819,7 +831,7 @@ tr.selected td {
     background: transparent;
     border: 0;
     box-shadow: none;
-    padding: 3px 10px;
+    padding: 4px 10px;
     font-size: 12px;
     color: var(--text-2);
     border-radius: 4px;
@@ -830,7 +842,7 @@ tr.selected td {
 .tabs button.active {
     background: var(--surface);
     color: var(--text);
-    box-shadow: 0 1px 2px rgba(29, 29, 27, 0.08);
+    box-shadow: var(--shadow-sm);
 }
 .audit-row {
     border-bottom: 1px solid var(--border);
@@ -856,11 +868,11 @@ tr.selected td {
     font-variant-numeric: tabular-nums;
 }
 .audit-day {
-    font-size: 10.5px;
+    font-size: 11px;
 }
 .audit-badge {
     justify-content: center;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.06em;
 }
 .audit-text {
@@ -1210,7 +1222,7 @@ button,
     font-size: 12px;
     cursor: pointer;
     line-height: 1.5;
-    box-shadow: 0 1px 1px rgba(29, 29, 27, 0.03);
+    box-shadow: var(--shadow-sm);
     white-space: nowrap;
 }
 button:hover,
@@ -1312,7 +1324,7 @@ textarea,
 select {
     background: var(--surface);
     color: var(--text);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--field-border);
     border-radius: var(--radius-sm);
     padding: 7px 10px;
     font: inherit;
@@ -1349,12 +1361,13 @@ input[list]::-webkit-calendar-picker-indicator {
     margin: 0 -22px 0 0;
     cursor: pointer;
 }
+/* A focused field: a 2px blue ring (its border plus a 1px outline, so it survives forced colours too). */
 input:focus,
 textarea:focus,
 select:focus {
-    outline: none;
-    border-color: var(--text-dim);
-    box-shadow: 0 0 0 3px var(--surface-3);
+    outline: 1px solid var(--blue);
+    outline-offset: 0;
+    border-color: var(--blue);
 }
 input:disabled {
     background: var(--surface-2);
@@ -1366,7 +1379,7 @@ input:disabled {
 }
 [aria-invalid='true']:is(input, textarea, select):focus {
     border-color: var(--red);
-    box-shadow: 0 0 0 3px var(--red-bg);
+    outline-color: var(--red);
 }
 textarea {
     resize: vertical;
@@ -1411,6 +1424,56 @@ label.row > input[type='radio'],
 /* The schedule's live state above its form: the pane's flex column must not squeeze it under the growing textarea. */
 .routine-status {
     flex-shrink: 0;
+    margin-bottom: 14px;
+}
+/* Its stats are lines of text, not big numbers. */
+.routine-status .stat .value {
+    font-size: 13px;
+}
+.routine-triggers {
+    gap: 8px;
+}
+.routine-stat-sub {
+    gap: 4px;
+}
+.routine-note:not(.missed):not(.error) {
+    white-space: pre-wrap;
+}
+.routine-note.missed {
+    color: var(--amber);
+}
+.routine-note.error {
+    color: var(--red);
+}
+.routine-links {
+    gap: 10px;
+}
+/* A band across the card: its errors and warnings, the runs table's filter. */
+.routine-band {
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+}
+.routine-actions {
+    gap: 8px;
+    padding: 10px 16px;
+}
+.routine-preview {
+    padding: 0 16px 12px;
+}
+.routine-preview > * + * {
+    margin-top: 6px;
+}
+.routine-runs-foot {
+    padding: 8px 16px;
+}
+.run-fold {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+.run-note {
+    white-space: pre-wrap;
 }
 /* Three columns, never more: the triggers and the last firing carry several lines, so they get the room. */
 .routine-status .stat-row {
@@ -1514,27 +1577,16 @@ label.row > input[type='radio'],
     flex-wrap: wrap;
     margin-left: auto;
 }
-.host-card.shared {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-/* The connection alone (name, target, key) fills three columns; in a dialog it stacks in two. */
-.host-card.connection {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.8fr) minmax(0, 1fr);
-}
+/* In a dialog the card is just its fields: no frame of its own. */
 .host-card.compact {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     border: 0;
     padding: 0;
     background: none;
-}
-.host-card.compact > .field:nth-child(2) {
-    grid-column: 1 / -1;
 }
 .host-id {
     flex: 2 1 320px;
 }
 .host-shared-head {
-    grid-column: 1 / -1;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1544,9 +1596,6 @@ label.row > input[type='radio'],
 .host-card textarea.short {
     min-height: 84px;
 }
-.host-card.compact > .wide {
-    grid-column: 1 / -1;
-}
 .host-legacy {
     display: flex;
     align-items: center;
@@ -1555,17 +1604,24 @@ label.row > input[type='radio'],
     font-size: 11.5px;
     color: var(--amber);
 }
+/* A host / MCP server card is a form (DESIGN.md): flex rows like .form-grid, every field at least 260px,
+   the fields of a row share its whole width; `.wide` (and the head / foot lines) take a row alone. */
 .host-card {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
     gap: 10px 14px;
     padding: 12px 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface-2);
 }
+.host-card > * {
+    flex: 1 1 260px;
+    min-width: 0;
+}
 .host-card > .wide {
-    grid-column: 1 / -1;
+    flex-basis: 100%;
 }
 .host-foot {
     display: flex;
@@ -1599,7 +1655,7 @@ label.row > input[type='radio'],
     word-break: break-all;
 }
 .btn.chip {
-    padding: 2px 10px;
+    padding: 4px 10px;
     font-size: 11.5px;
     border-radius: 999px;
     color: var(--text-2);
@@ -1907,9 +1963,7 @@ dialog.modal {
     border-radius: var(--radius);
     background: var(--surface);
     color: var(--text);
-    box-shadow:
-        0 24px 64px -24px rgba(29, 29, 27, 0.35),
-        var(--shadow);
+    box-shadow: var(--shadow-lg), var(--shadow);
     overflow: hidden;
 }
 dialog.modal.wide {
@@ -2056,13 +2110,8 @@ dialog.modal[open]::backdrop {
     color: var(--on-red);
 }
 .modal-foot .btn.danger:hover {
-    background: #9a1e14;
-}
-@media (prefers-reduced-motion: reduce) {
-    dialog.modal[open],
-    dialog.modal[open]::backdrop {
-        animation: none;
-    }
+    background: var(--red-hover);
+    border-color: var(--red-hover);
 }
 .kv {
     display: flex;
@@ -2348,7 +2397,7 @@ dialog.modal[open]::backdrop {
     border-radius: 4px;
     display: inline-grid;
     place-items: center;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     background: var(--gray-bg);
     color: var(--gray);
@@ -2530,6 +2579,9 @@ dialog.modal[open]::backdrop {
     font-weight: 500;
 }
 .ask-done {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12px;
     color: var(--green);
 }
@@ -2742,7 +2794,7 @@ dialog.modal[open]::backdrop {
     border-style: dashed;
 }
 .turn .who {
-    font-size: 10.5px;
+    font-size: 11px;
     margin-bottom: 2px;
 }
 
@@ -2773,7 +2825,7 @@ dialog.modal[open]::backdrop {
         width: min(300px, 84vw) !important;
         transform: translateX(-102%);
         transition: transform 0.2s ease;
-        box-shadow: 0 0 40px rgba(29, 29, 27, 0.25);
+        box-shadow: var(--shadow-drawer);
     }
     .app.drawer-open .sidebar {
         transform: none;
@@ -2836,8 +2888,8 @@ dialog.modal[open]::backdrop {
     .trigger-card > * {
         flex-basis: 100%;
     }
-    .host-card {
-        grid-template-columns: 1fr 1fr;
+    .host-card > * {
+        flex-basis: 100%;
     }
     .field.hosts > select.add-host {
         min-width: 0;
@@ -3237,8 +3289,7 @@ details.more > .form-grid {
 .field.section {
     gap: 10px;
 }
-/* "More" folds the rest of a form; its summary is a section heading too. A plain .more (a routine's
-   project and report) is the same part of the form without the fold: only the line above it. */
+/* "More" folds what is rarely changed; its summary is a section heading too and names what is inside. */
 .more {
     padding-top: 14px;
     border-top: 1px solid var(--border);
@@ -3350,6 +3401,13 @@ details.more > summary {
 }
 
 /* A step card: what the script is for, its file, what it reads, a run of it alone. */
+.step-checks {
+    gap: 6px 16px;
+}
+.step-command {
+    width: 100%;
+    min-width: 0;
+}
 .step-name {
     font-size: 12.5px;
     color: var(--text-2);
@@ -3422,26 +3480,25 @@ details.more > summary {
     color: var(--text-dim);
 }
 .need-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     opacity: 0.85;
 }
-.need-set {
-    border: 0;
+/* Set / Allow inside a chip: a small Button shaped as a pill (primary when the name is missing). */
+.btn.sm.need-set {
     border-radius: 999px;
     padding: 1px 8px;
-    font: inherit;
+    font-size: inherit;
     font-weight: 600;
-    background: var(--ink);
-    color: var(--on-ink);
-    cursor: pointer;
+    line-height: inherit;
+    box-shadow: none;
 }
-.need-set:hover {
-    background: var(--ink-hover);
-}
-.need:not(.missing) .need-set {
+.btn.need-set:not(.primary) {
+    border-color: transparent;
     background: var(--surface-3);
-    color: var(--text);
 }
-.need:not(.missing) .need-set:hover {
+.btn.need-set:not(.primary):hover {
     background: var(--surface-2);
 }
 
@@ -3594,6 +3651,9 @@ textarea[data-secret] {
     min-width: 0;
 }
 .pipeline-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 11.5px;
@@ -3706,7 +3766,7 @@ textarea[data-secret] {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     border: 1.5px solid var(--border-strong);
     flex-shrink: 0;
@@ -3720,6 +3780,12 @@ textarea[data-secret] {
     background: var(--red);
     border-color: var(--red);
     color: var(--surface);
+}
+.step-node-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
 }
 .step-node-state.edited {
     border-color: var(--amber);
@@ -3735,9 +3801,12 @@ textarea[data-secret] {
 }
 .step-node-kind {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 1px 7px;
     border-radius: 999px;
-    font-size: 10.5px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     background: var(--gray-bg);
@@ -3780,6 +3849,10 @@ textarea[data-secret] {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.step-node-needs svg {
+    vertical-align: -2px;
+    margin-right: 4px;
+}
 .step-node-needs.missing {
     background: var(--amber-bg);
     color: var(--amber);
@@ -3804,10 +3877,9 @@ textarea[data-secret] {
     color: var(--text);
 }
 .step-node-plus {
+    display: inline-flex;
+    justify-content: center;
     width: 18px;
-    text-align: center;
-    font-size: 15px;
-    line-height: 1;
 }
 /* The step's window: the card's fields without the card around them. */
 .modal-content > .step-card {
@@ -3852,5 +3924,17 @@ button.step-choice:hover {
 @media (max-width: 900px) {
     .step-choices {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Reduced motion: no pulses, blinks, glows or slides anywhere; states still change, at once. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
 }

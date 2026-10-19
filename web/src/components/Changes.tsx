@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, ExternalLink, GitBranch, GitPullRequest } from 'lucide-react'
 
 import { api, type ChangedFile, type PullRequest, type Task } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { Icon } from './Icon'
 import { Button, ErrorBox, Markdown } from './ui'
 
 /**
@@ -71,7 +71,11 @@ export function Changes({ task, onChanged }: { task: Task; onChanged?: () => voi
                             className='dim branch'
                             title={`${git.base?.slice(0, 8)}..${git.head?.slice(0, 8)}`}
                         >
-                            <GitBranch size={12} /> {git.branch}
+                            <Icon
+                                name='branch'
+                                size={12}
+                            />{' '}
+                            {git.branch}
                             {git.default_branch && git.branch !== git.default_branch ? ` → ${git.default_branch}` : ''}
                         </span>
                     )}
@@ -82,13 +86,20 @@ export function Changes({ task, onChanged }: { task: Task; onChanged?: () => voi
                             href={current.url}
                             title={current.title}
                         >
-                            <GitPullRequest size={13} /> PR #{current.number}
+                            <Icon
+                                name='pr'
+                                size={13}
+                            />{' '}
+                            PR #{current.number}
                             {current.state !== 'OPEN'
                                 ? ` · ${current.state.toLowerCase()}`
                                 : current.isDraft
                                   ? ' · draft'
                                   : ''}{' '}
-                            <ExternalLink size={11} />
+                            <Icon
+                                name='external'
+                                size={11}
+                            />
                         </Button>
                     ) : (
                         canOpenPr && (
@@ -99,7 +110,11 @@ export function Changes({ task, onChanged }: { task: Task; onChanged?: () => voi
                                 disabled={creating}
                                 title={`Push ${git.branch} and open a pull request against ${git.default_branch}`}
                             >
-                                <GitPullRequest size={13} /> {creating ? 'Creating…' : 'Create PR'}
+                                <Icon
+                                    name='pr'
+                                    size={13}
+                                />{' '}
+                                {creating ? 'Creating…' : 'Create PR'}
                             </Button>
                         )
                     )}
@@ -187,7 +202,8 @@ function FileTree({ taskId, files }: { taskId: string; files: ChangedFile[] }) {
                         onClick={() => setShowGenerated(!showGenerated)}
                         aria-expanded={showGenerated}
                     >
-                        <ChevronRight
+                        <Icon
+                            name='expand'
                             size={13}
                             className={showGenerated ? 'open' : ''}
                         />
@@ -246,7 +262,8 @@ function FileRow({ taskId, file, name }: { taskId: string; file: ChangedFile; na
                 aria-expanded={open}
                 title={file.from ? `${file.from} → ${file.path}` : file.path}
             >
-                <ChevronRight
+                <Icon
+                    name='expand'
                     size={13}
                     className={open ? 'open' : ''}
                 />

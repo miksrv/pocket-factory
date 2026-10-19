@@ -98,7 +98,7 @@ describe('NeedsLine', () => {
                 ]}
             />
         )
-        expect(screen.getByText('✓ variable')).toBeInTheDocument()
+        expect(screen.getByText('variable')).toHaveClass('need-state')
         expect(screen.getByText('not set')).toBeInTheDocument()
         await userEvent.setup().click(screen.getByRole('button', { name: 'Set' }))
         const dialog = await screen.findByRole('dialog')

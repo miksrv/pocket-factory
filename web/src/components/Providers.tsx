@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 
 import { api, type Provider, type ProviderMcp, type ProviderTest, type ProviderView } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { CodeEditor } from './CodeEditor'
+import { Icon } from './Icon'
 import { Modal, useConfirm } from './Modal'
-import { Button } from './ui'
+import { Button, ErrorBox, SectionHead } from './ui'
 
 /**
  * Model providers besides the subscription: self-hosted models (Ollama on a
@@ -207,16 +209,22 @@ function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: Pro
     const set = (i: number, patch: Partial<ProviderMcp>) =>
         onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
     return (
-        <div className='field wide group'>
-            <span className='row between'>
-                <span>MCP servers</span>
+        <div className='field wide group section'>
+            <SectionHead
+                title='MCP servers'
+                hint="HTTP servers for this provider's tasks only; the gateway adds the key from .env"
+            >
                 <Button
                     size='sm'
                     onClick={() => onChange([...rows, { name: '', url: '', token: '' }])}
                 >
-                    Add MCP server
+                    <Icon
+                        name='add'
+                        size={12}
+                    />
+                    MCP server
                 </Button>
-            </span>
+            </SectionHead>
             {rows.map((r, i) => (
                 <span
                     key={i}
@@ -248,7 +256,6 @@ function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: Pro
                         onChange={(e) => set(i, { token: e.target.value.toUpperCase() })}
                     />
                     <Button
-                        size='sm'
                         variant='danger'
                         onClick={() => onChange(rows.filter((_, j) => j !== i))}
                     >
@@ -256,7 +263,6 @@ function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: Pro
                     </Button>
                 </span>
             ))}
-            <span className='dim'>HTTP servers for this provider's tasks only; the gateway adds the key from .env</span>
         </div>
     )
 }
@@ -361,7 +367,7 @@ export function ProviderDialog({
             open={open}
             onClose={onClose}
             title={editing ? `Provider ${editing}` : 'Add provider'}
-            icon='limits'
+            icon='provider'
             size='wide'
             description='A model server or cloud API off the subscription; its key stays in .env.'
             busy={busy}
@@ -391,6 +397,9 @@ export function ProviderDialog({
         >
             <div className='stack'>
                 <div className='form-grid'>
+                    <div className='field wide'>
+                        <SectionHead title='Connection' />
+                    </div>
                     <label className='field'>
                         <span>Name</span>
                         <input
@@ -412,7 +421,7 @@ export function ProviderDialog({
                         </select>
                         <span className='dim'>the factory translates OpenAI</span>
                     </label>
-                    <label className='field wide'>
+                    <label className='field'>
                         <span>URL</span>
                         <input
                             className='mono'
@@ -425,9 +434,7 @@ export function ProviderDialog({
                             onChange={(e) => set({ url: e.target.value })}
                         />
                         <span className='dim'>
-                            {p.kind === 'openai'
-                                ? 'up to (not including) /chat/completions'
-                                : 'up to (not including) /v1/messages'}
+                            {p.kind === 'openai' ? 'up to /chat/completions' : 'up to /v1/messages'}
                         </span>
                     </label>
                     <label className='field'>
@@ -440,45 +447,11 @@ export function ProviderDialog({
                         />
                         <span className='dim'>a variable in .env, never the key</span>
                     </label>
-                    <label className='field'>
-                        <span>Tasks at once</span>
-                        <input
-                            type='number'
-                            min={0}
-                            max={64}
-                            value={p.concurrency}
-                            onChange={(e) => set({ concurrency: Math.max(0, Number(e.target.value) || 0) })}
-                        />
-                        <span className='dim'>1 for one GPU; 0 = no limit (cloud)</span>
-                    </label>
-                    <label className='field'>
-                        <span>Output per call</span>
-                        <input
-                            type='number'
-                            min={1}
-                            max={32000}
-                            step={1000}
-                            value={p.max_output ?? ''}
-                            placeholder='8000'
-                            onChange={(e) => set({ max_output: e.target.value ? Number(e.target.value) : undefined })}
-                        />
-                        <span className='dim'>tokens per call; stops a looping model</span>
-                    </label>
-                    <label className='field'>
-                        <span>Context window</span>
-                        <input
-                            type='number'
-                            min={8000}
-                            step={1000}
-                            value={p.context ?? ''}
-                            placeholder="the CLI's assumption"
-                            onChange={(e) => set({ context: e.target.value ? Number(e.target.value) : undefined })}
-                        />
-                        <span className='dim'>real window in tokens (Ollama: num_ctx)</span>
-                    </label>
-                    <label className='field wide'>
-                        <span className='row between'>
-                            <span>Models</span>
+                    <div className='field wide group section'>
+                        <SectionHead
+                            title='Models'
+                            hint='One per line; any other id can still be typed in a file'
+                        >
                             <Button
                                 size='sm'
                                 onClick={() => void fetchModels()}
@@ -487,16 +460,16 @@ export function ProviderDialog({
                             >
                                 {fetching ? 'Fetching…' : 'Fetch from the endpoint'}
                             </Button>
-                        </span>
+                        </SectionHead>
                         <textarea
                             className='mono'
                             rows={4}
                             value={models}
+                            aria-label='Models'
                             placeholder={'gemma4:12b\nqwen3.5:9b'}
                             onChange={(e) => setModels(e.target.value)}
                         />
-                        <span className='dim'>one per line; any other id can still be typed in a file</span>
-                    </label>
+                    </div>
                     <label className='field'>
                         <span>Default model</span>
                         <select
@@ -524,25 +497,65 @@ export function ProviderDialog({
                         />
                         <span className='dim'>for the CLI's haiku-tier calls</span>
                     </label>
-                    <div className='field wide group'>
-                        <span>Prompt</span>
+                    <label className='field'>
+                        <span>Context window (tokens)</span>
+                        <input
+                            type='number'
+                            min={8000}
+                            step={1000}
+                            value={p.context ?? ''}
+                            placeholder="the CLI's assumption"
+                            onChange={(e) => set({ context: e.target.value ? Number(e.target.value) : undefined })}
+                        />
+                        <span className='dim'>the real one (Ollama: num_ctx)</span>
+                    </label>
+                    <label className='field'>
+                        <span>Output per call (tokens)</span>
+                        <input
+                            type='number'
+                            min={1}
+                            max={32000}
+                            step={1000}
+                            value={p.max_output ?? ''}
+                            placeholder='8000'
+                            onChange={(e) => set({ max_output: e.target.value ? Number(e.target.value) : undefined })}
+                        />
+                        <span className='dim'>stops a looping model</span>
+                    </label>
+                    <label className='field'>
+                        <span>Tasks at once</span>
+                        <input
+                            type='number'
+                            min={0}
+                            max={64}
+                            value={p.concurrency}
+                            onChange={(e) => set({ concurrency: Math.max(0, Number(e.target.value) || 0) })}
+                        />
+                        <span className='dim'>1 for one GPU; 0 = no limit (cloud)</span>
+                    </label>
+                    <div className='field wide group section'>
+                        <SectionHead
+                            title='Prompt'
+                            hint='Models under ~30B need light mode'
+                        />
                         <label
                             className='row'
                             style={{ gap: 8 }}
+                            title="A short system prompt (the agent's body or light-system.md) and six built-in tools"
                         >
                             <input
                                 type='checkbox'
                                 checked={p.light}
                                 onChange={(e) => set({ light: e.target.checked })}
                             />
-                            <span>light mode — a short system prompt and a few tools</span>
+                            <span>light mode</span>
                         </label>
-                        <span className='dim'>
-                            models under ~30B need it: the agent's body (or light-system.md), six built-in tools
-                        </span>
                     </div>
-                    <div className='field wide group'>
-                        <span>TLS certificate</span>
+                    <div className='field wide group section'>
+                        <SectionHead
+                            title='TLS certificate'
+                            hint='A self-signed box only: its CA, trusted at once'
+                        />
                         {initial?.ca && !dropCa && !ca.trim() && (
                             <span
                                 className='row'
@@ -564,20 +577,18 @@ export function ProviderDialog({
                                 </Button>
                             </span>
                         )}
-                        <textarea
-                            className='mono'
-                            rows={ca ? 4 : 2}
+                        <CodeEditor
+                            path='ca.pem'
+                            label='CA certificate'
+                            rows={4}
                             value={ca}
                             placeholder={
                                 initial?.ca && !dropCa
                                     ? 'paste another CA certificate to replace it'
-                                    : '-----BEGIN CERTIFICATE-----  (only for a server with its own CA)'
+                                    : '-----BEGIN CERTIFICATE-----  (empty for a public certificate)'
                             }
-                            onChange={(e) => setCa(e.target.value)}
+                            onChange={setCa}
                         />
-                        <span className='dim'>
-                            a self-signed box only: its CA, trusted at once; empty for a public certificate
-                        </span>
                     </div>
                     <McpRows
                         rows={mcp}
@@ -585,9 +596,15 @@ export function ProviderDialog({
                     />
                 </div>
                 {nameTaken && (
-                    <div className='error small'>{`A provider named "${p.name.trim()}" already exists — pick another name, or open it from the list.`}</div>
+                    <ErrorBox
+                        inline
+                        error={`A provider named "${p.name.trim()}" already exists — pick another name, or open it from the list.`}
+                    />
                 )}
-                {error && <div className='error small'>{error}</div>}
+                <ErrorBox
+                    error={error}
+                    inline
+                />
             </div>
         </Modal>
     )
@@ -634,20 +651,24 @@ export function ProvidersSection() {
 
     return (
         <div className='stack'>
-            {data.error && <div className='error small'>{data.error}</div>}
+            <ErrorBox error={data.error} />
             {overview?.error && (
-                <div className='error small'>
-                    The file on disk is not valid YAML ({overview.error}); saving a provider replaces it.
-                </div>
+                <ErrorBox
+                    inline
+                    error={`The file on disk is not valid YAML (${overview.error}); saving a provider replaces it.`}
+                />
             )}
             <div className='row between wrap'>
-                <span className='dim small'>
+                <span
+                    className='dim small'
+                    title='Edit sets the endpoint, models and MCP; a routine, a chat or an agent picks one'
+                >
                     {overview
                         ? overview.providers.length
                             ? `${overview.providers.length} provider${overview.providers.length === 1 ? '' : 's'} besides the subscription`
                             : 'No other providers yet'
                         : 'Loading…'}{' '}
-                    · Edit sets the endpoint, models and MCP; a routine, a chat or an agent picks one; keys stay in .env
+                    · keys stay in .env
                 </span>
                 <Button
                     size='sm'

@@ -5,7 +5,7 @@ import { api, type EnvNeed, fmt, type SecretScope, type VaultEntry, type VaultOv
 import { useAsync } from '../lib/useAsync'
 import { Icon } from './Icon'
 import { Modal, useConfirm } from './Modal'
-import { Button, ErrorBox, SectionHead, Tabs } from './ui'
+import { Button, Empty, ErrorBox, SectionHead, Tabs } from './ui'
 
 /*
  * Secrets and variables, as GitHub Actions has them: a secret is written and
@@ -75,10 +75,10 @@ export function SecretsSection() {
             </span>
             <ErrorBox error={data.error} />
             {data.data && entries.length === 0 && (
-                <div className='dim small'>
+                <Empty inline>
                     {tab === 'secret' ? 'No secrets yet.' : 'No variables yet.'} A routine's step card offers Set for
                     what its script needs.
-                </div>
+                </Empty>
             )}
             {entries.length > 0 && (
                 <div className='vault-list'>
@@ -261,7 +261,7 @@ export function SecretDialog({
             open={open}
             onClose={onClose}
             size='wide'
-            icon='key'
+            icon={secret ? 'secret' : 'variable'}
             busy={busy}
             title={editing ? `${secret ? 'Update' : 'Edit'} ${what} ${editing.name}` : `New ${what}`}
             description={
@@ -294,7 +294,7 @@ export function SecretDialog({
                     void save()
                 }}
             >
-                <label className='field wide'>
+                <label className='field'>
                     <span>Name</span>
                     <input
                         className='mono'
@@ -448,10 +448,19 @@ export function NeedsLine({ needs, routine, onChanged }: { needs: EnvNeed[]; rou
                             size={12}
                         />
                         <span className='mono'>{n.name}</span>
-                        <span className='need-state'>{ok ? `✓ ${label}` : label}</span>
+                        <span className='need-state'>
+                            {ok && (
+                                <Icon
+                                    name='ok'
+                                    size={12}
+                                />
+                            )}
+                            {label}
+                        </span>
                         {(n.from === null || n.from === 'env') && (
-                            <button
-                                type='button'
+                            <Button
+                                size='sm'
+                                variant={!ok && !n.optional ? 'primary' : undefined}
                                 className='need-set'
                                 onClick={() => void open(n)}
                                 title={
@@ -463,7 +472,7 @@ export function NeedsLine({ needs, routine, onChanged }: { needs: EnvNeed[]; rou
                                 }
                             >
                                 {n.out_of_scope ? 'Allow' : 'Set'}
-                            </button>
+                            </Button>
                         )}
                     </span>
                 )
@@ -529,14 +538,24 @@ export function SkillSecrets({ skill }: { skill: string }) {
                                     {!n.entry ? (
                                         <span className='need missing'>{n.env ? 'only in .env' : 'not set'}</span>
                                     ) : routines.length === 0 ? (
-                                        <span className='need ok'>✓ {scopeText(n.entry.scope)}</span>
+                                        <span className='need ok'>
+                                            <Icon
+                                                name='ok'
+                                                size={12}
+                                            />
+                                            {scopeText(n.entry.scope)}
+                                        </span>
                                     ) : (
                                         routines.map((r) => (
                                             <span
                                                 key={r}
                                                 className={`need ${n.reaches.includes(r) ? 'ok' : 'missing'}`}
                                             >
-                                                {n.reaches.includes(r) ? '✓' : '✗'} {r}
+                                                <Icon
+                                                    name={n.reaches.includes(r) ? 'ok' : 'failed'}
+                                                    size={12}
+                                                />
+                                                {r}
                                             </span>
                                         ))
                                     )}

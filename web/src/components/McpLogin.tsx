@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { api, type McpEntry, type McpLogin } from '../lib/api'
+import { Icon } from './Icon'
 import { Modal } from './Modal'
-import { Button } from './ui'
+import { Button, ErrorBox } from './ui'
 
 /**
  * The sign-in window for an MCP server: runs `claude mcp login <name>` in the
@@ -151,6 +152,7 @@ export function McpLoginDialog({
             onClose={onClose}
             title={`Authorize ${server.label}`}
             icon='key'
+            description='OAuth sign-in through the Claude CLI in the factory'
             busy={busy}
             closeButton={false}
             footer={footer}
@@ -170,7 +172,11 @@ export function McpLoginDialog({
                             rel='noopener noreferrer'
                             data-autofocus
                         >
-                            Open the sign-in page ↗
+                            Open the sign-in page{' '}
+                            <Icon
+                                name='external'
+                                size={12}
+                            />
                         </a>
                         <Button
                             size='sm'
@@ -216,7 +222,10 @@ export function McpLoginDialog({
                     </div>
                 )}
                 {login?.state === 'failed' && (
-                    <div className='error small'>{login.message ?? 'The sign-in failed'}</div>
+                    <ErrorBox
+                        error={login.message ?? 'The sign-in failed'}
+                        inline
+                    />
                 )}
                 {login?.state === 'cancelled' && <div className='dim small'>{login.message ?? 'Cancelled.'}</div>}
                 {error && (

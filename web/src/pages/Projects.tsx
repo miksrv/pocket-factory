@@ -4,7 +4,7 @@ import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
 import { ProjectToolchainField } from '../components/Toolchains'
 import { Button } from '../components/ui'
-import { api, type CatalogEntry, type McpEntry, type ProjectHost } from '../lib/api'
+import { api, type CatalogEntry, fmt, type McpEntry, type ProjectHost } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 
 // The notes are the agent's briefing: what the supervisor never reads (the checks to run, the tracker) is prose here, not a field.
@@ -100,7 +100,7 @@ export function ProjectsPage() {
                             <div className='form-grid'>
                                 <Field
                                     label='Checkout'
-                                    hint='Only when the folder is not named like the project.'
+                                    hint='only if the folder is named otherwise'
                                 >
                                     <input
                                         className='mono'
@@ -121,7 +121,20 @@ export function ProjectsPage() {
                                 {(providers.data?.providers.length ?? 0) > 0 && (
                                     <Field
                                         label='Delegate to providers'
-                                        hint='Roles with a provider may run there for this project; unticked = on the subscription.'
+                                        hint={
+                                            roles.length > 0 &&
+                                            !(Array.isArray(fm.providers) && fm.providers.length > 0) ? (
+                                                <span
+                                                    title={`${roles.join(', ')} ${roles.length === 1 ? 'runs' : 'run'} on the subscription here; tick a provider to let roles run there.`}
+                                                >
+                                                    {`${fmt.plural(roles.length, 'role')} on the subscription here`}
+                                                </span>
+                                            ) : (
+                                                <span title='Roles with a provider may run there for this project; unticked = on the subscription.'>
+                                                    unticked = on the subscription
+                                                </span>
+                                            )
+                                        }
                                         wide
                                         group
                                     >
@@ -151,12 +164,6 @@ export function ProjectsPage() {
                                                 )
                                             })}
                                         </div>
-                                        {roles.length > 0 &&
-                                            !(Array.isArray(fm.providers) && fm.providers.length > 0) && (
-                                                <span className='dim small'>
-                                                    {`${roles.join(', ')} ${roles.length === 1 ? 'runs' : 'run'} on the subscription here.`}
-                                                </span>
-                                            )}
                                     </Field>
                                 )}
                             </div>

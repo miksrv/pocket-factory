@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 
 import { type McpServerConfig, type McpStatus } from '../lib/api'
-import { Button, CloseButton } from './ui'
+import { CodeEditor } from './CodeEditor'
+import { Icon } from './Icon'
+import { Button, CloseButton, Empty, ErrorBox, SectionHead } from './ui'
 
 /**
  * The one editor for a set of MCP servers, used by Settings (the owner's
@@ -74,6 +76,8 @@ export function McpServersField({
     onChange,
     status,
     empty = 'No servers. Add one: an HTTP server needs a URL, a stdio server a command; secrets only as ${VAR} with the value in .env.',
+    title = 'Servers',
+    hint,
     expandsVars = true
 }: {
     value: Record<string, McpServerConfig>
@@ -81,6 +85,9 @@ export function McpServersField({
     /** What the last session reported per server, when known. */
     status?: McpStatus[] | null
     empty?: string
+    /** The section's heading and its one line. */
+    title?: string
+    hint?: string
     /** The target file expands `${VAR}` (mcp.json does, an agent file does not): literal header / env values are flagged only then. */
     expandsVars?: boolean
 }) {
@@ -135,35 +142,47 @@ export function McpServersField({
 
     return (
         <div className='stack'>
-            <div className='row wrap'>
-                <Button
-                    size='sm'
-                    onClick={toggleJson}
-                    disabled={json !== null && Boolean(jsonError)}
-                >
-                    {json === null ? 'Edit as JSON' : 'Back to the form'}
-                </Button>
-                <Button
-                    size='sm'
-                    onClick={add}
-                    disabled={json !== null}
-                >
-                    Add server
-                </Button>
-            </div>
+            <SectionHead
+                title={title}
+                hint={hint ?? (expandsVars ? 'Secrets only as ${VAR}, the value in .env' : undefined)}
+            >
+                <span className='row'>
+                    <Button
+                        size='sm'
+                        onClick={toggleJson}
+                        disabled={json !== null && Boolean(jsonError)}
+                    >
+                        {json === null ? 'Edit as JSON' : 'Back to the form'}
+                    </Button>
+                    <Button
+                        size='sm'
+                        onClick={add}
+                        disabled={json !== null}
+                    >
+                        <Icon
+                            name='add'
+                            size={12}
+                        />
+                        Server
+                    </Button>
+                </span>
+            </SectionHead>
             {json !== null ? (
                 <>
-                    <textarea
-                        className='mono'
+                    <CodeEditor
+                        path='mcp.json'
+                        label='MCP servers as JSON'
                         value={json}
-                        onChange={(e) => editJson(e.target.value)}
+                        onChange={editJson}
                         rows={12}
-                        spellCheck={false}
                     />
-                    {jsonError && <div className='error small'>JSON: {jsonError}</div>}
+                    <ErrorBox
+                        error={jsonError && `JSON: ${jsonError}`}
+                        inline
+                    />
                 </>
             ) : drafts.length === 0 ? (
-                <div className='dim small'>{empty}</div>
+                <Empty inline>{empty}</Empty>
             ) : (
                 drafts.map((d, i) => (
                     <McpCard
@@ -242,10 +261,7 @@ function McpCard({
                     </label>
                 </>
             ) : (
-                <label
-                    className='field'
-                    style={{ gridColumn: 'span 2' }}
-                >
+                <label className='field'>
                     <span>URL</span>
                     <input
                         className='mono'
@@ -302,10 +318,8 @@ function PairsField({
 }) {
     const set = (i: number, patch: Partial<Pair>) => onChange(list.map((p, j) => (j === i ? { ...p, ...patch } : p)))
     return (
-        <div className='field wide'>
-            <span>
-                {label} <span className='dim'>· {hint}</span>
-            </span>
+        <div className='field wide group'>
+            <span>{label}</span>
             <div className='pairs'>
                 {list.map((p, i) => (
                     <div
@@ -351,6 +365,7 @@ function PairsField({
                     Add {label.toLowerCase() === 'headers' ? 'header' : 'variable'}
                 </Button>
             </div>
+            <span className='dim'>{hint}</span>
         </div>
     )
 }

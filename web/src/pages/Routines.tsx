@@ -4,10 +4,11 @@ import { Link } from 'react-router-dom'
 import { Editor, Field, str } from '../components/Editor'
 import { FolderFiles } from '../components/Files'
 import { ProjectHosts } from '../components/Hosts'
+import { Icon } from '../components/Icon'
 import { useConfirm } from '../components/Modal'
 import { kindOf, type RawStep, StepsField } from '../components/Pipeline'
 import { ModelPicker } from '../components/Providers'
-import { Button, ErrorBox, SectionHead, StatusBadge, useToast } from '../components/ui'
+import { Button, Empty, ErrorBox, SectionHead, Stat, StatusBadge, useToast } from '../components/ui'
 import {
     api,
     type CatalogEntry,
@@ -320,20 +321,25 @@ export function RoutinesPage() {
                             <label
                                 className='row'
                                 style={{ gap: 8 }}
+                                title='Switch the routine off after its next run'
                             >
                                 <input
                                     type='checkbox'
                                     checked={fm.once === true}
                                     onChange={(e) => set({ once: e.target.checked ? true : undefined })}
                                 />
-                                <span>Run once (switch off after the next run)</span>
+                                <span>Run once</span>
                             </label>
                         </div>
                         {newOnly && (
                             <>
                                 <Field
                                     label='First run'
-                                    hint='Run now never skips: it hands over what is new at once.'
+                                    hint={
+                                        <span title='Run now never skips: it hands over what is new at once.'>
+                                            Run now never skips
+                                        </span>
+                                    }
                                 >
                                     <select
                                         value={
@@ -362,12 +368,12 @@ export function RoutinesPage() {
                                 </Field>
                             </>
                         )}
-                        <div className='field wide more'>
+                        <div className='field wide group section'>
+                            <SectionHead title='Project and delivery' />
                             <div className='form-grid'>
                                 <Field
                                     label='Project'
-                                    hint='Runs in its checkout; empty = the workspaces root.'
-                                    wide
+                                    hint='Its checkout; empty = workspaces root'
                                 >
                                     <select
                                         value={str(fm.project)}
@@ -399,7 +405,11 @@ export function RoutinesPage() {
                                 {str(fm.session) === 'continue' && (
                                     <Field
                                         label='Session'
-                                        hint='fresh is the default: the memory is this file.'
+                                        hint={
+                                            <span title='The memory between runs is this file, so a fresh session is the default.'>
+                                                fresh is the default
+                                            </span>
+                                        }
                                     >
                                         <select
                                             value={str(fm.session) || 'fresh'}
@@ -644,142 +654,104 @@ function Status({
     // The last firing that queued a task is often the last firing itself: then one badge, not the same run twice.
     const taskLine = lastTask && lastTask.id !== last?.id
     return (
-        <div
-            className='card pad0 routine-status'
-            style={{ marginBottom: 14 }}
-        >
+        <div className='card pad0 routine-status'>
             <div className='stat-row'>
-                <div className='stat'>
-                    <span className='label dim'>Runs</span>
-                    <span
-                        className='value small stack'
-                        style={{ fontSize: 13, gap: 8 }}
-                    >
-                        {view.triggers.length ? (
-                            view.triggers.map((t, i) => (
-                                <TriggerLine
-                                    key={i}
-                                    trigger={t}
-                                />
-                            ))
-                        ) : (
-                            <span>by hand only</span>
-                        )}
-                    </span>
-                    <span className='small dim'>
-                        {[
-                            view.steps.map((s) => s.name).join(' → '),
-                            view.has_agent ? (view.agent ? `as ${view.agent}` : 'the orchestrator') : 'no agent',
-                            model,
-                            view.once ? 'once' : null,
-                            hasSources ? `${view.seen} item(s) seen` : null
-                        ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                    </span>
-                </div>
-                <div className='stat'>
-                    <span className='label dim'>Next run</span>
-                    <span
-                        className='value small'
-                        style={{ fontSize: 13 }}
-                    >
-                        {view.next_run
+                <Stat
+                    label='Runs'
+                    value={
+                        <span className='stack routine-triggers'>
+                            {view.triggers.length ? (
+                                view.triggers.map((t, i) => (
+                                    <TriggerLine
+                                        key={i}
+                                        trigger={t}
+                                    />
+                                ))
+                            ) : (
+                                <span>by hand only</span>
+                            )}
+                        </span>
+                    }
+                    sub={[
+                        view.steps.map((s) => s.name).join(' → '),
+                        view.has_agent ? (view.agent ? `as ${view.agent}` : 'the orchestrator') : 'no agent',
+                        model,
+                        view.once ? 'once' : null,
+                        hasSources ? `${view.seen} item(s) seen` : null
+                    ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                />
+                <Stat
+                    label='Next run'
+                    value={
+                        view.next_run
                             ? `in ${fmt.until(view.next_run)}`
                             : !view.triggers.length
                               ? 'when you press Run now'
                               : view.enabled
                                 ? 'never (no matching minute within a year)'
-                                : 'off'}
-                    </span>
-                    {view.next_run && <span className='small dim'>{fmt.when(view.next_run)}</span>}
-                </div>
-                <div className='stat'>
-                    <span className='label dim'>Last firing</span>
-                    <span
-                        className='value small'
-                        style={{ fontSize: 13 }}
-                    >
-                        {last ? (
+                                : 'off'
+                    }
+                    sub={view.next_run ? fmt.when(view.next_run) : undefined}
+                />
+                <Stat
+                    label='Last firing'
+                    value={
+                        last ? (
                             <>
                                 <RunBadge run={last} /> {fmt.ago(last.fired_at)}
                             </>
                         ) : (
                             'never'
-                        )}
-                    </span>
-                    {last?.note && (
-                        <span
-                            className={`small ${last.status === 'missed' || last.status === 'error' ? '' : 'dim'}`}
-                            style={
-                                last.status === 'missed'
-                                    ? { color: 'var(--amber)' }
-                                    : last.status === 'error'
-                                      ? { color: 'var(--red)' }
-                                      : { whiteSpace: 'pre-wrap' }
-                            }
-                        >
-                            {last.note.length > 300 ? `${last.note.slice(0, 300)}…` : last.note}
-                        </span>
-                    )}
-                    {taskLine && (
-                        <span className='small dim'>
-                            last task <RunBadge run={lastTask} /> {fmt.ago(lastTask.fired_at)}
-                        </span>
-                    )}
-                    {(lastTask?.task_id || view.conversation_id) && (
-                        <span
-                            className='row'
-                            style={{ gap: 10 }}
-                        >
-                            {lastTask?.task_id && (
-                                <Link
-                                    className='small'
-                                    to={`/tasks/${lastTask.task_id}`}
-                                >
-                                    open task
-                                </Link>
-                            )}
-                            {view.conversation_id && (
-                                <Link
-                                    className='small'
-                                    to={`/chat/${view.conversation_id}`}
-                                >
-                                    open thread
-                                </Link>
-                            )}
-                        </span>
-                    )}
-                </div>
+                        )
+                    }
+                    sub={
+                        last?.note || taskLine || lastTask?.task_id || view.conversation_id ? (
+                            <span className='stack routine-stat-sub'>
+                                {last?.note && (
+                                    <span className={`routine-note ${last.status}`}>
+                                        {last.note.length > 300 ? `${last.note.slice(0, 300)}…` : last.note}
+                                    </span>
+                                )}
+                                {taskLine && (
+                                    <span>
+                                        last task <RunBadge run={lastTask} /> {fmt.ago(lastTask.fired_at)}
+                                    </span>
+                                )}
+                                {(lastTask?.task_id || view.conversation_id) && (
+                                    <span className='row routine-links'>
+                                        {lastTask?.task_id && <Link to={`/tasks/${lastTask.task_id}`}>open task</Link>}
+                                        {view.conversation_id && (
+                                            <Link to={`/chat/${view.conversation_id}`}>open thread</Link>
+                                        )}
+                                    </span>
+                                )}
+                            </span>
+                        ) : undefined
+                    }
+                />
             </div>
             {(view.errors.length > 0 || view.warnings.length > 0) && (
-                <div
-                    style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}
-                    className='stack'
-                >
+                <div className='stack routine-band'>
                     {view.errors.map((e) => (
-                        <div
+                        <ErrorBox
                             key={e}
-                            className='error small'
-                        >
-                            {e}
-                        </div>
+                            error={e}
+                            inline
+                        />
                     ))}
                     {view.warnings.map((w) => (
                         <div
                             key={w}
-                            className='small'
-                            style={{ color: 'var(--amber)' }}
+                            className='small warn-text'
                         >
                             {w}
                         </div>
                     ))}
                 </div>
             )}
-            <div
-                className='row wrap'
-                style={{ padding: '10px 16px', gap: 8 }}
-            >
+            <div className='row wrap routine-actions'>
                 {view.errors.length ? (
                     <span className='badge failed'>invalid</span>
                 ) : view.enabled ? (
@@ -857,7 +829,7 @@ function Status({
             </div>
             <ErrorBox error={error} />
             {preview && (
-                <div style={{ padding: '0 16px 12px' }}>
+                <div className='routine-preview'>
                     <div className='row between'>
                         <span className='small dim'>
                             Steps ran in {fmt.duration(preview.ms)}
@@ -874,10 +846,7 @@ function Status({
                         </Button>
                     </div>
                     {preview.outputs.map((o, i) => (
-                        <div
-                            key={i}
-                            style={{ marginTop: 6 }}
-                        >
+                        <div key={i}>
                             <div className='dim small'>
                                 {o.name} · {fmt.duration(o.ms)}
                                 {o.truncated ? ' · output cut' : ''}
@@ -886,10 +855,7 @@ function Status({
                         </div>
                     ))}
                     {preview.items.length > 0 && (
-                        <div
-                            className='mcp-servers'
-                            style={{ marginTop: 6 }}
-                        >
+                        <div className='mcp-servers'>
                             {preview.items.map((item) => (
                                 <div
                                     key={item.key}
@@ -933,10 +899,7 @@ function Status({
             )}
             {showRuns && (
                 <div className='card-scroll routine-runs'>
-                    <label
-                        className='row small dim'
-                        style={{ gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border)' }}
-                    >
+                    <label className='row small dim routine-band'>
                         <input
                             type='checkbox'
                             checked={allRuns}
@@ -968,24 +931,20 @@ function Status({
                                 </tbody>
                             </table>
                             {runs.data.length >= RUNS_SHOWN && (
-                                <div
-                                    className='dim small'
-                                    style={{ padding: '8px 16px' }}
-                                >
-                                    The last {RUNS_SHOWN} runs.
+                                <div className='routine-runs-foot'>
+                                    <Empty inline>The last {RUNS_SHOWN} runs.</Empty>
                                 </div>
                             )}
                         </>
                     ) : (
-                        <div
-                            className='dim small'
-                            style={{ padding: '10px 16px' }}
-                        >
-                            {runs.loading
-                                ? 'Loading…'
-                                : allRuns
-                                  ? 'No firings yet.'
-                                  : 'No task, error or missed firing yet.'}
+                        <div className='routine-runs-foot'>
+                            <Empty inline>
+                                {runs.loading
+                                    ? 'Loading…'
+                                    : allRuns
+                                      ? 'No firings yet.'
+                                      : 'No task, error or missed firing yet.'}
+                            </Empty>
                         </div>
                     )}
                 </div>
@@ -1014,17 +973,21 @@ function RunRow({ run: r }: { run: RoutineRun }) {
                     className='nowrap'
                     title={fmt.when(r.fired_at)}
                 >
-                    {steps.length > 0 && <span className='dim'>{open ? '▾ ' : '▸ '}</span>}
+                    {steps.length > 0 && (
+                        <span className='dim run-fold'>
+                            <Icon
+                                name={open ? 'collapse' : 'expand'}
+                                size={12}
+                            />
+                        </span>
+                    )}
                     {fmt.ago(r.fired_at)}
                 </td>
                 <td>{r.trigger === 'cron' || r.trigger === 'poll' ? 'schedule' : r.trigger}</td>
                 <td>
                     <RunBadge run={r} />
                 </td>
-                <td
-                    className='col-main small'
-                    style={{ whiteSpace: 'pre-wrap' }}
-                >
+                <td className='col-main small run-note'>
                     {steps.length > 0 && (
                         <span className='run-steps'>
                             {steps.map((s) => (
@@ -1033,7 +996,11 @@ function RunRow({ run: r }: { run: RoutineRun }) {
                                     className={`badge ${s.ok ? 'done' : 'failed'}`}
                                     title={`${s.name}: ${s.ok ? 'ok' : 'failed'} in ${fmt.duration(s.ms)}`}
                                 >
-                                    {s.ok ? '✓' : '✗'} {s.name}
+                                    <Icon
+                                        name={s.ok ? 'ok' : 'failed'}
+                                        size={12}
+                                    />
+                                    {s.name}
                                 </span>
                             ))}
                         </span>
@@ -1100,7 +1067,16 @@ function PipelinesOverview({ routines }: { routines: RoutineView[] }) {
         <div className='pipelines'>
             <SectionHead
                 title='All pipelines'
-                hint='Each step coloured by the last run; ⚠ = a variable it reads is not set.'
+                hint={
+                    <>
+                        Each step coloured by its last run;{' '}
+                        <Icon
+                            name='alert'
+                            size={12}
+                        />{' '}
+                        = a variable it reads is not set.
+                    </>
+                }
             />
             {routines.map((r) => {
                 const last = r.last_run?.steps ?? []
@@ -1158,7 +1134,12 @@ function PipelinesOverview({ routines }: { routines: RoutineView[] }) {
                                                     .filter(Boolean)
                                                     .join('\n')}
                                             >
-                                                {missing && '⚠ '}
+                                                {missing && (
+                                                    <Icon
+                                                        name='alert'
+                                                        size={12}
+                                                    />
+                                                )}
                                                 {step.kind === 'agent' ? (r.agent ?? 'orchestrator') : step.name}
                                             </span>
                                         </span>

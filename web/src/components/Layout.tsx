@@ -169,7 +169,10 @@ export function Layout() {
                     aria-label='Menu'
                     onClick={() => setOpen(true)}
                 >
-                    ☰
+                    <Icon
+                        name='menu'
+                        size={18}
+                    />
                 </Button>
                 <span
                     className='brand'

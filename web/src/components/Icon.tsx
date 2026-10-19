@@ -1,30 +1,46 @@
 import {
     Activity,
+    ArrowDown,
     Bell,
     BellOff,
     Bot,
     Braces,
+    Check,
+    ChevronDown,
+    ChevronRight,
+    CircleAlert,
     ClipboardList,
+    Cpu,
+    ExternalLink,
     Eye,
     EyeOff,
+    File,
     FileText,
     FolderGit2,
     Gauge,
+    GitBranch,
+    GitPullRequest,
     KeyRound,
     LayoutDashboard,
     ListChecks,
     Lock,
     LogOut,
     type LucideIcon,
+    Menu,
     MessageSquare,
     Moon,
     Package,
+    Paperclip,
+    Plus,
     Repeat,
     Send,
+    SendHorizontal,
     Server,
     Settings,
     ShieldCheck,
+    SquareTerminal,
     Sun,
+    Ticket,
     Trash2,
     TriangleAlert,
     X,
@@ -76,7 +92,30 @@ export const ICONS = {
     eyeOff: EyeOff,
     /** The sidebar's theme switch: the icon names what a click gives. */
     sun: Sun,
-    moon: Moon
+    moon: Moon,
+    /** A file of a skill's or routine's folder; an attachment is a paper clip (a transcript is `sessions`). */
+    file: File,
+    attachment: Paperclip,
+    /** A model provider (Settings → Providers): a chip, not the limits gauge. */
+    provider: Cpu,
+    /** Controls: the phone menu, add, open elsewhere, fold / unfold, send, jump to the end. */
+    menu: Menu,
+    add: Plus,
+    external: ExternalLink,
+    expand: ChevronRight,
+    collapse: ChevronDown,
+    send: SendHorizontal,
+    down: ArrowDown,
+    /** Git, in the Changes panel. */
+    branch: GitBranch,
+    pr: GitPullRequest,
+    /** A result: done, failed, needs a look. `warning` stays the triangle of a destructive window. */
+    ok: Check,
+    failed: X,
+    alert: CircleAlert,
+    /** A routine step's kind: a script, a Trac query (pull requests are `pr`, the agent `agents`). */
+    script: SquareTerminal,
+    ticket: Ticket
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
