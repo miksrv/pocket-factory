@@ -5,6 +5,7 @@ import { api, type CatalogEntry, fmt, type Kind } from '../lib/api'
 import { setUnsaved, useLeaveGuard } from '../lib/unsaved'
 import { useAsync } from '../lib/useAsync'
 import { useConfirm } from './Modal'
+import { ExportButton, ImportButton } from './Sharing'
 import { Tile } from './Tile'
 import { Button, Empty, ErrorBox, Intro, Markdown, PageHead, SectionHead, Tabs, useToast } from './ui'
 
@@ -114,6 +115,7 @@ export function Editor({
                         ‹ {backTo.label}
                     </Button>
                 )}
+                {kind !== 'projects' && <ImportButton onImported={list.reload} />}
                 <Button
                     variant='primary'
                     onClick={startNew}
@@ -435,6 +437,12 @@ function Form({
                     <span className={`badge ${dirty ? 'queued' : 'done'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>
                 )}
                 <div className='toolbar'>
+                    {entry && (
+                        <ExportButton
+                            kind={kind}
+                            name={entry.name}
+                        />
+                    )}
                     {entry && (
                         <Button
                             variant='danger'

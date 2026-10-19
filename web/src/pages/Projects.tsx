@@ -2,7 +2,8 @@ import { type ReactNode, useState } from 'react'
 
 import { Editor, Field, str } from '../components/Editor'
 import { ProjectHosts } from '../components/Hosts'
-import { ProjectToolchainField } from '../components/Toolchains'
+import { Icon } from '../components/Icon'
+import { ProjectSandboxCard } from '../components/Sandboxes'
 import { Button } from '../components/ui'
 import { api, type CatalogEntry, fmt, type McpEntry, type ProjectHost } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
@@ -45,6 +46,7 @@ export function ProjectsPage() {
             describe={(e) => str(e.frontmatter.repo).replace(/^https?:\/\/(www\.)?github\.com\//, '')}
             intro='A project file tells the agent which repository it is, how work becomes a PR, what to run and which hosts it touches. Pick one from the list to edit it, or describe a new one.'
             newLabel='New project'
+            aside={(entry) => <ProjectSandboxCard slug={entry.name} />}
             form={(fm, set, entry) => {
                 const hosts = (Array.isArray(fm.hosts) ? fm.hosts : []).filter(
                     (h): h is ProjectHost => Boolean(h) && typeof h === 'object'
@@ -85,7 +87,10 @@ export function ProjectsPage() {
                             registry={mcp.data?.servers ?? []}
                             onChange={(next) => set({ mcp: next })}
                         />
-                        <ProjectToolchainField slug={str(fm.slug)} />
+                        <NetworkField
+                            value={Array.isArray(fm.network) ? (fm.network as unknown[]).map(String) : []}
+                            onChange={(next) => set({ network: next.length ? next : undefined })}
+                        />
                         <ProjectHosts
                             value={hosts}
                             onChange={(next) => set({ hosts: next })}
@@ -172,6 +177,82 @@ export function ProjectsPage() {
                 )
             }}
         />
+    )
+}
+
+/** A host as the sandbox's policy takes it: `host`, `host:port`, `*.domain`, an address. */
+const RESOURCE = /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i
+
+/**
+ * What the project's sandbox may reach besides the registries, GitHub and the AI services its
+ * policy already opens: one host per chip (`network:` in the file). The project's SSH hosts and
+ * its routines' Trac sites are opened without being listed here.
+ */
+function NetworkField({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+    const [draft, setDraft] = useState('')
+    const entry = draft.trim().toLowerCase()
+    const valid = RESOURCE.test(entry) && !value.includes(entry)
+    const add = () => {
+        if (!valid) return
+        onChange([...value, entry])
+        setDraft('')
+    }
+    return (
+        <Field
+            label='Network'
+            section
+            hint='Hosts the sandbox may reach besides registries and GitHub; its SSH hosts are open already.'
+            wide
+            group
+        >
+            <div className='stack'>
+                {value.length > 0 && (
+                    <div className='row wrap'>
+                        {value.map((host) => (
+                            <span
+                                key={host}
+                                className='badge plain mono'
+                            >
+                                {host}
+                                <Button
+                                    size='sm'
+                                    variant='ghost'
+                                    className='chip-x'
+                                    aria-label={`Remove ${host}`}
+                                    onClick={() => onChange(value.filter((h) => h !== host))}
+                                >
+                                    <Icon
+                                        name='close'
+                                        size={11}
+                                    />
+                                </Button>
+                            </span>
+                        ))}
+                    </div>
+                )}
+                <div className='row'>
+                    <input
+                        className='mono'
+                        value={draft}
+                        aria-label='Host to allow'
+                        placeholder='trac.example.com, *.example.com, 10.0.0.5:22'
+                        onChange={(e) => setDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault()
+                                add()
+                            }
+                        }}
+                    />
+                    <Button
+                        disabled={!valid}
+                        onClick={add}
+                    >
+                        Add
+                    </Button>
+                </div>
+            </div>
+        </Field>
     )
 }
 

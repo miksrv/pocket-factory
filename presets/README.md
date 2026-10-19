@@ -1,17 +1,18 @@
 # Presets
 
-A preset is a ready-made bundle of factory files — sub-agents, skills and project templates — that a colleague can install with one click from the web UI (Presets → Install) or by copying the files onto the volume.
+A preset is a ready-made bundle of factory files — sub-agents, skills, routines and project templates — that a colleague can install with one click from the web UI (Presets → Install) or by copying the files onto the volume. An export from the UI (Presets → Export, or Export on an agent, skill or routine page) is the same layout as a ZIP: unzip it here to make it a preset, or hand the ZIP over for Presets → Import.
 
 ```
 presets/<name>/
-├── preset.json          # { "title", "description", "tags": [] }
-├── README.md            # shown in the UI under "Details"
-├── agents/<agent>.md    # → data/claude/agents/
-├── skills/<skill>/SKILL.md
-└── projects/<slug>.md   # → data/config/projects/ (templates to fill in)
+├── preset.json                 # { "title", "description", "tags": [] }
+├── README.md                   # shown in the UI under "Details"
+├── agents/<agent>.md           # → data/claude/agents/
+├── skills/<skill>/SKILL.md     # + its scripts, references → data/claude/skills/
+├── routines/<name>/ROUTINE.md  # + scripts/ → data/config/routines/ (installed switched off)
+└── projects/<slug>.md          # → data/config/projects/ (templates to fill in)
 ```
 
-Installing never overwrites files that already exist unless you choose *Reinstall*. After installation the files belong to the owner: edit them in the UI or let the agent update them ("remember: …").
+An agent or a skill goes by its own `name:` in the frontmatter (the folder's name when it has none). Installing never overwrites files that already exist unless you choose *Reinstall*. After installation the files belong to the owner: edit them in the UI or let the agent update them ("remember: …").
 
 Keep presets free of personal facts (hostnames, tokens, people). Anything installation-specific goes into the project file the owner fills in.
 

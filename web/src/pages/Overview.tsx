@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { AgentsPanel } from '../components/AgentsPanel'
 import { LimitsCard } from '../components/Limits'
 import { Tile } from '../components/Tile'
+import { TokensChart } from '../components/TokensChart'
 import { Button, Empty, PageHead, Stat, StatusBadge } from '../components/ui'
 import {
     api,
@@ -123,6 +124,9 @@ export function OverviewPage() {
                 </div>
             </div>
 
+            <h2>Tokens</h2>
+            <TokensChart />
+
             <ProvidersCard
                 models={d?.models}
                 loggedIn={d?.claude.logged_in}
@@ -194,13 +198,17 @@ export function OverviewPage() {
                             label='Workspaces'
                             detail={`${d?.workspaces.length ?? 0} repositories in ${d?.paths.workspaces ?? '…'}`}
                         />
+                        {/* Red: the daemon does not answer or a login is missing. Amber: still checking, or requests wait for the owner. */}
                         <Check
-                            ok={Boolean(
-                                d?.toolchains?.mise && (!d.toolchains.docker.enabled || d.toolchains.docker.reachable)
+                            ok={sandboxesOk(d?.sandboxes)}
+                            label='Sandboxes'
+                            detail={sandboxesDetail(d?.sandboxes)}
+                            warn={Boolean(
+                                d &&
+                                d.sandboxes.ok !== false &&
+                                d.sandboxes.claude_login !== false &&
+                                d.sandboxes.docker_login !== false
                             )}
-                            label='Toolchains'
-                            detail={toolchainsDetail(d?.toolchains)}
-                            warn={Boolean(d?.toolchains?.mise)}
                         />
                         {/* Red: a server that failed to start. Unauthorized connectors are the normal state of the ones not in use. */}
                         <Check
@@ -425,20 +433,24 @@ function githubDetail(github: Status['github'] | undefined): string {
     return `${parts.join(' + ')} · ${github.cli ?? 'gh not found'}`
 }
 
-/** "mise · 4 versions, 1.2 GB · PHP 8.2.34 · docker on, 2 running" — or what is missing. */
-function toolchainsDetail(t: Status['toolchains'] | undefined): string {
-    if (t === null) return 'probe failed — see the supervisor log'
-    if (!t) return '…'
-    const parts: string[] = []
-    parts.push(
-        t.mise
-            ? `mise · ${fmt.plural(t.tools, 'version')}${t.size_kb ? `, ${fmt.bytes(t.size_kb * 1024)}` : ''}`
-            : 'mise missing — no runtimes for the agents'
-    )
-    parts.push(t.php ? `PHP ${t.php}` : 'no PHP')
-    if (!t.docker.enabled) parts.push('docker off')
-    else if (!t.docker.reachable) parts.push(`docker on but unreachable${t.docker.error ? ` (${t.docker.error})` : ''}`)
-    else parts.push(`docker on, ${fmt.plural(t.docker.running, 'container')} running`)
+/** Green: on this machine, or the daemon answers with both logins and nothing waits. */
+function sandboxesOk(s: Status['sandboxes'] | undefined): boolean {
+    if (!s) return false
+    if (s.mode === 'local') return true
+    return Boolean(s.ok && s.claude_login !== false && s.docker_login !== false && !s.approvals)
+}
+
+/** "sbx 0.48.0 · 2 running of 5 · 1 blocked request · 1 preview" — or what is missing. */
+function sandboxesDetail(s: Status['sandboxes'] | undefined): string {
+    if (!s) return '…'
+    if (s.mode === 'local') return 'off — the agents run on this machine (SANDBOX=local)'
+    if (s.ok === null) return 'checking the daemon…'
+    if (!s.ok) return `the sbx daemon does not answer${s.error ? `: ${s.error}` : ''}`
+    const parts = [`sbx ${s.version ?? '?'}`, `${s.running} running of ${s.total}`]
+    if (s.docker_login === false) parts.push('Docker account signed out — sbx login on the server')
+    if (s.claude_login === false) parts.push('no Claude login — /login in a sandbox on the server')
+    if (s.approvals) parts.push(`${fmt.plural(s.approvals, 'blocked request')} waiting`)
+    if (s.previews.length) parts.push(fmt.plural(s.previews.length, 'preview'))
     return parts.join(' · ')
 }
 

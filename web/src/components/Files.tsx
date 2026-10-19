@@ -438,7 +438,7 @@ export function FileEditor({
                             checked={file.exec}
                             onChange={() => void toggleExec()}
                         />
-                        <span>executable</span>
+                        <span>Executable</span>
                     </label>
                 )}
                 {!compact && renaming === null && (

@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { MASK, referencedNames, Vault, type VaultChange } from './vault.js'
+import { MASK, migrateEnvKeys, referencedNames, Vault, type VaultChange } from './vault.js'
 
 describe('Vault', () => {
     let dir: string
@@ -47,6 +47,40 @@ describe('Vault', () => {
             expect(vault.refusal(name)).not.toBeNull()
         expect(vault.refusal('lower')).toMatch(/capital letters/)
         expect(vault.refusal('GSC_REFRESH_TOKEN')).toBeNull()
+        // Names that stay with the supervisor would never reach a sandbox.
+        expect(vault.refusal('LOG_LEVEL')).toMatch(/never reaches a sandbox/)
+        expect(vault.refusal('SANDBOX_URL')).toMatch(/never reaches a sandbox/)
+    })
+
+    it("keeps a provider's key for the gateway alone, masked, out of every run", () => {
+        vault.set('UNOROUTER_API_KEY', { value: ' sk-uno-123456 ', provider: true, scope: { all: true } })
+        expect(vault.providerKey('UNOROUTER_API_KEY')).toBe('sk-uno-123456')
+        expect(vault.envFor({ routine: 'geo', project: 'site' })).toEqual({})
+        expect(vault.reaches('UNOROUTER_API_KEY', { routine: 'geo' })).toBe(false)
+        expect(vault.list()).toEqual([
+            expect.objectContaining({ name: 'UNOROUTER_API_KEY', secret: true, provider: true })
+        ])
+        expect(vault.list()[0]).not.toHaveProperty('value')
+        expect(vault.redact('key sk-uno-123456')).toBe(`key ${MASK}`)
+        // A new value keeps it a provider key; it never turns into a run's entry, nor a run's into one.
+        vault.set('UNOROUTER_API_KEY', { value: 'sk-uno-654321' })
+        expect(vault.providerKey('UNOROUTER_API_KEY')).toBe('sk-uno-654321')
+        expect(() => vault.set('UNOROUTER_API_KEY', { provider: false })).toThrow(/is a provider key/)
+        vault.set('GSC_API_KEY', { value: 'run-secret-1', secret: true })
+        expect(() => vault.set('GSC_API_KEY', { provider: true })).toThrow(/for runs/)
+        expect(vault.providerRefusal('GSC_API_KEY')).toMatch(/not a provider key/)
+        expect(vault.providerKey('GSC_API_KEY')).toBeNull()
+        expect(() => vault.set('TELEGRAM_BOT_TOKEN', { value: 'x', provider: true })).toThrow(/belongs to the factory/)
+        expect(() => vault.set('BOX_API_KEY', { value: 'a\nb', provider: true })).toThrow(/one line/)
+    })
+
+    it('moves provider keys from .env into the vault once', () => {
+        const env = { LOOK_TOKEN: 'look-secret-1', GONE_KEY: '' }
+        expect(migrateEnvKeys(vault, ['LOOK_TOKEN', 'GONE_KEY'], env)).toEqual(['LOOK_TOKEN'])
+        expect(vault.providerKey('LOOK_TOKEN')).toBe('look-secret-1')
+        // A second start finds it there and leaves the vault's value alone.
+        expect(migrateEnvKeys(vault, ['LOOK_TOKEN'], { LOOK_TOKEN: 'older' })).toEqual([])
+        expect(vault.providerKey('LOOK_TOKEN')).toBe('look-secret-1')
     })
 
     it('gives a run only what its routine or project may see', () => {

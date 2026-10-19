@@ -38,9 +38,11 @@ export function SecretsSection() {
     const remove = (e: VaultEntry) =>
         void confirm({
             title: `Delete ${e.secret ? 'secret' : 'variable'} ${e.name}?`,
-            message: e.used_by.length
-                ? `${e.used_by.map((u) => (u.kind === 'routine' ? `${u.name} (${u.step})` : u.name)).join(', ')} read it; their next runs go without it (or with the .env value of the same name).`
-                : 'Nothing uses it now. There is no undo: a secret value cannot be read back.',
+            message: e.provider
+                ? `${e.used_by.map((u) => `Provider ${u.name}`).join(', ') || 'No provider'} loses its key; its requests fail until it has one again.`
+                : e.used_by.length
+                  ? `${e.used_by.map((u) => (u.kind === 'routine' ? `${u.name} (${u.step})` : u.name)).join(', ')} read it; their next runs go without it (or with the .env value of the same name).`
+                  : 'Nothing uses it now. There is no undo: a secret value cannot be read back.',
             action: 'Delete',
             pending: 'Deleting…',
             danger: true,
@@ -104,14 +106,35 @@ export function SecretsSection() {
                             </span>
                             <span
                                 className='vault-uses'
-                                title={`Reaches ${scopeText(e.scope)}`}
+                                title={
+                                    e.provider
+                                        ? "A provider's key: the gateway adds it, no run gets it"
+                                        : `Reaches ${scopeText(e.scope)}`
+                                }
                             >
-                                <span className={`badge ${e.scope.all ? 'plain' : 'blue'}`}>
-                                    {e.scope.all ? 'all' : 'scoped'}
-                                </span>
-                                {e.used_by.length === 0 && <span className='dim small'>not used by a step</span>}
+                                {e.provider ? (
+                                    <span className='badge plain'>provider key</span>
+                                ) : (
+                                    <span className={`badge ${e.scope.all ? 'plain' : 'blue'}`}>
+                                        {e.scope.all ? 'all' : 'scoped'}
+                                    </span>
+                                )}
+                                {e.used_by.length === 0 && (
+                                    <span className='dim small'>
+                                        {e.provider ? 'no provider names it' : 'not used by a step'}
+                                    </span>
+                                )}
                                 {e.used_by.map((u, i) =>
-                                    u.kind === 'routine' ? (
+                                    u.kind === 'provider' ? (
+                                        <Link
+                                            key={i}
+                                            to='/settings#providers'
+                                            className='badge plain'
+                                            title='Settings → Providers'
+                                        >
+                                            {u.name}
+                                        </Link>
+                                    ) : u.kind === 'routine' ? (
                                         <Link
                                             key={i}
                                             to={`/routines/${encodeURIComponent(u.name)}`}
@@ -174,7 +197,9 @@ export function SecretsSection() {
  * Add or change one secret or variable. A secret's current value is never
  * shown: Update takes a new one, or leaves the value as it is and changes
  * only who may read it. A name given by a step card comes filled in, with
- * that routine as the scope.
+ * that routine as the scope. A provider key (access "model providers only")
+ * reaches no run: only the gateway adds it to a provider's requests; a name
+ * stays a provider key, or a run's entry, for life.
  */
 export function SecretDialog({
     open,
@@ -182,13 +207,16 @@ export function SecretDialog({
     editing,
     name: presetName,
     routines: asking,
+    provider: forProvider,
     overview,
     onClose,
     onSaved
 }: {
     open: boolean
     kind: EntryKind
-    editing?: VaultEntry
+    editing?: Omit<VaultEntry, 'used_by'>
+    /** Opened from a provider's form: a new provider key, its access fixed. */
+    provider?: boolean
     /** A new entry's name, from a step that needs it. */
     name?: string
     /** The routines asking (a step card's, a skill's): a new entry is scoped to them, an existing one gets them added. */
@@ -206,6 +234,7 @@ export function SecretDialog({
     const [name, setName] = useState('')
     const [value, setValue] = useState('')
     const [all, setAll] = useState(true)
+    const [provider, setProvider] = useState(false)
     const [routines, setRoutines] = useState<string[]>([])
     const [projects, setProjects] = useState<string[]>([])
     const [busy, setBusy] = useState(false)
@@ -222,10 +251,11 @@ export function SecretDialog({
         // Opened from a routine's card or a skill ("Allow"): those routines are ticked already.
         setRoutines(scope.all ? [] : [...new Set([...scope.routines, ...ask])])
         setProjects(scope.all ? [] : scope.projects)
+        setProvider(Boolean(editing?.provider ?? forProvider))
         setError(null)
         // `asking` is a fresh array on every render of the caller: its content is what counts.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, editing, presetName, (asking ?? []).join(',')])
+    }, [open, editing, presetName, forProvider, (asking ?? []).join(',')])
 
     const secret = kind === 'secret'
     const trimmed = name.trim()
@@ -242,7 +272,12 @@ export function SecretDialog({
             const scope: SecretScope = all ? { all: true } : { all: false, routines, projects }
             const entry = await api.saveSecret(
                 trimmed,
-                { ...(value || !editing ? { value } : {}), secret, scope },
+                {
+                    ...(value || !editing ? { value } : {}),
+                    secret,
+                    ...(provider ? { provider: true } : { scope }),
+                    ...(editing ? {} : { provider })
+                },
                 !editing
             )
             onSaved(entry)
@@ -256,6 +291,8 @@ export function SecretDialog({
         set(list.includes(item) ? list.filter((x) => x !== item) : [...list, item])
 
     const what = secret ? 'secret' : 'variable'
+    // A provider key never becomes a run's entry and back: the side it is on is fixed once it exists.
+    const fixed = Boolean(editing) || Boolean(forProvider)
     return (
         <Modal
             open={open}
@@ -265,9 +302,11 @@ export function SecretDialog({
             busy={busy}
             title={editing ? `${secret ? 'Update' : 'Edit'} ${what} ${editing.name}` : `New ${what}`}
             description={
-                secret
-                    ? 'Never shown again: runs read it as $NAME, logs show ••••.'
-                    : 'A plain value scripts read as $NAME; it stays visible.'
+                provider
+                    ? "Never shown again: the gateway adds it to a provider's requests, no run sees it."
+                    : secret
+                      ? 'Never shown again: runs read it as $NAME, logs show ••••.'
+                      : 'A plain value scripts read as $NAME; it stays visible.'
             }
             footer={
                 <>
@@ -300,7 +339,7 @@ export function SecretDialog({
                         className='mono'
                         value={name}
                         onChange={(e) => setName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
-                        placeholder={secret ? 'TRAC_PASSWORD' : 'TRAC_USER'}
+                        placeholder={provider ? 'UNOROUTER_API_KEY' : secret ? 'TRAC_PASSWORD' : 'TRAC_USER'}
                         aria-label='Name'
                         disabled={Boolean(editing)}
                         autoFocus={!editing && !presetName}
@@ -342,26 +381,63 @@ export function SecretDialog({
                     <label
                         className='row'
                         style={{ gap: 8 }}
+                        title={
+                            fixed && provider
+                                ? 'A provider key stays one: delete it and add a secret for runs'
+                                : undefined
+                        }
                     >
                         <input
                             type='radio'
-                            checked={all}
-                            onChange={() => setAll(true)}
+                            checked={!provider && all}
+                            disabled={fixed && provider}
+                            onChange={() => {
+                                setAll(true)
+                                setProvider(false)
+                            }}
                         />
-                        <span>every routine and chat</span>
+                        <span>Every routine and chat</span>
                     </label>
                     <label
                         className='row'
                         style={{ gap: 8 }}
+                        title={
+                            fixed && provider
+                                ? 'A provider key stays one: delete it and add a secret for runs'
+                                : undefined
+                        }
                     >
                         <input
                             type='radio'
-                            checked={!all}
-                            onChange={() => setAll(false)}
+                            checked={!provider && !all}
+                            disabled={fixed && provider}
+                            onChange={() => {
+                                setAll(false)
+                                setProvider(false)
+                            }}
                         />
-                        <span>only the routines and projects picked</span>
+                        <span>Only the routines and projects picked</span>
                     </label>
-                    {!all && (
+                    {secret && (
+                        <label
+                            className='row'
+                            style={{ gap: 8 }}
+                            title={
+                                fixed && !provider
+                                    ? 'A secret for runs stays one: delete it and add a provider key'
+                                    : "A model provider's API key: Settings → Providers picks it, no routine or chat gets it"
+                            }
+                        >
+                            <input
+                                type='radio'
+                                checked={provider}
+                                disabled={fixed && !provider}
+                                onChange={() => setProvider(true)}
+                            />
+                            <span>Model providers only</span>
+                        </label>
+                    )}
+                    {!provider && !all && (
                         <div className='vault-scope'>
                             <div className='dim small'>Routines</div>
                             <div className='row wrap'>
@@ -397,7 +473,11 @@ export function SecretDialog({
                             </div>
                         </div>
                     )}
-                    <span className='dim'>A chat outside these projects never sees a scoped value.</span>
+                    <span className='dim'>
+                        {provider
+                            ? 'Only the gateway reads it; a provider picks it as its key.'
+                            : 'A chat outside these projects never sees a scoped value.'}
+                    </span>
                 </div>
                 <ErrorBox error={error} />
             </form>

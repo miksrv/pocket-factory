@@ -435,7 +435,7 @@ export function RoutinesPage() {
                                                     checked={fm.enabled === true}
                                                     onChange={(e) => set({ enabled: e.target.checked })}
                                                 />{' '}
-                                                <span>switch it on</span>
+                                                <span>Switch it on</span>
                                             </label>
                                         </div>
                                     </Field>
@@ -905,7 +905,7 @@ function Status({
                             checked={allRuns}
                             onChange={(e) => setAllRuns(e.target.checked)}
                         />{' '}
-                        <span>every firing, including empty runs and skips</span>
+                        <span>Every firing, including empty runs and skips</span>
                     </label>
                     {runs.data?.length ? (
                         <>

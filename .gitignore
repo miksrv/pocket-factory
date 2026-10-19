@@ -29,5 +29,5 @@ test-results/
 blob-report/
 playwright/.auth/
 
-# Host-specific compose overrides (bot off locally, dind volume on macOS, server tweaks)
+# Host-specific compose overrides (bot off locally, server tweaks)
 docker-compose.override.yml

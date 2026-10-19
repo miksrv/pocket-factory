@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 
 import { Hono } from 'hono'
 
-import { fetchError } from '../files/providers.js'
+import { fetchError, missingKey } from '../files/providers.js'
 import { createLogger } from '../logger.js'
 import type { Env } from '../web/context.js'
 import {
@@ -84,8 +84,8 @@ export function gatewayRoutes(): Hono<Env> {
         if (!provider) return anthropicError(404, `unknown provider "${name}"`, 'not_found_error')
         const key = providers.key(provider)
         if (provider.token && !key) {
-            tasks.noteProvider(name, false, `${provider.token} is not set in .env`)
-            return anthropicError(401, `provider ${name}: ${provider.token} is not set in .env`, 'authentication_error')
+            tasks.noteProvider(name, false, missingKey(provider.token))
+            return anthropicError(401, `provider ${name}: ${missingKey(provider.token)}`, 'authentication_error')
         }
         const body = (await c.req.json().catch(() => null)) as AnthropicRequest | null
         if (!body) return anthropicError(400, 'invalid JSON', 'invalid_request_error')
@@ -172,8 +172,7 @@ export function gatewayRoutes(): Hono<Env> {
         if (!provider || !server)
             return c.json({ error: `gateway: no MCP server ${c.req.param('server')} on ${name}` }, 404)
         const key = providers.mcpKey(server)
-        if (server.token && !key)
-            return c.json({ error: `${name}/${server.name}: ${server.token} is not set in .env` }, 401)
+        if (server.token && !key) return c.json({ error: `${name}/${server.name}: ${missingKey(server.token)}` }, 401)
         const method = c.req.method
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), MCP_CONNECT_TIMEOUT_MS)

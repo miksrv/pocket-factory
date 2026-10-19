@@ -246,6 +246,22 @@ export interface RateLimitWindow {
 }
 
 /** Subscription rate-limit status as the CLI last reported it. */
+/** Fresh tokens per day (the owner's TIMEZONE), one series per model family on the subscription and per provider. */
+export interface DailyTokens {
+    days: string[]
+    series: Array<{
+        key: string
+        label: string
+        kind: 'subscription' | 'provider'
+        /** Its `--chart-<n>` colour, fixed per family / provider; null = past the palette. */
+        slot: number | null
+        values: number[]
+        total: number
+    }>
+}
+
+export type DailyRange = 7 | 30 | 90
+
 export interface RateLimits {
     id: number
     ts: string
@@ -302,7 +318,7 @@ export interface Status {
         max_turns: number
         config_dir: string
         logged_in: boolean
-        /** `claude.ai (…)` for a full login in the container, `token` for CLAUDE_CODE_OAUTH_TOKEN, `none`. */
+        /** `sandbox`: the login the sandboxes' proxy holds; `claude.ai (…)`: this machine's CLI; `token`: CLAUDE_CODE_OAUTH_TOKEN; `none`. */
         login: string
     }
     /** `token`: the fallback GH_TOKEN is set; `owners`: owners with a token of their own. */
@@ -313,8 +329,8 @@ export interface Status {
     paths: { data: string; workspaces: string; config: string }
     max_concurrent_sessions: number
     workspaces: Array<{ name: string; git: boolean }>
-    /** What the agents build with (Settings → Toolchains); `docker` is the dind sidecar. null: the probe failed. */
-    toolchains: ToolchainsHealth | null
+    /** Where the agents run (Settings → Sandboxes): the daemon, the logins, the sandboxes, what waits for the owner. */
+    sandboxes: SandboxesHealth
     /** The MCP registry in numbers: Overview → Health. */
     mcp: { total: number; connected: number; needs_auth: string[]; failed: string[] }
     /** Other model providers: what runs on each and whether the gateway's last request got through. */
@@ -337,7 +353,7 @@ export interface ProviderStatus {
 export interface ProviderMcp {
     name: string
     url: string
-    /** Name of the .env variable with its bearer. */
+    /** Name of its bearer: a provider key in Secrets. */
     token?: string
 }
 
@@ -347,7 +363,7 @@ export interface Provider {
     /** `anthropic`: speaks /v1/messages itself (Ollama, vLLM, OpenRouter); `openai`: chat completions, translated by the factory. */
     kind: 'anthropic' | 'openai'
     url: string
-    /** Name of the .env variable with the key; empty for a local server. */
+    /** Name of the key: a provider key in Secrets (access "model providers only"); empty for a local server. */
     token?: string
     models: string[]
     default?: string
@@ -394,74 +410,79 @@ export interface ProviderTest {
     mcp?: Array<{ name: string; ok: boolean; server?: string; error?: string }>
 }
 
-export interface ToolchainsHealth {
-    mise: string | null
-    tools: number
-    size_kb: number | null
-    php: string | null
-    docker: { enabled: boolean; reachable: boolean; version: string | null; running: number; error: string | null }
-}
-
-export interface ToolVersion {
-    tool: string
-    version: string
-    install_path: string
-    source: string | null
-    active: boolean
-    size_kb: number | null
-    used_by: string[]
-    /** The version file that asked for it, relative to the workspaces root. */
-    asked_by: string | null
-}
-
-export interface DockerContainer {
-    id: string
-    name: string
-    image: string
-    state: string
-    status: string
-    ports: string
-    created: string
-    compose: { working_dir: string | null; project: string | null; service: string | null }
-    /** The factory project whose checkout the compose file ran in. */
-    project: string | null
-}
-
-export interface ToolchainsOverview {
-    mise: {
-        version: string | null
-        data_dir: string
-        size_kb: number | null
-        tools: ToolVersion[]
-        error: string | null
-    }
-    image: { php: string | null; composer: string | null }
-    docker: {
-        enabled: boolean
-        host: string | null
-        reachable: boolean
-        version: string | null
-        error: string | null
-        containers: DockerContainer[]
-        disk: Array<{ type: string; total: number; active: number; size: string; reclaimable: string }>
-    }
-}
-
-export interface ProjectTool {
-    tool: string
+export interface SandboxesHealth {
+    /** `sbx`: a Docker Sandbox per project; `local`: on the supervisor itself (yarn dev). */
+    mode: 'sbx' | 'local'
+    /** The daemon answered the last check; null before it (and in local mode). */
+    ok: boolean | null
+    error: string | null
     version: string | null
-    source: string
-    spec: string
-    status: 'installed' | 'image' | 'missing' | 'unknown'
-    installed_version: string | null
+    docker_login: boolean | null
+    claude_login: boolean | null
+    total: number
+    running: number
+    /** Requests a sandbox's network policy held back, waiting for the owner. */
+    approvals: number
+    previews: Array<{ project: string; url: string }>
 }
 
-export interface ProjectToolchain {
-    slug: string
-    path: string | null
-    tools: ProjectTool[]
-    services: Array<{ file: string; services: string[] }>
-    docker: { enabled: boolean }
+export interface SandboxView {
+    name: string
+    /** null: the factory's own (`pf-factory`, chats without a project). */
+    project: string | null
+    status: string
+    workspaces: string[]
+    /** Runs going on in it now. */
+    active: number
+    last_used_at: string | null
+    created_at: string | null
+    /** An open preview keeps it from the idle stop. */
+    pinned: boolean
+}
+
+export interface SandboxApproval {
+    id: string
+    sandbox: string
+    project: string | null
+    /** What was refused: `host:port`, a domain or an address. */
+    resource: string
+    detail: string
+    seen_at: string
+}
+
+export interface Preview {
+    project: string
+    sandbox: string
+    port: number
+    host_port: number
+    strip: boolean
+    task_id: string | null
+    created_at: string
+    /** What the owner opens (the factory's sign-in, then the app). */
+    url: string
+    base: string
+    expires_at: string | null
+}
+
+export interface SandboxesOverview {
+    mode: 'sbx' | 'local'
+    ok: boolean | null
+    error: string | null
+    version: string | null
+    docker_login: boolean | null
+    claude_login: boolean | null
+    sandboxes: SandboxView[]
+    approvals: SandboxApproval[]
+    previews: Preview[]
+    checked_at: string | null
+}
+
+export interface ProjectSandbox {
+    mode: 'sbx' | 'local'
+    name: string
+    sandbox: SandboxView | null
+    preview: Preview | null
+    approvals: SandboxApproval[]
 }
 
 export type Kind = 'agents' | 'skills' | 'projects' | 'routines'
@@ -840,9 +861,11 @@ export interface VaultEntry {
     secret: boolean
     value?: string
     scope: SecretScope
+    /** A provider key (access "model providers only"): the gateway adds it, no run gets it. */
+    provider?: true
     created_at: string
     updated_at: string
-    used_by: Array<{ kind: 'routine' | 'config'; name: string; step?: string }>
+    used_by: Array<{ kind: 'routine' | 'config' | 'provider'; name: string; step?: string }>
 }
 
 /** What a skill's scripts read, and which routines running the skill get each name. */
@@ -885,6 +908,40 @@ export interface Preset {
     readme: string | null
     /** Every file is on the volume. */
     installed: boolean
+}
+
+/** What an import would do, item by item (`POST /share/import` without `install`). */
+export interface ImportPreview {
+    title: string | null
+    description: string | null
+    items: Array<{
+        kind: Kind
+        name: string
+        description: string | null
+        /** One of that name is on the volume: installing it replaces it. */
+        exists: boolean
+        /** The folder's other files (scripts, references, data). */
+        files: string[]
+        /** What its scripts declare they read; `set`: the vault has it. */
+        needs: Array<{ name: string; secret: boolean; set: boolean }>
+        /** Why it cannot be installed. */
+        errors: string[]
+        notes: string[]
+    }>
+    /** Files that belong to no item, the first few by name. */
+    ignored: string[]
+    ignored_count: number
+}
+
+export interface ExportRequest {
+    agents?: string[]
+    skills?: string[]
+    routines?: string[]
+    /** A routine brings the agent and the skill of its agent step (default). */
+    with_deps?: boolean
+    /** A routine brings its data/ (off by default). */
+    with_data?: boolean
+    title?: string
 }
 
 /** Who the browser is to the API: the sign-in mode, whether this browser is signed in, and the lock policy. */
@@ -966,6 +1023,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return body as T
 }
 
+const importQuery = (file: File, as?: 'skills' | 'agents') =>
+    new URLSearchParams({ file: file.name || 'import', ...(as ? { as } : {}) }).toString()
+
 const targetBody = (target: HostTarget) =>
     'name' in target ? target : { ssh: target.ssh, key: target.key || undefined }
 
@@ -1021,6 +1081,8 @@ export const api = {
     /** Tool names the CLI offers (from its last session start), or a built-in default list. */
     tools: () => request<ToolList>('/tools'),
 
+    dailyTokens: (days: DailyRange) => request<DailyTokens>(`/usage/daily?days=${days}`),
+
     probeUsage: () => request<RateLimits>('/usage/probe', { method: 'POST' }),
 
     conversations: (before?: Cursor, limit = 50) =>
@@ -1047,19 +1109,20 @@ export const api = {
     /** Runs `claude mcp list` in the factory (about 15 s) and returns the registry with fresh statuses. */
     refreshMcp: () => request<{ servers: McpEntry[] }>('/mcp/refresh', { method: 'POST' }),
 
-    toolchains: () => request<ToolchainsOverview>('/toolchains'),
-    projectToolchain: (slug: string) => request<ProjectToolchain>(`/toolchains/projects/${encodeURIComponent(slug)}`),
-    /** `go@1.25.1`; a Go or Python download takes a minute or two. */
-    installTool: (spec: string) =>
-        request<{ installed: string }>('/toolchains/install', { method: 'POST', body: JSON.stringify({ spec }) }),
-    removeTool: (tool: string, version: string) =>
-        request<{ removed: boolean }>(`/toolchains/tools/${encodeURIComponent(tool)}/${encodeURIComponent(version)}`, {
-            method: 'DELETE'
+    sandboxes: () => request<SandboxesOverview>('/sandboxes'),
+    refreshSandboxes: () => request<SandboxesOverview>('/sandboxes/refresh', { method: 'POST' }),
+    projectSandbox: (slug: string) => request<ProjectSandbox>(`/sandboxes/projects/${encodeURIComponent(slug)}`),
+    stopSandbox: (name: string) =>
+        request<SandboxesOverview>(`/sandboxes/${encodeURIComponent(name)}/stop`, { method: 'POST' }),
+    resetSandbox: (name: string) =>
+        request<SandboxesOverview>(`/sandboxes/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
+    answerApproval: (id: string, allow: boolean) =>
+        request<SandboxesOverview>(`/sandboxes/approvals/${encodeURIComponent(id)}`, {
+            method: 'POST',
+            body: JSON.stringify({ allow })
         }),
-    pruneToolchains: () => request<{ mise: string; docker: string | null }>('/toolchains/prune', { method: 'POST' }),
-    stopContainer: (id: string) =>
-        request<{ stopped: string }>('/toolchains/docker/stop', { method: 'POST', body: JSON.stringify({ id }) }),
-    pruneDocker: () => request<{ reclaimed: string }>('/toolchains/docker/prune', { method: 'POST' }),
+    stopPreview: (project: string) =>
+        request<{ closed: boolean }>(`/sandboxes/previews/${encodeURIComponent(project)}`, { method: 'DELETE' }),
     startMcpLogin: (name: string) =>
         request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
     mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),
@@ -1214,9 +1277,48 @@ export const api = {
             body: JSON.stringify(step ? { step } : {})
         }),
 
+    /** What a ZIP (a bundle, a `.skill`) or one Markdown file (`as`: a skill by default, or an agent) holds. */
+    previewImport: (file: File, as?: 'skills' | 'agents') =>
+        request<ImportPreview>(`/share/import?${importQuery(file, as)}`, {
+            method: 'POST',
+            body: file,
+            headers: { 'content-type': 'application/octet-stream' }
+        }),
+    /** Put the picked items (`kind/name`) of the same file on the volume; one that exists is replaced. */
+    installImport: (file: File, keys: string[], as?: 'skills' | 'agents') =>
+        request<{ installed: Array<{ kind: Kind; name: string }> }>(
+            `/share/import?${importQuery(file, as)}&install=${encodeURIComponent(keys.join(','))}`,
+            { method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream' } }
+        ),
+    /** The ZIP of the picked agents, skills and routines, saved by the browser as a download. */
+    exportBundle: async (body: ExportRequest): Promise<{ filename: string; masked: number }> => {
+        const response = await fetch('/api/share/export', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...activeHeaders() },
+            body: JSON.stringify(body)
+        })
+        if (!response.ok) {
+            const error = (await response.json().catch(() => null)) as { error?: string } | null
+            throw new ApiError(response.status, error?.error ?? `${response.status} ${response.statusText}`, error)
+        }
+        const filename =
+            /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'export.zip'
+        const url = URL.createObjectURL(await response.blob())
+        const link = document.createElement('a')
+        link.href = url
+        link.download = filename
+        link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 10_000)
+        return { filename, masked: Number(response.headers.get('x-masked-files') ?? 0) }
+    },
+
     secrets: () => request<VaultOverview>('/secrets'),
-    /** Create (`create`: refuse a name that exists) or change; a secret without `value` keeps its value. */
-    saveSecret: (name: string, body: { value?: string; secret?: boolean; scope?: SecretScope }, create = false) =>
+    /** Create (`create`: refuse a name that exists) or change; a secret without `value` keeps its value; `provider`: a provider key. */
+    saveSecret: (
+        name: string,
+        body: { value?: string; secret?: boolean; scope?: SecretScope; provider?: boolean },
+        create = false
+    ) =>
         request<VaultEntry>(`/secrets/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
             method: 'PUT',
             body: JSON.stringify(body)

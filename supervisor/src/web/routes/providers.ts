@@ -5,6 +5,7 @@ import {
     CLAUDE_PROVIDER,
     fetchError,
     mcpList,
+    missingKey,
     type Provider,
     type ProviderMcp,
     type Providers,
@@ -19,7 +20,8 @@ import type { Env } from '../context.js'
  * the list with each key's presence (never its value) and the tasks running
  * on it, create / edit / delete, a connection test (one tiny tool-calling
  * request straight from the supervisor) and the provider's own model list
- * when its endpoint has one.
+ * when its endpoint has one. A key is a provider key of the vault (Settings →
+ * Secrets, access "model providers only"), named by `token`; never in the file.
  */
 
 /** Who refers to a provider: routines and agents with `provider: <name>`. */
@@ -49,7 +51,7 @@ function candidate(c: { get: (k: 'app') => Env['Variables']['app'] }, body: Body
         return saved ?? { error: `unknown provider "${body.name}"` }
     }
     if (typeof body.url !== 'string') return { error: 'url is required' }
-    // A draft names its key variable freely: only a provider-shaped one is ever read, never the factory's own secrets.
+    // A draft names its key freely: only a provider key of the vault is ever read, never a run's secret or the factory's own.
     const token = typeof body.token === 'string' && body.token.trim() ? body.token.trim() : undefined
     const problem = token ? tokenVarProblem(token) : null
     if (problem) return { error: problem }
@@ -92,7 +94,7 @@ export interface McpCheck {
 /** One MCP `initialize` against a provider's server with its key: it answers, the key is accepted, it speaks MCP. */
 async function checkMcp(providers: Providers, server: ProviderMcp): Promise<McpCheck> {
     const key = providers.mcpKey(server)
-    if (server.token && !key) return { name: server.name, ok: false, error: `${server.token} is not set in .env` }
+    if (server.token && !key) return { name: server.name, ok: false, error: missingKey(server.token) }
     try {
         const response = await fetch(server.url, {
             method: 'POST',
@@ -148,7 +150,7 @@ export function providerRoutes(): Hono<Env> {
 
     /** Create or update; `?create=1` refuses to replace an existing name. */
     app.put('/:name', async (c) => {
-        const { providers, tasks } = c.get('app')
+        const { providers, tasks, vault } = c.get('app')
         const body = (await c.req.json().catch(() => null)) as Body | null
         if (!body || typeof body.url !== 'string') return c.json({ error: 'url is required' }, 400)
         const before = providers.get(c.req.param('name'))
@@ -178,6 +180,11 @@ export function providerRoutes(): Hono<Env> {
         try {
             const draft = candidate(c, body)
             if ('error' in draft) return c.json({ error: draft.error }, 400)
+            // A key is a provider key of the vault: a run's secret of that name would reach both.
+            const refused = [draft.token, ...(draft.mcp ?? []).map((m) => m.token)]
+                .map((token) => (token ? vault.providerRefusal(token) : null))
+                .find(Boolean)
+            if (refused) return c.json({ error: refused }, 400)
             const saved = providers.save(c.req.param('name'), {
                 ...draft,
                 name: typeof body.name === 'string' ? body.name : undefined,
@@ -224,7 +231,7 @@ export function providerRoutes(): Hono<Env> {
         const mcpChecks = Promise.all((provider.mcp ?? []).map((s) => checkMcp(providers, s)))
         const answer = async (result: Record<string, unknown>) => c.json({ ...result, mcp: await mcpChecks })
         const key = providers.key(provider)
-        if (provider.token && !key) return answer({ ok: false, error: `${provider.token} is not set in .env`, model })
+        if (provider.token && !key) return answer({ ok: false, error: missingKey(provider.token), model })
         const started = Date.now()
         // Room for a thinking model's reasoning before the call (gemma4 spent 64 tokens thinking and never called).
         const probe = {

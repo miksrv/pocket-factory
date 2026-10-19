@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review a GitHub pull request and post the findings as one PR review with inline comments, or only report them to the owner. Use when the owner asks to review a PR, says a PR needs a look, asks whether a PR is mergeable, or a review was requested from them. Read-only on code; writes only the review.
+description: Review someone else's pull request on GitHub and post the findings as one PR review with inline comments, or only report them to the owner. Use when the owner names a PR (`owner/repo#N`, a link, or a PR to find in a project's repository), says it needs a look, asks whether it is mergeable, or a review was requested from them. Not for the agent's own branch before a PR exists. Read-only on code; writes only the review.
 ---
 
 # pr-review

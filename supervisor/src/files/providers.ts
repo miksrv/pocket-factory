@@ -16,7 +16,8 @@ import { BadName, NotFound } from './catalog.js'
  * gateway, which holds the key. A `kind: anthropic` endpoint speaks the
  * Messages API itself (`/v1/messages`); a `kind: openai` one speaks the chat
  * completions API and the gateway translates. Keys are never in this file:
- * `token` names the variable in `.env`.
+ * `token` names the key, a secret of Settings → Secrets with the access
+ * "model providers only" (a provider key of the vault).
  */
 /**
  * An MCP server that comes with a provider (a search next to a self-hosted model): offered only to
@@ -27,7 +28,7 @@ export interface ProviderMcp {
     name: string
     /** The endpoint, e.g. `https://203.0.113.10:8443/mcp`. */
     url: string
-    /** Name of the environment variable with its bearer; empty for a server without one. */
+    /** Name of its bearer (a provider key in the vault); empty for a server without one. */
     token?: string
 }
 
@@ -36,7 +37,7 @@ export interface Provider {
     kind: 'anthropic' | 'openai'
     /** Base URL up to (not including) `/v1/messages` or `/chat/completions`, e.g. `http://10.77.0.1:11434` or `https://api.openai.com/v1`. */
     url: string
-    /** Name of the environment variable that holds the API key; empty for a local server without one. */
+    /** Name of the API key (a provider key in the vault); empty for a local server without one. */
     token?: string
     /** Model ids the owner may pick from (the form offers them; any id can still be typed). */
     models: string[]
@@ -102,7 +103,7 @@ const CONTEXT_MIN = 8000
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 /** An MCP server's name: becomes part of tool names, so no spaces or colons. */
 const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
-/** An environment variable name. */
+/** A key's name, as a secret's. */
 export const TOKEN_VAR = /^[A-Z][A-Z0-9_]{0,63}$/
 /**
  * Variables a provider may never name as its key: the supervisor's own secrets and the
@@ -111,23 +112,27 @@ export const TOKEN_VAR = /^[A-Z][A-Z0-9_]{0,63}$/
  * token or the UI password anywhere.
  */
 const FORBIDDEN_TOKEN_VARS = /^(TELEGRAM_|WEB_|GROQ_|CLAUDE_|ANTHROPIC_|GH_TOKEN|GITHUB_TOKEN|TRAC_|AWS_|DOCKER_)/
-/** A key variable must look like one: `…_API_KEY`, `…_KEY`, `…_TOKEN`, `…_SECRET`. */
+/** A key's name must look like one: `…_API_KEY`, `…_KEY`, `…_TOKEN`, `…_SECRET`. */
 const TOKEN_SHAPE = /(_API_KEY|_KEY|_TOKEN|_SECRET)$/
 
-/** Why `name` may not be a provider's key variable, or null when it may. */
+/** Why `name` may not be a provider's key, or null when it may. */
 export function tokenVarProblem(name: string): string | null {
-    if (!TOKEN_VAR.test(name))
-        return 'token must be the NAME of an environment variable (e.g. GEMINI_API_KEY), not the key'
+    if (!TOKEN_VAR.test(name)) return 'token must be the NAME of the key secret (e.g. GEMINI_API_KEY), not the key'
     if (FORBIDDEN_TOKEN_VARS.test(name)) return `${name} belongs to the factory itself and cannot be a provider's key`
-    if (!TOKEN_SHAPE.test(name)) return `${name}: a key variable ends with _API_KEY, _KEY, _TOKEN or _SECRET`
+    if (!TOKEN_SHAPE.test(name)) return `${name}: a key's name ends with _API_KEY, _KEY, _TOKEN or _SECRET`
     return null
 }
 const KINDS = ['anthropic', 'openai'] as const
 
+/** What a request without its key says: where to put one. */
+export function missingKey(name: string): string {
+    return `secret ${name} is not set: add it in Settings → Providers (the key's New secret)`
+}
+
 const HEADER = `# Model providers besides the Claude subscription (edited in Settings → Providers, or by hand).
 # \`kind: anthropic\` speaks /v1/messages itself (Ollama, llama.cpp, vLLM, OpenRouter); \`kind: openai\`
 # speaks chat completions (OpenAI, Gemini, Groq, LM Studio) and the factory translates. \`token\` is the
-# name of the variable in .env that holds the key, never the key itself.
+# name of the key (kept in Settings → Secrets with the access "model providers only"), never the key itself.
 `
 
 /**
@@ -201,10 +206,17 @@ function caInfo(cert: X509Certificate): ProviderCa {
 export class Providers {
     /** `<config>/certs`: one `<provider>.pem` per provider with its own CA. */
     private readonly certs: string
+    /** The vault's provider keys, by name. */
+    private keys: (name: string) => string | null = () => null
 
     constructor(private readonly file: string) {
         this.certs = path.join(path.dirname(file), 'certs')
         this.applyTrust()
+    }
+
+    /** Where keys are read: the vault's provider keys, wired after both exist. */
+    useKeys(lookup: (name: string) => string | null): void {
+        this.keys = lookup
     }
 
     private caFile(name: string): string {
@@ -266,16 +278,14 @@ export class Providers {
         return this.read().providers.find((p) => p.name === name)
     }
 
-    /** The key of a provider, from the environment; null when it names no variable or the variable is empty. */
-    key(provider: Provider, env: NodeJS.ProcessEnv = process.env): string | null {
-        if (!provider.token) return null
-        return env[provider.token]?.trim() || null
+    /** The key of a provider, from the vault; null when it names none or the vault has no such provider key. */
+    key(provider: Provider): string | null {
+        return provider.token ? this.keys(provider.token) : null
     }
 
-    /** The bearer of a provider's MCP server, from the environment; null when it names none or the variable is empty. */
-    mcpKey(server: ProviderMcp, env: NodeJS.ProcessEnv = process.env): string | null {
-        if (!server.token) return null
-        return env[server.token]?.trim() || null
+    /** The bearer of a provider's MCP server, from the vault; null when it names none or the vault lacks it. */
+    mcpKey(server: ProviderMcp): string | null {
+        return server.token ? this.keys(server.token) : null
     }
 
     /** Variable names every provider's keys live in (model and MCP): what the CLI's environment must not carry. */
@@ -286,15 +296,15 @@ export class Providers {
         ])
     }
 
-    list(running: (name: string) => number = () => 0, env: NodeJS.ProcessEnv = process.env): ProvidersOverview {
+    list(running: (name: string) => number = () => 0): ProvidersOverview {
         const { providers, error } = this.read()
         return {
             file: this.file,
             providers: providers.map((p) => ({
                 ...p,
                 ca: this.ca(p.name),
-                mcp: p.mcp?.map((m) => ({ ...m, token_set: !m.token || this.mcpKey(m, env) !== null })),
-                token_set: this.key(p, env) !== null,
+                mcp: p.mcp?.map((m) => ({ ...m, token_set: !m.token || this.mcpKey(m) !== null })),
+                token_set: this.key(p) !== null,
                 running: running(p.name)
             })),
             error

@@ -78,6 +78,8 @@ export function Modal({
     }
     // Escape: the browser would close the element on its own; keep the state in charge.
     const onCancel = (e: SyntheticEvent) => {
+        // React hands a nested window's cancel to its parents too: only the window Escape was pressed in closes.
+        if (e.target !== e.currentTarget) return
         e.preventDefault()
         dismiss()
     }

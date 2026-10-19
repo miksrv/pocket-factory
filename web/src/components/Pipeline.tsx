@@ -941,14 +941,14 @@ function StepCard({
                         <Check
                             checked={step.items === true}
                             onChange={(on) => onChange({ ...step, items: on ? true : undefined, new_only: undefined })}
-                            label='prints a list of items'
+                            label='Prints a list of items'
                             title='key⇥title per line, or JSON; an empty list means no agent'
                         />
                         {step.items === true && (
                             <Check
                                 checked={step.new_only !== false}
                                 onChange={(on) => onChange({ ...step, new_only: on ? undefined : false })}
-                                label='new items only'
+                                label='New items only'
                             />
                         )}
                     </div>
@@ -1048,17 +1048,17 @@ function StepCard({
                         <Check
                             checked={options.mine === true}
                             onChange={(on) => setOptions({ mine: on || undefined })}
-                            label='my own pull requests'
+                            label='My own pull requests'
                         />
                         <Check
                             checked={options.drafts === true}
                             onChange={(on) => setOptions({ drafts: on || undefined })}
-                            label='drafts'
+                            label='Drafts'
                         />
                         <Check
                             checked={options.new_only !== false}
                             onChange={(on) => setOptions({ new_only: on ? undefined : false })}
-                            label='new items only'
+                            label='New items only'
                         />
                     </div>
                 </Field>
@@ -1088,12 +1088,12 @@ function StepCard({
                     <Check
                         checked={options.on_change !== false}
                         onChange={(on) => setOptions({ on_change: on ? undefined : false })}
-                        label='a changed ticket is new again'
+                        label='A changed ticket is new again'
                     />
                     <Check
                         checked={options.new_only !== false}
                         onChange={(on) => setOptions({ new_only: on ? undefined : false })}
-                        label='new items only'
+                        label='New items only'
                     />
                 </div>
             </Field>

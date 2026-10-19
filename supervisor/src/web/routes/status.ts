@@ -97,7 +97,7 @@ export function statusRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
     app.get('/', async (c) => {
-        const { config, store, tasks, toolchains, providers } = c.get('app')
+        const { config, store, tasks, sandboxes, previews, providers } = c.get('app')
         const workspaces = fs.existsSync(config.paths.workspacesRoot)
             ? fs
                   .readdirSync(config.paths.workspacesRoot, { withFileTypes: true })
@@ -107,10 +107,10 @@ export function statusRoutes(): Hono<Env> {
                       git: fs.existsSync(path.join(config.paths.workspacesRoot, entry.name, '.git'))
                   }))
             : []
-        const [[claude, gh, git], toolchainHealth] = await Promise.all([
-            toolVersions(),
-            toolchains.health().catch(() => null)
-        ])
+        const [claude, gh, git] = await toolVersions()
+        // Answered from the manager's cache; a dead daemon is refreshed in the background, never awaited here.
+        const sandbox = sandboxes.status()
+        const sandboxed = sandbox.mode === 'sbx'
         const mcpServers = tasks.mcpRegistry()
         const mcp = {
             total: mcpServers.length,
@@ -142,14 +142,24 @@ export function statusRoutes(): Hono<Env> {
             models: modelsOverview(c.get('app'), startOfDay(new Date(), config.timezone).toISOString()),
             limits: tasks.limits() ?? null,
             claude: {
-                version: claude,
+                // In sandbox mode the CLI is Docker's, inside each sandbox: the supervisor has none.
+                version: sandboxed ? null : claude,
                 model: tasks.model(),
                 permission_mode: config.claude.permissionMode,
                 max_turns: config.claude.maxTurns,
                 config_dir: config.claude.configDir,
-                logged_in: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) || loginOf(config.claude.configDir) !== 'none',
-                // `claude.ai`: a full login in the container (connectors available); `token`: CLAUDE_CODE_OAUTH_TOKEN (model calls only).
-                login: process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'token' : loginOf(config.claude.configDir)
+                logged_in: sandboxed
+                    ? sandbox.claude_login === true
+                    : Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) || loginOf(config.claude.configDir) !== 'none',
+                // `sandbox`: the login the sandboxes' proxy holds; `claude.ai`: a full login of this machine's CLI
+                // (connectors available); `token`: CLAUDE_CODE_OAUTH_TOKEN (model calls only).
+                login: sandboxed
+                    ? sandbox.claude_login
+                        ? 'sandbox'
+                        : 'none'
+                    : process.env.CLAUDE_CODE_OAUTH_TOKEN
+                      ? 'token'
+                      : loginOf(config.claude.configDir)
             },
             github: { cli: gh, token: Boolean(process.env.GH_TOKEN), owners: tokenOwners() },
             git: { version: git },
@@ -169,7 +179,18 @@ export function statusRoutes(): Hono<Env> {
             },
             max_concurrent_sessions: config.maxConcurrentSessions,
             workspaces,
-            toolchains: toolchainHealth,
+            sandboxes: {
+                mode: sandbox.mode,
+                ok: sandbox.ok,
+                error: sandbox.error,
+                version: sandbox.version,
+                docker_login: sandbox.docker_login,
+                claude_login: sandbox.claude_login,
+                total: sandbox.sandboxes.length,
+                running: sandbox.sandboxes.filter((s) => s.status === 'running').length,
+                approvals: sandbox.approvals.length,
+                previews: previews.list().map((p) => ({ project: p.project, url: p.url }))
+            },
             mcp,
             // Other model providers: what runs on each now and whether the gateway's last request got through.
             providers: tasks.providerStatus().map((p) => ({

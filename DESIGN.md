@@ -27,7 +27,10 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
   select): it stretches to the field, never sits as a small button in the middle of the row.
   `.row:has(> input, > select) > .btn` does it in `styles.css`; such a button is the default
   size, not `sm`.
-- **A checkbox label is a short phrase** (`drafts`, `new items only`), not a sentence.
+- **A checkbox or radio label is a short phrase starting with a capital** (`Drafts`, `New items only`,
+  `Every routine and chat`), not a sentence. A name picked from a list (a routine, a tool) stays as written.
+- **A choice that cannot be made is visibly off**: a disabled checkbox or radio is dimmed with its
+  caption and shows `not-allowed`; its `title` says why.
 - On a phone or a narrow window (≤ 900px) every field takes the full row.
 
 ## Sections
@@ -35,7 +38,7 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
 - **A long form is split into sections**, each under a heading: `SectionHead` from `ui.tsx`
   (title, one short line under it, actions such as `＋ File` or the Preview / Edit tabs on the
   right, a rule above). A block that is a list of cards or rows (Pipeline, Schedule, Hosts,
-  Toolchain, MCP servers, Tools, a skill's files) and the Markdown body are sections; a
+  Network, MCP servers, Tools, a skill's files) and the Markdown body are sections; a
   `Field` with `section` renders one. The first section of a form has no rule.
 - Plain fields (selects, inputs, checkboxes) are never sections; they sit in rows between them.
 - **"More"** folds what is rarely changed; its summary reads as a section heading and names

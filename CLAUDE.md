@@ -5,8 +5,8 @@ Guidance for Claude Code when working in this repository.
 ## What this is
 
 Pocket Factory is a **self-hosted layer over Claude Code for developers**: the **unmodified Claude
-Code CLI** running in a Docker container on the owner's own server, driven from Telegram and a
-small web control plane. The tagline is the product: *an agent becomes truly autonomous the moment
+Code CLI** running in Docker Sandboxes (a microVM per project) on the owner's own server, driven
+from Telegram and a small web control plane in a Docker container. The tagline is the product: *an agent becomes truly autonomous the moment
 you close your laptop lid*. Four things it adds on top of the CLI, in this order of importance:
 
 1. **Autonomy** — tasks arrive from Telegram (text, voice) or the browser, queue, run as `claude -p`
@@ -19,7 +19,7 @@ you close your laptop lid*. Four things it adds on top of the CLI, in this order
    instructions, a pipeline of steps and schedules).
 
 Concept, use cases and security model: `docs/SPEC.md` (§4.4 session lifecycle and §8 security are
-the load-bearing parts). History of what shipped: `CHANGELOG.md` and git log.
+the load-bearing parts). Deploying a release and the host's sandbox setup: `docs/DEPLOY.md`. History of what shipped: `CHANGELOG.md` and git log.
 
 Owner: Misha Topchilo. Single-owner tool; a fork uses the forker's own subscription and bot.
 
@@ -34,7 +34,7 @@ TELEGRAM_BOT_TOKEN= yarn dev # web-only: use this while the container runs, or T
 yarn dev:web                 # Vite dev server on :5173 proxying /api → WEB_PORT from .env
 docker compose up -d --build # build image + (re)start the supervisor container
 docker compose logs -f supervisor
-docker compose run --rm supervisor claude -p "Reply with exactly: OK" --model haiku --max-turns 1   # auth smoke test
+sbx exec pf-factory claude -p "Reply with exactly: OK" --model haiku --max-turns 1   # auth smoke test (on the host)
 node scripts/release.mjs bump 1.2.0   # new version: package.json ×3 + a CHANGELOG.md section to fill in
 node scripts/release.mjs tag          # after the merge, on a clean main in sync with origin: tag vX.Y.Z + GitHub release
 ```
@@ -73,8 +73,8 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
   - `tasks/service.ts` — **the session manager**: one queue for all channels, spawn `claude -p` per
     task, one running task per conversation, `MAX_CONCURRENT_SESSIONS` overall; emits `task` /
     `event` for Telegram delivery and SSE. Also: questions / permissions (`tasks.ask`), restart
-    recovery, auto-continue after a limit, provider env, toolchain cleanup — see Decisions
-  - `claude/runner.ts` spawns `claude -p` with stream-json on stdin and stdout, surfaces text /
+    recovery, auto-continue after a limit, provider env, the factory MCP's `preview` — see Decisions
+  - `claude/runner.ts` starts `claude -p` through an executor with stream-json on stdin and stdout, surfaces text /
     tool_use / tool_result, `llm` (one per model call), `agent` (sub-agent start / end from the
     CLI's `task_started` / `task_notification`), `limits` and the final `result`
   - `bot.ts` grammY bot (text, voice, photos / documents), `stt/groq.ts` Whisper,
@@ -97,17 +97,24 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
     `parseItems`), `service.ts` (the scheduler, 20 s tick)
   - `secrets/vault.ts` — Settings → Secrets and variables: `data/vault/secrets.json` (0600),
     scoped values into `agentEnv(scope)`, `redact()` masks secrets in what the store keeps
-  - `toolchains/` — `detect.ts` (a checkout's needs: go.mod, `.nvmrc`, engines, composer,
-    `.python-version`, mise / tool-versions, compose services), `mise.ts`, `docker.ts` (the dind
-    sidecar through `DOCKER_HOST`), `service.ts` (overview cached a minute; `health()` answers from
-    the cache and refreshes in the background so a dead sidecar never stalls `/api/status`)
+  - `sandbox/` — `sbx.ts` (typed wrapper over the sbx CLI, injectable runner), `executor.ts`
+    (`LocalExecutor` spawns here, `SbxExecutor` runs `sbx exec` with env by name and a `PF_RUN`
+    mark per run; `collect`), `manager.ts` (`SandboxManager`: `pf-<slug>` per project made and set up
+    on first use, network rules, approvals, idle stop, Reset, `status()` from a cache refreshed in
+    the background so a dead daemon never stalls `/api/status`), `network.ts` (what a project's
+    sandbox may reach), `previews.ts` (one preview per project, its key, publishing, TTL)
   - `gateway/` — the provider gateway (`/gateway/<name>`, outside `/api`), `translate.ts`
     Anthropic Messages ↔ OpenAI chat completions, streaming included; MCP pass-through;
     `factory.ts` the factory's own MCP server per task (`/factory/<task>/mcp`, tool `delegate`)
+  - `sharing/` — `zip.ts` (a dependency-free ZIP writer / reader: no links, no paths that climb out,
+    size limits), `bundle.ts` (the preset layout as a bundle: read a ZIP / a folder / one Markdown
+    file, install the picked items, export with masked secrets); `/api/share/export` and
+    `/api/share/import` in `web/routes/sharing.ts`; presets install through the same code
   - `git/changes.ts` — the Changes panel (start head recorded before the CLI starts, measured at
     the end of every attempt: branch, base, files / lines, uncommitted, `gh pr list --head`)
   - `claude/mcpLogin.ts` — `claude mcp login --no-browser` under a pseudo-terminal; `claude/models.ts`
-  - `web/` Hono server: `auth.ts` sign-in, `routes/*` (`/api/*`), serves `web/dist`
+  - `web/` Hono server: `auth.ts` sign-in, `routes/*` (`/api/*`), `preview.ts` (`/preview/<project>/…`
+    proxy and its WebSocket upgrades), serves `web/dist`
 - `web/src/` — Vite + React SPA, no UI framework, one `styles.css`; `lib/api.ts` typed client.
   - `components/ui.tsx` is the shared vocabulary and the only place its markup lives: `Button`
     (every button and button-styled link, `variant` / `size` / `to`), `Stat`, `Tabs`,
@@ -134,7 +141,7 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
     `highlight.js` (`lib/highlight.ts`); an Edit renders as a diff, Write as the file, Bash as the
     command. Markdown / text files stay plain on purpose.
   - Other parts: `Ask.tsx` (questions / permissions), `Attachments.tsx`, `Changes.tsx`,
-    `Toolchains.tsx`, `Providers.tsx` + `ModelPicker`, `McpLogin.tsx`, `Auth.tsx`; `lib/drafts.ts`
+    `Sandboxes.tsx` (Settings → Sandboxes, a project's sandbox card), `Providers.tsx` + `ModelPicker`, `McpLogin.tsx`, `Auth.tsx`; `lib/drafts.ts`
     (unsent text per conversation), `lib/favicon.ts` (badge on the favicon), `lib/notify.ts`
     (desktop notifications, https / localhost only), `lib/theme.ts`, `lib/activity.ts`.
 - `templates/claude/` — seeded into `data/claude/` on **every** container start with `cp -n`: new
@@ -142,18 +149,19 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
   Prose in agent / skill / project Markdown is not hard-wrapped (one line per paragraph or list
   item): the UI editor wraps it, previews render with `breaks: false`.
   `node scripts/reflow-md.mjs <files>` unwraps a file that was written wrapped.
-- `presets/<name>/` — `preset.json` + `agents/` `skills/` `projects/`, installed from the UI.
+- `presets/<name>/` — `preset.json` + `agents/` `skills/` `routines/` `projects/` (the bundle layout an
+  export writes), installed from the UI.
   Installed files are one flat namespace: files shared by presets (`fullstack-feature`,
   `web-developer`) must stay byte-identical across them.
-- `docker/` — `entrypoint.sh` (seeds `/data`, git identity + `safe.directory '*'`, links
-  `/data/secrets/ssh` → `~/.ssh`, installs the image's node through mise), `gh` wrapper,
-  `git-credential-owner`, `gh-token`
+- `docker/` — `entrypoint.sh` (seeds the data directory, git identity + `safe.directory '*'`, links
+  `secrets/ssh` → `~/.ssh`, checks the sbx client), `gh` wrapper, `git-credential-owner`,
+  `gh-token` (also copied into every sandbox's `~/.local/bin`)
 - `docs/brand/logo.png` — the only logo source (no hand-drawn SVG); `web/public/` holds the cuts
   made from it with Pillow (`apple-touch-icon` on an opaque square, `icon-maskable-512` in the 80 %
   safe zone) and the PWA manifest
-- `data/` — runtime state, gitignored, bind-mounted; `WORKSPACES_DIR` in `.env` points the container
-  (and `yarn dev`) at the owner's existing repositories. `docker-compose.override.yml` is local and
-  untracked (bot off, dind on a named volume for macOS): never commit it
+- `data/` — runtime state, gitignored, bind-mounted at its host path (`DATA_DIR`); `WORKSPACES_DIR`
+  in `.env` points the container, the sandboxes (and `yarn dev`) at the owner's existing
+  repositories. `docker-compose.override.yml` is local and untracked (bot off): never commit it
 
 ## Versioning and releases
 
@@ -183,16 +191,15 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 ### Runtime and auth
 
 - Agent runtime = `claude` CLI subprocess, never the Agent SDK with a stored token (ToS, SPEC §8).
-  The CLI is installed as published and never patched.
-- Auth = a full claude.ai login **inside the container**:
-  `docker compose run --rm -it -e CLAUDE_CODE_OAUTH_TOKEN= supervisor claude auth login` prints a
-  URL, the code is pasted back, `data/claude/.credentials.json` gets the `user:mcp_servers` /
-  `user:profile` / `user:plugins` scopes. That brings the **claude.ai connectors** (Gmail, Drive,
-  ClickUp, …) and synced plugins into every `-p` session, deferred behind
-  ToolSearch. `CLAUDE_CODE_OAUTH_TOKEN` in `.env` must stay empty: a setup-token takes precedence
-  and cannot fetch connectors; it stays only as a fallback for CI-like runs. On a macOS host the
-  CLI uses the Keychain, not `CLAUDE_CONFIG_DIR`, so connectors and MCP sign-ins must be tested
-  against the container, not `yarn dev`.
+  The CLI is the one in Docker's agent image inside each sandbox, never patched; the supervisor's
+  image has no CLI (`SANDBOX=local` is for `yarn dev`, unit tests and e2e only, owner 2026-10-19).
+- Auth = the claude.ai login **of the sandboxes**: `/login` once in any sandbox on the host
+  (`ssh -t <server> sbx run pf-factory`, press `c` to copy the long URL) is stored by sbx as the
+  global `anthropic` secret; its proxy swaps the tokens of whatever `.credentials.json` the CLI
+  reads for the real login, so the **claude.ai connectors** and plugins reach every `-p` session and
+  no VM holds the token. The manager writes a placeholder `.credentials.json` into `data/claude`
+  when it has none (the CLI wants the file). `CLAUDE_CODE_OAUTH_TOKEN` in `.env` must stay empty.
+  The Docker account (`sbx login`) is a second login on the host; Settings → Sandboxes shows both.
 - The supervisor never calls the Claude API with the owner's credentials: no model list (the
   editor offers the CLI aliases `sonnet` / `opus` / `haiku` / `fable` / `inherit`, which follow
   releases by themselves; a full id can still be typed), no `/api/oauth/usage`.
@@ -214,6 +221,38 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   resumes it. A session that cannot be resumed is forgotten and the task runs once more fresh. A
   session cannot follow a cwd change: when the transcript's directory slug differs from the cwd,
   a fresh session starts.
+- **Sandboxes** (1.7.0; host setup, the upgrade and how sbx behaves: `docs/DEPLOY.md`): one persistent
+  Docker Sandbox per project (`pf-<slug>`; `pf-factory` for project-less chats, titles, the limits
+  probe, `claude mcp list`), made on first use with the checkout (or the workspaces root),
+  `data/claude`, `data/config`, `data/inbox` and `data/secrets/ssh` (ro) mounted **at their host
+  paths** (the container mounts them at the same paths, `DATA_DIR`, so cwd, attachments and
+  transcripts mean the same everywhere; `/data/<x>` links inside point at them for the files that
+  name the old paths). `CLAUDE_CONFIG_DIR` = the host path of `data/claude`. Setup once per
+  sandbox: the gh / git wrappers into `~/.local/bin`, git identity and credential helper, `~/.ssh`,
+  the factory's known_hosts. Every run is `sbx exec` with the env passed **by name** (`-e NAME`,
+  values in the client's env, never argv) minus the host's own names, and `PF_RUN=<id>`: killing
+  `sbx exec` does not reach the VM, so a stop signals the run's processes by that mark, and the
+  first use of a running sandbox after a restart kills every `claude` with a `PF_RUN` left (their
+  dev servers stay: an open preview may need them). The manager starts a stopped sandbox itself
+  and refuses a cwd it does not mount (a moved checkout: Reset). A sandbox that will not start
+  (`LaunchError`) re-queues the task a minute later, three times, keeping its session. A project
+  named `factory` gets `pf-factory-project`. Vault names that stay on the host are refused. Idle `SANDBOX_IDLE_MIN` → stopped;
+  removed only by the owner's Reset. Routine scripts run in the routine's project sandbox;
+  `github-prs` / `trac` sources and the Changes panel's git / gh stay on the supervisor.
+- **Network per sandbox**: sbx's `balanced` policy plus the factory's own rules, tracked by id in
+  `meta` `sandbox.rules.<name>` (the owner's rules never touched): the supervisor's port
+  (`localhost:<port>`, how the proxy names `host.docker.internal`), a project file's `network:`,
+  its SSH hosts, its routines' Trac sites. A blocked request (`sbx policy approval ls`, polled
+  every 5 s while a run goes on) reaches Telegram (`w|a|<id>` / `w|d|<id>`) and the project page;
+  Allow adds the host to the project file.
+- **Preview** (one per project, owner 2026-10-19): the factory MCP's `preview({port,
+  strip_prefix})` publishes the port on `PREVIEW_BIND` (the docker bridge) from `PREVIEW_PORTS`;
+  `/preview/<project>/` needs the sign-in and redirects to `/preview/<project>/<key>/`, under which
+  the proxy needs no cookie (a page under `CSP: sandbox` without `allow-same-origin` sends none
+  with its module scripts and fetches): the random per-project key is the access, a Reset rotates
+  it. Responses get open CORS and `cross-origin` CORP, `Host: localhost:<port>` goes upstream, the
+  `pf_session` cookie never does. `$PREVIEW_BASE` is in every run of a project. Telegram gets Open /
+  Stop (`pv|stop|<project>`); `PREVIEW_TTL_HOURS` ends one.
 - The agent works in the owner's real checkouts on a branch (no worktrees, no re-cloning). A
   conversation bound to a project (Chat selector, Telegram `/new <p>`, or detected from the first
   task) runs with cwd = the checkout, so the repository's `.mcp.json`, `.claude/agents`, skills
@@ -243,25 +282,30 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   root>`, so Read needs no permission. Telegram albums are gathered for 1.5 s; files without a
   caption wait 30 min for the next text. Inline serving only for PNG / JPEG / GIF / WebP, the rest
   as a download under a sandbox CSP.
-- **Toolchains**: mise in the image with `MISE_DATA_DIR` on `data/tools` (create it before the
-  first `up` on Linux, or it is root-owned), PHP from sury, docker CLI + compose. The agent
-  installs what a checkout needs itself. Test services run in a `docker:dind` sidecar (compose
-  profile `docker`, `COMPOSE_PROFILES=docker`, TLS, `DOCKER_MEMORY` 8g, workspaces mounted at the
-  same path), never the host's socket; `TaskService` stops what a task started unless another
-  running task's project owns it. Under `yarn dev` only the factory's own mise is listed or pruned.
-  The Claude CLI is a native binary, so the shims never change the node it runs on.
 
 ### Model providers (1.3.0+)
 
 - `data/config/providers.yaml`: endpoints besides the subscription. `kind: anthropic` speaks
   `/v1/messages` (Ollama, vLLM, OpenRouter), `kind: openai` speaks chat completions (OpenAI,
-  Gemini, Groq) through `gateway/translate.ts`. Each has `token` (the name of the `.env` variable
-  with its key; never a factory secret), `models`, `default`, `small`, `concurrency`, `light`,
-  `mcp:` and an optional CA (`data/config/certs/<provider>.pem`, added to the CA store at once).
+  Gemini, Groq) through `gateway/translate.ts`. Each has `token` (the name of its key; never a
+  factory secret), `models`, `default`, `small`, `concurrency`, `light`, `mcp:` and an optional CA
+  (`data/config/certs/<provider>.pem`, added to the CA store at once).
+- **`.env` vs Secrets** (owner, 1.7.0): `.env` and `.env.example` hold only the factory's own
+  secrets (bot token and allowed ids, web sign-in, Groq), the GitHub tokens (the supervisor's
+  Changes panel and `github-prs` read them too, until they go through the sbx proxy) and settings.
+  Everything a provider, a routine or an agent needs (provider keys, the Trac login, a script's
+  tokens) is a dynamic secret or variable of the vault, set from the UI; never add such a name to
+  `.env.example`.
+- **Provider keys live in the vault only** (1.7.0, owner's call: no `.env` per provider): a secret
+  with the access "model providers only" (`provider: true`), picked in the provider form beside
+  New secret (the same `SecretDialog`). Only the gateway and the form's test read it; never in
+  `envFor` / `reaches`, whatever the scope; masked like any secret; a name stays a provider key or
+  a run's entry for life, and a provider may not name a run's secret. `.env` is not read for keys:
+  `migrateEnvKeys` moves a provider's key from `.env` into the vault once at start (DEPLOY.md).
 - A task's provider comes from its routine, the agent it runs as (`provider:` +
   `provider_model:`; `model:` stays a CLI alias so the agent still works as a sub-agent), or the
   conversation (Chat selector, `/model provider:model`; a change forgets the session).
-- The CLI is pointed at `/gateway/<name>` with a per-provider bearer (`gatewayToken(name)`, HMAC of
+- The CLI is pointed at `/gateway/<name>` (from a sandbox through `SANDBOX_FACTORY_URL`) with a per-provider bearer (`gatewayToken(name)`, HMAC of
   a per-start secret) and no Claude credentials; the gateway adds the real key, so keys never
   reach an agent. A provider's `mcp:` servers are offered only to its tasks, through the gateway;
   a subscription task never connects to the box.
@@ -303,9 +347,9 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   is folded into the connector (the CLI drops it anyway).
 - OAuth sign-in: Settings → MCP → Authorize runs `claude mcp login <name> --no-browser` in the
   factory under a pty (`script -qfec` in the image, a python pty loop on macOS); connector URLs
-  finish on claude.ai, a project's server waits for the redirect URL pasted back. Console fallback:
-  `docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser`.
-  The URL + paste flow in the container is the proven way to authorize anything OAuth.
+  finish on claude.ai, a project's server waits for the redirect URL pasted back. It runs in the sandbox that uses the server (`sbx exec -it` under the pty); console fallback on the
+  host: `sbx exec -it -w <checkout> pf-<project> claude mcp login <name> --no-browser`.
+  The URL + paste flow is the proven way to authorize anything OAuth.
   Plugins and the owner's own `mcp.json` servers get no button (`claude mcp login` does not list them).
 
 ### Telegram
@@ -420,12 +464,29 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - Mail has no deterministic source yet (Gmail lives in the session as a connector): a mail
   routine is a schedule at a coarse cadence. Trac is polled over HTTP from the supervisor: the
   step holds the custom query's address as the browser has it (`url:`; no `TRAC_URL`, owner's
-  call), the login is shared by every Trac step (`TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every routine in its
+  call), the login is shared by every Trac step (`TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`, in Secrets,
+  never in `.env`). Start every routine in its
   instructions with "look and report, change nothing" and graduate it.
 - **No mode field** (1.6.0, owner's call): `action:` was only a line in the prompt and looked like a
   safety switch it never was, so what a run may do is written in its instructions. On start
   `migrateRoutineActions` moves an old file's `action:` into the first line of its body, once. A
   real read-only run would be deny rules in the session, not a field.
+
+### Sharing (1.7.0)
+
+- **One format for presets and sharing**: a ZIP in the preset layout (`sharing/bundle.ts`). Export:
+  an agent, a skill or a routine from its page (a routine with its agent step's agent and skill by
+  default, its `data/` only when asked: it may be personal), several on the Presets page. Import
+  (Presets, Agents, Skills, Routines): such a ZIP, a repository download, a `.skill` file, or one
+  Markdown file as a skill (or an agent); a preview lists each item (new / replaces yours, files,
+  what its scripts declare and whether the vault has it) and installs only what is ticked.
+- Owner's rules: **secrets and variables never travel** (the vault is not exported; a secret's value
+  found in an exported file is masked); **a routine arrives switched off** (also from a preset);
+  a routine whose agent, skill or project is missing is imported anyway, the form shows the default
+  and the preview says so. Projects are never exported (paths, hosts, notes are the owner's).
+- An agent and a skill go by their own `name:`; a replaced item keeps the files the bundle does not
+  bring (a routine's data). Import bodies get the upload limit (20 MB); the ZIP reader refuses links,
+  `..`, absolute paths, encryption, ZIP64 and more than 2000 entries / 8 MB a file / 64 MB in all.
 
 ### Hosts, GitHub, security
 
@@ -495,6 +556,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
    to the chat, budgets per agent / project, audit export.
 3. Providers: tokens moved off the subscription on the Overview, the delegation line in Telegram,
    the 1.3.0 review follow-ups (`docs/plans/providers.md`).
-4. Toolchains: a weekly prune routine, `data/docker` size in Health, toolchains in `/status`.
+4. Sandboxes: the open checks of `docs/DEPLOY.md` (OAuth refresh over days, a reboot with the user
+   unit), GitHub tokens and SSH keys through the sbx proxy instead of the env.
 5. Hardening: backups of `data/`, README for forkers, `useBlocker` for browser back, one shared
    status poll, CodeMirror.

@@ -9,7 +9,7 @@ Turns "answer the mail from X about Y" into a draft in your Gmail, and "what cam
 
 **Needs**
 
-- The factory logged into claude.ai, not a setup-token: `docker compose run --rm -it -e CLAUDE_CODE_OAUTH_TOKEN= supervisor claude auth login` once (prints a URL, paste the code back), and `CLAUDE_CODE_OAUTH_TOKEN` left empty in `.env`, since a token there takes precedence and hides the connectors.
+- The factory logged into claude.ai, not a setup-token: `/login` once in a sandbox on the host (`sbx run pf-factory`; press `c` to copy the URL), and `CLAUDE_CODE_OAUTH_TOKEN` left empty in `.env`, since a token there takes precedence and hides the connectors.
 - Gmail connected at claude.ai → Settings → Connectors with the same account. `claude mcp list` in the container then shows `claude.ai Gmail: … ✔ Connected`.
 - The connector serves the Gmail of that claude.ai account. For another mailbox, add a server of the agent's own in Agents → email-assistant → "MCP servers of this role" (for example `npx -y @gongrzhe/server-gmail-autoauth-mcp@1.1.11` with `GMAIL_OAUTH_PATH` / `GMAIL_CREDENTIALS_PATH` pointing at that mailbox's OAuth client and token under `data/secrets/gmail/<box>/`, logged in on the laptop) and its read / draft tools to `tools:`.
 

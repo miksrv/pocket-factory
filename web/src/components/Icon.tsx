@@ -1,16 +1,20 @@
 import {
     Activity,
+    AppWindow,
     ArrowDown,
     Bell,
     BellOff,
     Bot,
+    Box,
     Braces,
+    ChartColumnStacked,
     Check,
     ChevronDown,
     ChevronRight,
     CircleAlert,
     ClipboardList,
     Cpu,
+    Download,
     ExternalLink,
     Eye,
     EyeOff,
@@ -43,6 +47,7 @@ import {
     Ticket,
     Trash2,
     TriangleAlert,
+    Upload,
     X,
     Zap
 } from 'lucide-react'
@@ -69,6 +74,8 @@ export const ICONS = {
     settings: Settings,
     control: Activity,
     limits: Gauge,
+    /** Tokens over time (the Overview's chart). */
+    usage: ChartColumnStacked,
     /** Channels a conversation comes from: a paper plane for Telegram, the chat bubble for the web. */
     telegram: Send,
     web: MessageSquare,
@@ -115,7 +122,13 @@ export const ICONS = {
     alert: CircleAlert,
     /** A routine step's kind: a script, a Trac query (pull requests are `pr`, the agent `agents`). */
     script: SquareTerminal,
-    ticket: Ticket
+    ticket: Ticket,
+    /** Where the agents run (Settings → Sandboxes, a project's card) and the app an agent shows. */
+    sandbox: Box,
+    preview: AppWindow,
+    // Sharing: a bundle leaves as a download, comes in as an upload.
+    export: Download,
+    import: Upload
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.0
+
+### Minor Changes
+
+- Sandboxes: every project's agent runs in its own Docker Sandbox (a microVM with sudo and its own Docker, kept between tasks); chats without a project in `pf-factory`
+- Sandboxes: Settings → Sandboxes shows the daemon, the Docker and Claude logins, each sandbox with Stop and Reset
+- Sandboxes: a project's sandbox reaches only what its file names (`network:`, its SSH hosts, its routines' Trac); a blocked host comes to Telegram and the project page with Allow / Deny
+- Preview: the agent shows a running app at `/preview/<project>/` behind the factory's sign-in (`preview` tool), with Open / Stop in Telegram and on the project page
+- Routines: a step's script runs in its project's sandbox, with the tools the agent installed there
+- Toolchains: removed (mise, PHP and Docker in the image, the dind sidecar, Settings → Toolchains); the agent installs what a checkout needs in its sandbox
+- Projects: a Network section and the sandbox card above the form
+- Overview: tokens by day for 7 / 30 / 90 days, each subscription model and each provider apart
+- Providers: the API key (and an MCP server's) is a secret with the access "model providers only", picked or added in the form; no `.env`
+- Providers: keys still in `.env` move into Secrets at start, once
+- Routines: the Trac login is no longer in `.env.example`; it is set in Secrets
+- Sharing: Export of an agent, a skill or a routine (with its agent, skill and scripts; `data/` on request) as a ZIP, several at once on the Presets page
+- Sharing: Import of such a ZIP, a `.skill` file or one Markdown file (a skill or an agent), with a preview of each item and what its scripts need; routines arrive switched off, secrets and variables never travel
+- Presets: a preset may carry routines
+- Skills: `pr-review` says it is for someone else's PR on GitHub, so `code-review` keeps the agent's own branch
+
 ## 1.6.1
 
 ### Patch Changes

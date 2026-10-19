@@ -11,6 +11,8 @@ import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
 import type { Routines } from './routines/service.js'
 import type { RoutineSpec } from './routines/spec.js'
+import type { SandboxManager } from './sandbox/manager.js'
+import type { Previews } from './sandbox/previews.js'
 import type { Vault } from './secrets/vault.js'
 import type { Ask, Conversation, RateLimitSnapshot, RoutineRun, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
@@ -347,7 +349,8 @@ export function createBot(
     store: Store,
     routines?: Routines,
     auth?: WebAuth,
-    vault?: Vault
+    vault?: Vault,
+    sandbox?: { sandboxes: SandboxManager; previews: Previews }
 ): Bot {
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
@@ -881,6 +884,19 @@ export function createBot(
     // What the owner needs on a phone: where the next message goes, what runs now, the model
     // and the windows (2026-10-05: session id and the workspaces path were noise, the
     // conversation line is shown only when the chat was switched to another thread by a reply).
+    /** The sandboxes in one line: how many run, whether the daemon answers, what waits for the owner. */
+    const sandboxLine = (): string | null => {
+        const status = sandbox?.sandboxes.status()
+        if (!status || status.mode !== 'sbx') return null
+        if (status.ok === false) return `Sandboxes: ⚠️ ${escapeHtml(status.error ?? 'the daemon does not answer')}`
+        const running = status.sandboxes.filter((s) => s.status === 'running').length
+        const extra = [
+            status.approvals.length ? `${status.approvals.length} blocked request(s) waiting` : null,
+            status.claude_login === false ? 'no Claude login' : null,
+            status.docker_login === false ? 'no Docker login' : null
+        ].filter(Boolean)
+        return `Sandboxes: ${running} running of ${status.sandboxes.length}${extra.length ? ` · ${extra.join(' · ')}` : ''}`
+    }
     const statusView = (chatId: number): View => {
         const conversation = topicFor(chatId)
         const fresh = mode() === 'fresh'
@@ -923,7 +939,8 @@ export function createBot(
                 : !fresh && conversation.provider
                   ? `Model: ${escapeHtml(modelRef(conversation.provider, conversation.model) ?? conversation.provider)} for this chat (/model claude comes back; factory: ${tasks.model()})`
                   : `Model: ${tasks.model()} (/model to switch)`,
-            `Limits: ${windows ?? 'unknown (see /usage)'}`
+            `Limits: ${windows ?? 'unknown (see /usage)'}`,
+            sandboxLine()
         ].filter((line): line is string => Boolean(line))
         return [
             text(lines.join('\n')),
@@ -1105,6 +1122,28 @@ export function createBot(
                     const view =
                         c === 'l' ? listView() : c === 'c' && schedule ? cardView(schedule) : statusView(chatId)
                     await edit(ctx, view ?? listView()).catch(() => undefined)
+                    return
+                }
+                case 'w': {
+                    if (!sandbox) throw new Error('sandboxes are off')
+                    const allow = a === 'a'
+                    const approval = await sandbox.sandboxes.decide(data.slice(4), allow)
+                    await ctx.answerCallbackQuery({ text: allow ? '✓ Allowed' : 'Denied' })
+                    await edit(ctx, [
+                        text(
+                            `${allow ? '✅' : '🚫'} <code>${escapeHtml(approval.resource)}</code> ${allow ? (approval.project ? `allowed for ${escapeHtml(approval.project)} (its project file's network: list)` : 'allowed') : 'stays blocked'}.`
+                        )
+                    ]).catch(() => undefined)
+                    return
+                }
+                case 'pv': {
+                    if (!sandbox) throw new Error('previews are off')
+                    const project = data.slice('pv|stop|'.length)
+                    const closed = await sandbox.previews.close(project, 'stopped by the owner')
+                    await ctx.answerCallbackQuery({ text: closed ? '⏹ Preview stopped' : 'No preview was open' })
+                    await edit(ctx, [text(`⏹ The preview of <b>${escapeHtml(project)}</b> is stopped.`)]).catch(
+                        () => undefined
+                    )
                     return
                 }
                 case 'u': {
@@ -1535,6 +1574,56 @@ export function createBot(
                   ? `🔒 Web sign-in locked for ${where} until ${new Date(notice.locked_until ?? Date.now()).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' })} after ${notice.failures} wrong passwords${name}.`
                   : `⚠️ Wrong web password ${where}${name}. ${auth.policy.max_failures - notice.failures} more and that address is locked for ${auth.policy.lock_minutes} min.`
         sendMarkdown(bot, ownerChat, text).catch((error) => log.error('sign-in notice failed', error))
+    })
+
+    // A sandbox's network policy held a request back: the owner allows the host for the project (it goes
+    // into the project file's `network:`) or leaves it blocked. Callback data carries sbx's approval id.
+    const fits = (data: string) => Buffer.byteLength(data) <= 64
+    sandbox?.sandboxes.on('approval', (approval) => {
+        if (!ownerChat) return
+        const allow = `w|a|${approval.id}`
+        const deny = `w|d|${approval.id}`
+        const where = approval.project ? `project <b>${escapeHtml(approval.project)}</b>` : 'a chat without a project'
+        send(ownerChat, [
+            text(
+                `🌐 The sandbox of ${where} was refused <code>${escapeHtml(approval.resource)}</code> by its network policy.\nAllow it, and the agent's next try gets through.`
+            ),
+            fits(allow)
+                ? row(
+                      {
+                          text: approval.project ? '✅ Allow for this project' : '✅ Allow',
+                          data: allow,
+                          style: 'success'
+                      },
+                      { text: '🚫 Deny', data: deny }
+                  )
+                : text('Answer it in Settings → Sandboxes.')
+        ]).catch((error) => log.error('approval notice failed', error))
+    })
+
+    // The agent showed its app: the address, with Open (when the factory has a public address) and Stop.
+    sandbox?.previews.on('opened', (preview) => {
+        if (!ownerChat) return
+        const stop = `pv|stop|${preview.project}`
+        send(
+            ownerChat,
+            [
+                text(
+                    `👀 Preview of <b>${escapeHtml(preview.project)}</b>: ${escapeHtml(preview.url)}${preview.expires_at ? `\nOpen until ${new Date(preview.expires_at).toLocaleString('en-GB', { timeZone: config.timezone, dateStyle: 'short', timeStyle: 'short' })}.` : ''}`
+                ),
+                row(
+                    /^https?:\/\//.test(preview.url) ? { text: '🔗 Open', url: preview.url } : null,
+                    fits(stop) ? { text: '⏹ Stop', data: stop } : null
+                )
+            ],
+            { taskId: preview.task_id }
+        ).catch((error) => log.error('preview notice failed', error))
+    })
+    sandbox?.previews.on('closed', (preview, reason) => {
+        if (!ownerChat || reason === 'stopped by the owner') return
+        sendMarkdown(bot, ownerChat, `⏹ The preview of \`${preview.project}\` is stopped: ${reason}.`).catch((error) =>
+            log.error('preview notice failed', error)
+        )
     })
 
     // A secret is as sensitive as the password: every change is told, never its value.

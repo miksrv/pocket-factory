@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Modal, useConfirm } from '../components/Modal'
+import { ExportDialog, ImportButton } from '../components/Sharing'
 import { Tile } from '../components/Tile'
 import { Button, Empty, ErrorBox, Markdown, PageHead, useToast } from '../components/ui'
 import { api, fmt, type Preset } from '../lib/api'
@@ -37,6 +38,7 @@ export function PresetsPage() {
     const [toast, showToast] = useToast()
     const [busy, setBusy] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const [exporting, setExporting] = useState(false)
     const confirm = useConfirm()
 
     const run = async (preset: Preset, overwrite: boolean) => {
@@ -110,8 +112,11 @@ export function PresetsPage() {
         <div className='page'>
             <PageHead
                 title='Presets'
-                sub='Ready-made bundles of agents, skills and project templates shipped with the repository. Install copies them onto the volume; from then on they are yours to edit.'
-            />
+                sub='Ready-made bundles of agents, skills, routines and project templates. Install copies them onto the volume; from then on they are yours to edit. Export and Import share them with a colleague as a ZIP.'
+            >
+                <Button onClick={() => setExporting(true)}>Export</Button>
+                <ImportButton />
+            </PageHead>
             <ErrorBox error={presets.error ?? error} />
             {presets.data?.length === 0 && <Empty>No presets found in presets/.</Empty>}
             <div
@@ -194,6 +199,15 @@ export function PresetsPage() {
                 >
                     <ErrorBox error={error ?? undefined} />
                 </Modal>
+            )}
+            {exporting && (
+                <ExportDialog
+                    onClose={() => setExporting(false)}
+                    onExported={(text) => {
+                        setExporting(false)
+                        showToast(text)
+                    }}
+                />
             )}
             {toast}
         </div>

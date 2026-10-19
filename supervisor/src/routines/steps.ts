@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { type Executor, type Launched, LocalExecutor } from '../sandbox/executor.js'
 import { type Item, parseItems, runSource, type SourceContext, SourceError } from './sources.js'
 import type { RunStep, SourceStep, Step } from './spec.js'
 
@@ -43,7 +43,10 @@ export interface PipelineResult {
     ms: number
 }
 
-export type StepContext = SourceContext
+export type StepContext = SourceContext & {
+    /** Where scripts run: the routine's project sandbox (its tools are the agent's), or the supervisor. */
+    executor?: Executor
+}
 
 /** How much of a script's output reaches the prompt: the head and the tail of a long one. */
 export const OUTPUT_MAX = 16_000
@@ -84,52 +87,48 @@ export function cap(output: string, max = OUTPUT_MAX): { text: string; truncated
 }
 
 /**
- * One script: `bash -c` in its own process group, so a timeout ends the whole
- * pipeline the script started (`curl | sort`, a loop of ssh calls), not only
- * bash. The routine's variables (`SKILL_DIR`, `ROUTINE_FILE`, …) are in the
- * environment: bash expands `${SKILL_DIR}` itself, safely inside quotes.
+ * One script: `bash -c` in its own process group (or, in a sandbox, marked as one run), so a
+ * timeout ends the whole pipeline the script started (`curl | sort`, a loop of ssh calls), not
+ * only bash. It runs in the routine's project sandbox, with the tools its agent installed there.
+ * The routine's variables (`SKILL_DIR`, `ROUTINE_FILE`, …) are in the environment: bash expands
+ * `${SKILL_DIR}` itself, safely inside quotes.
  */
-export function runScript(step: RunStep, ctx: StepContext): Promise<ScriptRun> {
+export async function runScript(step: RunStep, ctx: StepContext): Promise<ScriptRun> {
     const started = Date.now()
     const cwd = step.cwd ? path.resolve(ctx.cwd, step.cwd) : ctx.cwd
-    return new Promise((resolve) => {
-        if (!fs.existsSync(cwd))
-            return resolve({
-                stdout: '',
-                stderr: `directory ${cwd} does not exist`,
-                code: null,
-                timedOut: false,
-                ms: 0
-            })
-        const child = spawn('bash', ['-c', step.run], {
+    const failed = (stderr: string): ScriptRun => ({ stdout: '', stderr, code: null, timedOut: false, ms: 0 })
+    if (!fs.existsSync(cwd)) return failed(`directory ${cwd} does not exist`)
+    let launched: Launched
+    try {
+        launched = await (ctx.executor ?? new LocalExecutor()).launch({
+            argv: ['bash', '-c', step.run],
             cwd,
             env: ctx.env,
-            detached: true,
-            stdio: ['ignore', 'pipe', 'pipe']
+            project: ctx.project?.slug ?? null,
+            stdin: 'ignore'
         })
+    } catch (error) {
+        return failed(`could not start: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const { child } = launched
+    return new Promise((resolve) => {
         let stdout = ''
         let stderr = ''
         let killed = false
         let settled = false
-        const killGroup = (signal: NodeJS.Signals) => {
-            try {
-                process.kill(-child.pid!, signal)
-            } catch {
-                // already gone
-            }
-        }
+        const killGroup = (signal: NodeJS.Signals) => launched.signal(signal)
         const timer = setTimeout(() => {
             killed = true
             killGroup('SIGTERM')
             setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS).unref()
         }, step.timeout_s * 1000)
         // Decoded by the streams, so a character split between two chunks stays whole.
-        child.stdout.setEncoding('utf8')
-        child.stderr.setEncoding('utf8')
-        child.stdout.on('data', (chunk: string) => {
+        child.stdout!.setEncoding('utf8')
+        child.stderr!.setEncoding('utf8')
+        child.stdout!.on('data', (chunk: string) => {
             if (stdout.length < BUFFER_MAX) stdout += chunk
         })
-        child.stderr.on('data', (chunk: string) => {
+        child.stderr!.on('data', (chunk: string) => {
             if (stderr.length < 64_000) stderr += chunk
         })
         const finish = (run: Omit<ScriptRun, 'ms'>) => {
@@ -147,8 +146,8 @@ export function runScript(step: RunStep, ctx: StepContext): Promise<ScriptRun> {
         child.on('exit', (code, signal) => {
             setTimeout(() => {
                 if (settled) return
-                child.stdout.destroy()
-                child.stderr.destroy()
+                child.stdout!.destroy()
+                child.stderr!.destroy()
                 child.emit('close', code, signal)
             }, DRAIN_MS).unref()
         })

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import YAML from 'yaml'
 
 import { BadName, NotFound } from './catalog.js'
@@ -41,7 +41,10 @@ describe('Providers', () => {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-providers-'))
         providers = new Providers(path.join(dir, 'config', 'providers.yaml'))
     })
-    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+    afterEach(() => {
+        vi.unstubAllEnvs()
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
 
     it('starts empty and saves a provider with defaults filled in', () => {
         expect(providers.all()).toEqual([])
@@ -65,7 +68,7 @@ describe('Providers', () => {
         expect(providers.get('gpu-box')?.models).toEqual(['gemma4:12b', 'qwen3.5:9b'])
     })
 
-    it('keeps the key out of the file and reads it from the environment', () => {
+    it('keeps the key out of the file and reads it from the vault alone', () => {
         providers.save('gemini', {
             kind: 'openai',
             url: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -79,12 +82,15 @@ describe('Providers', () => {
         expect(p).toMatchObject({ kind: 'openai', token: 'GEMINI_API_KEY', default: 'gemini-2.5-flash', light: false })
         expect(p.models).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash'])
         expect(fs.readFileSync(path.join(dir, 'config', 'providers.yaml'), 'utf8')).not.toContain('secret')
-        expect(providers.key(p, {})).toBeNull()
-        expect(providers.key(p, { GEMINI_API_KEY: 'secret' })).toBe('secret')
+        // Keys come from the vault alone: .env is not read.
+        vi.stubEnv('GEMINI_API_KEY', 'from-env')
+        expect(providers.key(p)).toBeNull()
+        expect(providers.list(() => 0).providers[0].token_set).toBe(false)
+        const keys: Record<string, string> = { GEMINI_API_KEY: 'secret' }
+        providers.useKeys((name) => keys[name] ?? null)
+        expect(providers.key(p)).toBe('secret')
         expect(providers.tokenVars()).toEqual(['GEMINI_API_KEY'])
-        const view = providers.list(() => 2, { GEMINI_API_KEY: 'secret' })
-        expect(view.providers[0]).toMatchObject({ token_set: true, running: 2 })
-        expect(providers.list(() => 0, {}).providers[0].token_set).toBe(false)
+        expect(providers.list(() => 2).providers[0]).toMatchObject({ token_set: true, running: 2 })
     })
 
     it.each([
@@ -93,7 +99,7 @@ describe('Providers', () => {
         ['p', { url: 'ftp://x', models: ['m'] }, /http/],
         ['p', { url: 'http://x', models: [] }, /at least one model/],
         ['p', { url: 'http://x', models: ['a b'] }, /spaces/],
-        ['p', { url: 'http://x', models: ['m'], token: 'sk-live-123' }, /NAME of an environment variable/],
+        ['p', { url: 'http://x', models: ['m'], token: 'sk-live-123' }, /NAME of the key secret/],
         ['p', { url: 'http://x', models: ['m'], token: 'TELEGRAM_BOT_TOKEN' }, /belongs to the factory/],
         ['p', { url: 'http://x', models: ['m'], token: 'WEB_AUTH_PASSWORD' }, /belongs to the factory/],
         ['p', { url: 'http://x', models: ['m'], token: 'HOME' }, /ends with/],

@@ -212,6 +212,13 @@ export interface ProviderUsage {
     last_task_at: string | null
 }
 
+export interface TokensByDayRow {
+    day: number
+    provider: string | null
+    model: string | null
+    tokens: number
+}
+
 export interface ChatRef {
     id: string
     title: string | null
@@ -758,6 +765,33 @@ export class Store {
             .all(dayStart, dayStart) as unknown as ProviderUsage[]
     }
 
+    /**
+     * Fresh tokens of every model call per day, model and backend (provider null = the
+     * subscription). `days` are the owner's days as [start, end) in ISO, oldest first; `day` in a row
+     * is the index into them. Built from the `llm` events, so a sub-agent's calls count under the model
+     * that made them, not the task's.
+     */
+    tokensByDay(days: Array<{ start: string; end: string }>): TokensByDayRow[] {
+        if (!days.length) return []
+        const bounds = days.map(() => '(?, ?, ?)').join(', ')
+        return this.db
+            .prepare(
+                `WITH d(i, a, b) AS (VALUES ${bounds})
+                 SELECT d.i AS day, t.provider, json_extract(e.payload, '$.model') AS model,
+                        SUM(${LLM_FRESH_TOKENS}) AS tokens
+                 FROM task_events e JOIN tasks t ON t.id = e.task_id JOIN d ON e.ts >= d.a AND e.ts < d.b
+                 WHERE e.type = 'llm' AND e.ts >= ? AND e.ts < ?
+                 -- By the call's model, never tasks.model (a bare model here would be that column).
+                 GROUP BY d.i, t.provider, json_extract(e.payload, '$.model')
+                 HAVING SUM(${LLM_FRESH_TOKENS}) > 0`
+            )
+            .all(
+                ...(days.flatMap((d, i) => [i, d.start, d.end]) as never[]),
+                days[0].start,
+                days[days.length - 1].end
+            ) as unknown as TokensByDayRow[]
+    }
+
     /** `dayStart`: when "today" began (ISO), the owner's midnight, not UTC's. */
     stats(dayStart: string): TaskStats {
         const row = this.db
@@ -982,6 +1016,43 @@ export class Store {
         return this.db
             .prepare('SELECT conversation_id, task_id FROM telegram_messages WHERE chat_id = ? AND message_id = ?')
             .get(chatId, messageId) as { conversation_id: string; task_id: string | null } | undefined
+    }
+
+    // ---- previews -----------------------------------------------------------
+
+    listPreviews(): PreviewRow[] {
+        return (this.db.prepare('SELECT * FROM previews ORDER BY project').all() as unknown as PreviewRowRaw[]).map(
+            previewRow
+        )
+    }
+
+    getPreview(project: string): PreviewRow | undefined {
+        const row = this.db.prepare('SELECT * FROM previews WHERE project = ?').get(project) as unknown as
+            PreviewRowRaw | undefined
+        return row ? previewRow(row) : undefined
+    }
+
+    setPreview(preview: Omit<PreviewRow, 'created_at'>): PreviewRow {
+        this.db
+            .prepare(
+                `INSERT INTO previews (project, sandbox, port, host_port, strip, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(project) DO UPDATE SET sandbox = excluded.sandbox, port = excluded.port, host_port = excluded.host_port,
+                 strip = excluded.strip, task_id = excluded.task_id, created_at = excluded.created_at`
+            )
+            .run(
+                preview.project,
+                preview.sandbox,
+                preview.port,
+                preview.host_port,
+                preview.strip ? 1 : 0,
+                preview.task_id,
+                now()
+            )
+        return this.getPreview(preview.project)!
+    }
+
+    deletePreview(project: string): boolean {
+        return this.db.prepare('DELETE FROM previews WHERE project = ?').run(project).changes > 0
     }
 
     // ---- meta -------------------------------------------------------------
@@ -1343,3 +1414,18 @@ export class Store {
         return Number(this.db.prepare('DELETE FROM login_attempts WHERE ts < ?').run(before).changes)
     }
 }
+
+/** An app a project's agent runs, published for `/preview/<project>/`. */
+export interface PreviewRow {
+    project: string
+    sandbox: string
+    port: number
+    host_port: number
+    strip: boolean
+    task_id: string | null
+    created_at: string
+}
+
+type PreviewRowRaw = Omit<PreviewRow, 'strip'> & { strip: number }
+
+const previewRow = (row: PreviewRowRaw): PreviewRow => ({ ...row, strip: Boolean(row.strip) })

@@ -47,7 +47,7 @@ describe('providers', () => {
     it('refuses bad input with 400 and a reason', async () => {
         const res = await put('p', { url: 'http://x', models: ['m'], token: 'sk-123' })
         expect(res.status).toBe(400)
-        expect(((await res.json()) as { error: string }).error).toMatch(/environment variable/)
+        expect(((await res.json()) as { error: string }).error).toMatch(/NAME of the key secret/)
         expect((await put('p', {})).status).toBe(400)
         // A draft may not read the factory's own secrets through the test or model-list probes.
         for (const path of ['/api/providers/test', '/api/providers/models']) {
@@ -172,7 +172,7 @@ describe('providers', () => {
 
     it('guards the gateway with the per-start bearer and translates an OpenAI reply', async () => {
         await put('cloud', { kind: 'openai', url: 'http://cloud.test/v1', models: ['m'], token: 'CLOUD_KEY' })
-        vi.stubEnv('CLOUD_KEY', 'k')
+        t.ctx.vault.set('CLOUD_KEY', { value: 'k', provider: true })
         const body = { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] }
         const noAuth = await t.request('/gateway/cloud/v1/messages', json(body, { method: 'POST' }))
         expect(noAuth.status).toBe(401)
@@ -210,6 +210,67 @@ describe('providers', () => {
         // The status knows the last request went through.
         const status = (await (await t.request('/api/status')).json()) as { providers: Array<{ ok: boolean | null }> }
         expect(status.providers[0].ok).toBe(true)
+    })
+
+    it('reads its key from a provider key of the vault, never from .env, and adds it in the gateway', async () => {
+        vi.stubEnv('UNO_API_KEY', 'from-env')
+        const saved = await put(
+            'uno',
+            {
+                url: 'https://api.uno.test',
+                models: ['m'],
+                token: 'UNO_API_KEY',
+                mcp: [{ name: 'unosearch', url: 'https://api.uno.test/mcp', token: 'UNO_SEARCH_TOKEN' }]
+            },
+            true
+        )
+        expect(saved.status).toBe(200)
+        const missing = (await (await t.request('/api/providers')).json()) as {
+            providers: Array<{ token_set: boolean }>
+        }
+        expect(missing.providers[0].token_set).toBe(false)
+
+        // Settings → Secrets, access "model providers only".
+        const key = await t.request(
+            '/api/secrets/UNO_API_KEY?create=1',
+            json({ value: 'sk-uno-1', provider: true }, { method: 'PUT' })
+        )
+        expect(key.status).toBe(200)
+        const { providers, tasks } = t.ctx
+        const list = (await (await t.request('/api/providers')).json()) as {
+            providers: Array<{ token_set: boolean; mcp: Array<{ token_set: boolean }> }>
+        }
+        expect(list.providers[0]).toMatchObject({ token_set: true, mcp: [{ token_set: false }] })
+        // No run gets it: not the agent's environment, not a provider task's.
+        expect(tasks.agentEnv().UNO_API_KEY).toBeUndefined()
+        expect(tasks.providerEnv(providers.get('uno')!, 'm').UNO_API_KEY).toBeUndefined()
+
+        const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ content: [] }))
+        await t.request(
+            '/gateway/uno/v1/messages',
+            json(
+                { model: 'm', max_tokens: 5, messages: [] },
+                { method: 'POST', headers: { authorization: `Bearer ${tasks.gatewayToken('uno')}` } }
+            )
+        )
+        expect((fetch.mock.calls[0][1]!.headers as Record<string, string>)['x-api-key']).toBe('sk-uno-1')
+
+        // The secrets list names the provider that reads it.
+        const secrets = (await (await t.request('/api/secrets')).json()) as {
+            entries: Array<{ name: string; provider?: true; used_by: Array<{ kind: string; name: string }> }>
+        }
+        expect(secrets.entries.find((e) => e.name === 'UNO_API_KEY')).toMatchObject({
+            provider: true,
+            used_by: [{ kind: 'provider', name: 'uno' }]
+        })
+    })
+
+    it("refuses a run's secret as a provider's key", async () => {
+        t.ctx.vault.set('GSC_API_KEY', { value: 'run-secret-1', secret: true })
+        const res = await put('gsc', { url: 'http://x', models: ['m'], token: 'GSC_API_KEY' })
+        expect(res.status).toBe(400)
+        expect(((await res.json()) as { error: string }).error).toMatch(/not a provider key/)
+        expect(t.ctx.providers.get('gsc')).toBeUndefined()
     })
 
     it('passes a Messages provider through with its key and reports an upstream failure', async () => {
@@ -253,7 +314,7 @@ describe('providers', () => {
             models: ['m'],
             mcp: [{ name: 'search', url: 'https://box.test/mcp', token: 'BOX_MCP_TOKEN' }]
         })
-        vi.stubEnv('BOX_MCP_TOKEN', 'mcp-secret')
+        t.ctx.vault.set('BOX_MCP_TOKEN', { value: 'mcp-secret', provider: true })
         const { tasks, providers } = t.ctx
         const box = providers.get('box')!
         expect(providers.tokenVars()).toContain('BOX_MCP_TOKEN')

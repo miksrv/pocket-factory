@@ -8,9 +8,9 @@ import { referencedNames, type Scope, VaultError } from '../../secrets/vault.js'
 import type { Env } from '../context.js'
 import { clientOf } from '../request.js'
 
-/** Who reads a name: a routine's step (with the step's name), or a config file that references it as `${NAME}`. */
+/** Who reads a name: a routine's step (with the step's name), a config file that references it as `${NAME}`, a provider's key. */
 interface Use {
-    kind: 'routine' | 'config'
+    kind: 'routine' | 'config' | 'provider'
     name: string
     step?: string
 }
@@ -24,7 +24,7 @@ export function secretRoutes(): Hono<Env> {
     const app = new Hono<Env>()
 
     app.get('/', (c) => {
-        const { vault, routines, catalog, config } = c.get('app')
+        const { vault, routines, catalog, config, providers } = c.get('app')
         const uses = new Map<string, Use[]>()
         const add = (name: string, use: Use) => uses.set(name, [...(uses.get(name) ?? []), use])
         for (const routine of routines.list())
@@ -37,6 +37,9 @@ export function secretRoutes(): Hono<Env> {
             for (const name of referencedNames(fs.readFileSync(full, 'utf8')))
                 if (vault.has(name)) add(name, { kind: 'config', name: file })
         }
+        for (const p of providers.all())
+            for (const token of [p.token, ...(p.mcp ?? []).map((m) => m.token)])
+                if (token && vault.has(token)) add(token, { kind: 'provider', name: p.name })
         return c.json({
             entries: vault.list().map((e) => ({ ...e, used_by: uses.get(e.name) ?? [] })),
             // What a scope can name.
@@ -75,15 +78,25 @@ export function secretRoutes(): Hono<Env> {
         return c.json({ needs, routines: using.map((r) => r.name) })
     })
 
-    /** Create or change: `value` (required for a new name; a secret keeps its value without one), `secret`, `scope`. */
+    /**
+     * Create or change: `value` (required for a new name; a secret keeps its value without one), `secret`, `scope`,
+     * `provider` (a provider key: the gateway's only, no run gets it).
+     */
     app.put('/:name', async (c) => {
         const { vault } = c.get('app')
         const name = c.req.param('name')
-        const body = (await c.req.json().catch(() => ({}))) as { value?: unknown; secret?: unknown; scope?: unknown }
+        const body = (await c.req.json().catch(() => ({}))) as {
+            value?: unknown
+            secret?: unknown
+            scope?: unknown
+            provider?: unknown
+        }
         if (body.value !== undefined && typeof body.value !== 'string')
             return c.json({ error: 'value must be a string' }, 400)
         if (body.secret !== undefined && typeof body.secret !== 'boolean')
             return c.json({ error: 'secret must be a boolean' }, 400)
+        if (body.provider !== undefined && typeof body.provider !== 'boolean')
+            return c.json({ error: 'provider must be a boolean' }, 400)
         const scope = parseScope(body.scope)
         if (scope === false)
             return c.json({ error: 'scope must be { all: true } or { all: false, routines, projects }' }, 400)
@@ -92,7 +105,7 @@ export function secretRoutes(): Hono<Env> {
         try {
             const entry = vault.set(
                 name,
-                { value: body.value, secret: body.secret, scope: scope ?? undefined },
+                { value: body.value, secret: body.secret, scope: scope ?? undefined, provider: body.provider },
                 clientOf(c).ip
             )
             return c.json(entry)
