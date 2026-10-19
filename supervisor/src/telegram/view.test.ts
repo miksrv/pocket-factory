@@ -1,7 +1,18 @@
 import type { Bot } from 'grammy'
 import { describe, expect, it, vi } from 'vitest'
 
-import { editView, footer, renderPlain, renderRich, richButtonRows, row, sendView, text, type View } from './view.js'
+import {
+    buttonBaseUrl,
+    editView,
+    footer,
+    renderPlain,
+    renderRich,
+    richButtonRows,
+    row,
+    sendView,
+    text,
+    type View
+} from './view.js'
 
 const view: View = [
     text('<b>Routines</b> · 2, 1 on'),
@@ -14,6 +25,15 @@ const view: View = [
     ),
     footer(['project: work', 'windows: 5h 12% & week 3%'])
 ]
+
+describe('buttonBaseUrl', () => {
+    it('keeps an address Telegram takes in a button and drops a bare host name', () => {
+        expect(buttonBaseUrl('https://factory.example.com')).toBe('https://factory.example.com')
+        expect(buttonBaseUrl('https://mikserver')).toBeNull()
+        expect(buttonBaseUrl('http://localhost:8080')).toBeNull()
+        expect(buttonBaseUrl(null)).toBeNull()
+    })
+})
 
 describe('renderRich', () => {
     it('puts the buttons inside the message as a tg-button-row where the block sits', () => {

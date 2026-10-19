@@ -30,6 +30,7 @@ import {
 import { DeliveryError, EFFECT, sendMarkdown, sendReply } from './telegram/send.js'
 import {
     type Button,
+    buttonBaseUrl,
     editView,
     errorText,
     escapeHtml,
@@ -355,13 +356,17 @@ export function createBot(
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
     const publicUrl = config.web.publicUrl
+    // Links in buttons only to an address Telegram accepts there; text links still use publicUrl.
+    const buttonUrl = buttonBaseUrl(publicUrl)
 
     // A chat talks to one conversation at a time — its topic: its own by
     // default, or the one the owner switched to by replying to a message of
     // the bot (a routine's report, a question). `/new` switches back.
     const topicFor = (chatId: number): Conversation =>
         store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
-    const isTopic = (chatId: number, conversationId: string) => topicFor(chatId).id === conversationId
+    // A question, not a use: it never creates the chat's own conversation (an empty chat in the list).
+    const isTopic = (chatId: number, conversationId: string) =>
+        (store.telegramTopic(chatId) ?? store.findConversation('telegram', String(chatId)))?.id === conversationId
     /** The bot sent a message about a conversation: a reply to it later continues that conversation. */
     const remember = (
         chatId: number,
@@ -551,11 +556,11 @@ export function createBot(
 
     // ---- routines: a list with buttons per routine, a card per routine ----------------------
 
-    const listView = (note?: string): View => routinesList(routines?.list() ?? [], publicUrl, Date.now(), note)
+    const listView = (note?: string): View => routinesList(routines?.list() ?? [], buttonUrl, Date.now(), note)
     const cardView = (name: string, options: { note?: string; emptyRun?: number } = {}): View | null => {
         const view = routines?.get(name)
         if (!view) return null
-        return routineCard(view, config.timezone, { ...options, webUrl: publicUrl })
+        return routineCard(view, config.timezone, { ...options, webUrl: buttonUrl })
     }
     /** Fire a routine by hand; the card's note says what came of it, and offers everything the poll sees when nothing was new. */
     const fireRoutine = async (
@@ -1462,7 +1467,7 @@ export function createBot(
     /** Buttons inside a reply: the task page, its pull request, and for a routine's report the routine itself. */
     const replyButtons = (task: Task): Button[][] => {
         const first: Button[] = []
-        if (publicUrl) first.push({ text: '🌐 Open', url: `${publicUrl}/tasks/${task.id}` })
+        if (buttonUrl) first.push({ text: '🌐 Open', url: `${buttonUrl}/tasks/${task.id}` })
         if (task.git?.pr) first.push({ text: `PR #${task.git.pr.number}`, url: task.git.pr.url, style: 'success' })
         const second: Button[] = []
         if (task.schedule && routines?.get(task.schedule))
@@ -1612,7 +1617,9 @@ export function createBot(
                     `👀 Preview of <b>${escapeHtml(preview.project)}</b>: ${escapeHtml(preview.url)}${preview.expires_at ? `\nOpen until ${new Date(preview.expires_at).toLocaleString('en-GB', { timeZone: config.timezone, dateStyle: 'short', timeStyle: 'short' })}.` : ''}`
                 ),
                 row(
-                    /^https?:\/\//.test(preview.url) ? { text: '🔗 Open', url: preview.url } : null,
+                    /^https?:\/\//.test(preview.url) && buttonBaseUrl(preview.url)
+                        ? { text: '🔗 Open', url: preview.url }
+                        : null,
                     fits(stop) ? { text: '⏹ Stop', data: stop } : null
                 )
             ],
