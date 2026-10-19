@@ -7,6 +7,7 @@
 - Fixed: Settings → Sandboxes showed the Docker login as unknown on a server, though it was signed in
 - Fixed: a web reply sent to Telegram was lost when the factory's address has no dot (`https://mikserver`): such links stay out of the buttons
 - Fixed: a web reply forwarded to Telegram no longer leaves an empty Telegram chat in the list
+- Routines: a step may continue if it fails (Continue if it fails on its card): the run goes on and the agent gets its error
 
 ## 1.7.0
 

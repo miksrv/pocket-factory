@@ -24,6 +24,8 @@ export interface RunStep {
     items: boolean
     /** A source hands over only what no earlier run has seen (keys in `seen_items`). */
     new_only: boolean
+    /** A failure does not stop the run: the next steps and the agent still go, the error reaches the agent as this step's output. */
+    continue_on_error: boolean
 }
 
 /** Open pull requests of a repository, through `gh`. Always a source. */
@@ -38,6 +40,8 @@ export interface GithubStep {
     mine: boolean
     drafts: boolean
     new_only: boolean
+    /** A failure does not stop the run: the next steps and the agent still go, the error reaches the agent as this step's output. */
+    continue_on_error: boolean
 }
 
 /** Tickets of a Trac query. Always a source. */
@@ -52,6 +56,8 @@ export interface TracStep {
     on_change: boolean
     max: number
     new_only: boolean
+    /** A failure does not stop the run: the next steps and the agent still go, the error reaches the agent as this step's output. */
+    continue_on_error: boolean
 }
 
 /** The agent: the task that reads the instructions and what the steps before it found. At most one, the last. */
@@ -224,7 +230,8 @@ function parseStep(raw: unknown, errors: string[], at: string, index: number): S
                 cwd: str(o.cwd),
                 timeout_s: int(o.timeout_s, 300, 5, 3600),
                 items,
-                new_only: items && bool(o.new_only, true)
+                new_only: items && bool(o.new_only, true),
+                continue_on_error: bool(o.continue_on_error, false)
             }
         }
         case 'github-prs': {
@@ -250,7 +257,8 @@ function parseStep(raw: unknown, errors: string[], at: string, index: number): S
                 filter: filter as GithubStep['filter'],
                 mine: bool(p.mine, false),
                 drafts: bool(p.drafts, false),
-                new_only: bool(p.new_only ?? o.new_only, true)
+                new_only: bool(p.new_only ?? o.new_only, true),
+                continue_on_error: bool(o.continue_on_error, false)
             }
         }
         case 'trac': {
@@ -272,7 +280,8 @@ function parseStep(raw: unknown, errors: string[], at: string, index: number): S
                 query,
                 on_change: bool(p.on_change, true),
                 max: int(p.max, 100, 1, 500),
-                new_only: bool(p.new_only ?? o.new_only, true)
+                new_only: bool(p.new_only ?? o.new_only, true),
+                continue_on_error: bool(o.continue_on_error, false)
             }
         }
         case 'agent': {

@@ -61,6 +61,23 @@ describe('StepsField', () => {
         expect(onChange).toHaveBeenCalledWith([{ name: 'Stats', run: 'echo 43' }, STEPS[1], STEPS[2]])
     })
 
+    it('lets a script and a source continue when they fail', async () => {
+        mockFetch({})
+        const onChange = renderGraph()
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Stats/ }))
+        let dialog = await screen.findByRole('dialog')
+        await user.click(within(dialog).getByRole('checkbox', { name: 'Continue if it fails' }))
+        await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
+        expect(onChange).toHaveBeenLastCalledWith([{ ...STEPS[0], continue_on_error: true }, STEPS[1], STEPS[2]])
+
+        await user.click(screen.getByRole('button', { name: /Trac/ }))
+        dialog = await screen.findByRole('dialog')
+        await user.click(within(dialog).getByRole('checkbox', { name: 'Continue if it fails' }))
+        await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
+        expect(onChange).toHaveBeenLastCalledWith([STEPS[0], { ...STEPS[1], continue_on_error: true }, STEPS[2]])
+    })
+
     it('keeps a Trac address as typed and stores it as the site and the query', async () => {
         const onChange = renderGraph(vi.fn(), [{ trac: { url: '' } }, STEPS[2]])
         const user = userEvent.setup()

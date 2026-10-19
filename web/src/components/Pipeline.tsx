@@ -394,7 +394,7 @@ function StepNode({
             type='button'
             className={`step-node ${kind} ${state}`}
             onClick={onOpen}
-            title={`${KIND_LABEL[kind]}: ${name}${about ? `\n${about}` : ''}`}
+            title={`${KIND_LABEL[kind]}: ${name}${about ? `\n${about}` : ''}${step.continue_on_error === true ? '\nthe run goes on if it fails' : ''}`}
         >
             <span className='step-node-head'>
                 <span
@@ -431,6 +431,7 @@ function StepNode({
                         <span className='step-node-time'>
                             {fmt.duration(last.ms)}
                             {last.items !== undefined ? ` · ${last.items}` : ''}
+                            {last.continued ? ' · went on' : ''}
                         </span>
                     )
                 )}
@@ -758,6 +759,15 @@ function StepCard({
     const kind = kindOf(step)
     const options = (kind === 'github-prs' || kind === 'trac' ? step[kind] : {}) as RawStep
     const setOptions = (patch: RawStep) => onChange({ ...step, [kind]: { ...options, ...patch } })
+    // On every step but the agent: a failure lets the run go on, its error goes to the agent.
+    const goesOn = (
+        <Check
+            checked={step.continue_on_error === true}
+            onChange={(on) => onChange({ ...step, continue_on_error: on || undefined })}
+            label='Continue if it fails'
+            title='The next steps and the agent still run; the error reaches the agent as this step’s output'
+        />
+    )
     const [run, setRun] = useState<StepRun | null>(null)
     const [running, setRunning] = useState(false)
     const [runError, setRunError] = useState<string | null>(null)
@@ -784,7 +794,7 @@ function StepCard({
             {last ? (
                 <span
                     className={`badge ${last.ok ? 'done' : 'failed'}`}
-                    title={`last run ${lastRun ? fmt.ago(lastRun.fired_at) : ''}: ${last.ok ? 'ok' : 'failed'} in ${fmt.duration(last.ms)}${last.items !== undefined ? `, ${last.items} item(s)` : ''}`}
+                    title={`last run ${lastRun ? fmt.ago(lastRun.fired_at) : ''}: ${last.ok ? 'ok' : last.continued ? 'failed, the run went on' : 'failed'} in ${fmt.duration(last.ms)}${last.items !== undefined ? `, ${last.items} item(s)` : ''}`}
                 >
                     last run{' '}
                     <Icon
@@ -951,6 +961,7 @@ function StepCard({
                                 label='New items only'
                             />
                         )}
+                        {goesOn}
                     </div>
                 </Field>
             </>
@@ -1060,6 +1071,7 @@ function StepCard({
                             onChange={(on) => setOptions({ new_only: on ? undefined : false })}
                             label='New items only'
                         />
+                        {goesOn}
                     </div>
                 </Field>
                 {output}
@@ -1095,6 +1107,7 @@ function StepCard({
                         onChange={(on) => setOptions({ new_only: on ? undefined : false })}
                         label='New items only'
                     />
+                    {goesOn}
                 </div>
             </Field>
             {output}

@@ -29,7 +29,8 @@ const trac: Step = {
     query: 'status=new',
     on_change: true,
     max: 100,
-    new_only: true
+    new_only: true,
+    continue_on_error: false
 }
 
 /** A spec whose pipeline is the given steps plus the agent step (the orchestrator unless `agent` says otherwise). */
@@ -159,13 +160,29 @@ describe('buildPrompt', () => {
     })
 
     it('hands nothing over when the pipeline has no source', () => {
-        const script: Step = { kind: 'run', name: 's', run: 'true', timeout_s: 10, items: false, new_only: false }
+        const script: Step = {
+            kind: 'run',
+            name: 's',
+            run: 'true',
+            timeout_s: 10,
+            items: false,
+            new_only: false,
+            continue_on_error: false
+        }
         const prompt = buildPrompt(spec({}, [script]), 'x', [], schedule, paths)
         expect(prompt).not.toContain('## New since the last run')
     })
 
     it('uses the items as the current list by default and says when nothing is seen', () => {
-        const source: Step = { kind: 'run', name: 's', run: 'true', timeout_s: 10, items: true, new_only: true }
+        const source: Step = {
+            kind: 'run',
+            name: 's',
+            run: 'true',
+            timeout_s: 10,
+            items: true,
+            new_only: true,
+            continue_on_error: false
+        }
         const withItems = buildPrompt(spec({}, [source]), 'x', [{ key: 'a', title: 'A' }], 'manual', paths)
         expect(withItems).toContain('## Everything the sources see now (1)\n\nA')
         expect(withItems).not.toContain('seen before')
