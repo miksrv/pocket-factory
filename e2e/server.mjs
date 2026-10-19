@@ -39,6 +39,8 @@ const env = {
     CLAUDE_PERMISSION_MODE: 'bypassPermissions',
     // A chat keeps its first line as the title: the fake CLI would name every chat "Echo: …".
     CHAT_TITLES: 'off',
+    // The agents run here, with the fake CLI: no Docker Sandboxes in the tests.
+    SANDBOX: 'local',
     TIMEZONE: 'UTC',
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn'
 }

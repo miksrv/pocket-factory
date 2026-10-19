@@ -40,7 +40,7 @@ already changed; the rest is proposed for the owner's call.
 4. **Settings is a wall.** Eleven sections on one page, some of them long tables (62 signed-in
    browsers, most of them from scripts: *done in 1.6.0*, the screenshot script signs out; a
    "Sign out every other browser" button exists). Proposed: tabs (Claude Code · Security · MCP ·
-   Providers · Hosts · Toolchains · Paths) instead of a scroll, and the read-only `.env` facts
+   Providers · Hosts · Sandboxes · Paths) instead of a scroll, and the read-only `.env` facts
    (permission mode, caps, paths) under one "Environment" tab.
    *Done in 1.6.0*: permission mode, caps, concurrent sessions and config dir are gone from the
    Claude Code card (owner: not needed); a provider's MCP tools are one badge with a count.
@@ -49,7 +49,7 @@ already changed; the rest is proposed for the owner's call.
    repository URL, default branch and PR base are all derivable from the checkout (`git remote`,
    `git symbolic-ref`). Proposed: an "Onboard from the checkout" button that fills them (the
    `onboard-project` skill already does this for the agent; the form can call the same git reads
-   through `/api/toolchains/projects/<slug>`), and the two branch fields folded under "More"
+   through a read-only route), and the two branch fields folded under "More"
    unless they differ from the detected ones.
    *Done in 1.6.0* (owner's call, simpler than proposed): display name, default branch and PR base
    are gone from the form; the skills read the default branch from git and the base from the task

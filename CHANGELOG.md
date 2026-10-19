@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.0
+
+### Minor Changes
+
+- Sandboxes: every project's agent runs in its own Docker Sandbox (a microVM with sudo and its own Docker, kept between tasks); chats without a project in `pf-factory`
+- Sandboxes: Settings → Sandboxes shows the daemon, the Docker and Claude logins, each sandbox with Stop and Reset
+- Sandboxes: a project's sandbox reaches only what its file names (`network:`, its SSH hosts, its routines' Trac); a blocked host comes to Telegram and the project page with Allow / Deny
+- Preview: the agent shows a running app at `/preview/<project>/` behind the factory's sign-in (`preview` tool), with Open / Stop in Telegram and on the project page
+- Routines: a step's script runs in its project's sandbox, with the tools the agent installed there
+- Toolchains: removed (mise, PHP and Docker in the image, the dind sidecar, Settings → Toolchains); the agent installs what a checkout needs in its sandbox
+- Projects: a Network section and the sandbox card above the form
+
 ## 1.6.1
 
 ### Patch Changes

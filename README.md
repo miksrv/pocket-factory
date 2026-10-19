@@ -93,12 +93,13 @@ lists what is taken from each.
   with the checks and the tracker), one per routine (agent, triggers, instructions and the agent's own notes). The UI,
   the owner and the agent edit the same files; what the agent changes shows up in the Audit log
   as file events.
-- **Toolchains** — the image carries `mise`, PHP with composer and the docker CLI. The agents
-  install the runtimes a checkout asks for (Go, Node, Python … from its own version files) into
-  `data/tools` before the checks; with `COMPOSE_PROFILES=docker` in `.env` the factory runs its own
-  Docker daemon (a dind sidecar, state in `data/docker`), so a project's compose file brings up its
-  database or the whole application for the tests, and what a task started is stopped when it ends.
-  Settings → Toolchains lists versions, sizes and containers; nothing is installed on the host.
+- **Sandboxes** — every project's agent runs in its own [Docker Sandbox](https://docs.docker.com/ai/sandboxes/)
+  (a microVM with sudo and its own Docker, kept between tasks), so it installs what the checkout
+  needs and brings up its database or the whole application for the tests without touching the
+  host or another project. A sandbox reaches only the hosts its project names; anything else is
+  asked of you in Telegram (Allow / Deny). Settings → Sandboxes shows them with Stop and Reset.
+- **Preview** — ask *"show me the UI"*: the agent starts the app in its sandbox and you open it at
+  `https://<server>/preview/<project>/`, behind the factory's sign-in.
 - **Model providers** — besides the subscription, a routine, an agent or a chat can run on a
   self-hosted model (Ollama, vLLM) or a cloud API (OpenRouter, or OpenAI-compatible ones such as
   Gemini and Groq), in the same Claude Code CLI. The supervisor's gateway adds each provider's key,
@@ -119,7 +120,9 @@ lists what is taken from each.
 
 ## Quick start
 
-Requirements: Docker, a Claude subscription, a GitHub fine-grained PAT for the repositories the
+Requirements: Docker, [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) on the host (Linux
+with KVM, or macOS / Windows with the sbx app; a VPS without nested virtualization cannot run them),
+a Docker account, a Claude subscription, a GitHub fine-grained PAT for the repositories the
 factory may touch (one per repository owner, since such a token belongs to a single user or
 organization: `GH_TOKEN_<OWNER>`, with `GH_TOKEN` as the fallback). For Telegram: a bot token from
 [@BotFather](https://t.me/BotFather) and your Telegram user id (ask
@@ -128,17 +131,22 @@ organization: `GH_TOKEN_<OWNER>`, with `GH_TOKEN` as the fallback). For Telegram
 ```bash
 git clone https://github.com/miksrv/pocket-factory.git
 cd pocket-factory
-cp .env.example .env          # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, WORKSPACES_DIR, GH_TOKEN[_<OWNER>], WEB_AUTH_PASSWORD
+cp .env.example .env          # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, WORKSPACES_DIR, DATA_DIR, SBX_HOME, GH_TOKEN[_<OWNER>], WEB_AUTH_PASSWORD
+sbx login                     # once: the Docker account sandboxes need
+sbx policy init balanced      # once: registries, GitHub and the AI services open, the rest asked
+sbx run pf-factory            # once: /login inside (press c to copy the URL), then exit
 docker compose up -d --build
-docker compose run --rm -it supervisor claude auth login   # prints a URL: open it anywhere, paste the code back
 docker compose logs -f supervisor
 ```
 
-The login lands in `data/claude/.credentials.json`, the CLI refreshes it by itself, and the
-connectors of your claude.ai account (Gmail, ClickUp, Google Drive, …) become available to the
-agents. Keep `CLAUDE_CODE_OAUTH_TOKEN` in `.env` empty: a `claude setup-token` value there is the
-fallback for CI-like runs (model calls work, connectors do not). The same command works over
-`ssh -t` on a VPS.
+The Claude login stays with sbx on the host and its proxy hands it to every sandbox, connectors of
+your claude.ai account (Gmail, ClickUp, Google Drive, …) included; no sandbox holds the real token.
+Keep `CLAUDE_CODE_OAUTH_TOKEN` in `.env` empty. On Linux run the sbx daemon as a systemd user unit
+(`sbx daemon start`, `loginctl enable-linger <you>`) so it survives a reboot, and set
+`SBX_NO_TELEMETRY=1` there if you want no telemetry.
+
+The whole host setup (the sbx daemon as a user service, the ufw rule for previews, `.env`) and
+upgrading a running factory: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Then:
 
@@ -155,11 +163,11 @@ Then:
 
 ```
 data/                    runtime state — everything the factory owns, all bind-mounted, gitignored
-├── claude/              Claude Code home: CLAUDE.md, agents/, skills/, transcripts, login and MCP credentials
+├── claude/              Claude Code home: CLAUDE.md, agents/, skills/, transcripts, MCP credentials
 ├── config/              projects/*.md, routines/*.md, hosts.yaml (shared SSH hosts), known_hosts, mcp.json
 ├── workspaces/          repositories (or WORKSPACES_DIR → a folder you already have)
 ├── inbox/               photos and files sent with messages, per conversation (kept 30 days)
-├── secrets/ssh/         keys for project hosts, linked to ~/.ssh in the container (mounted read-only)
+├── secrets/ssh/         keys for project hosts, linked to ~/.ssh in every sandbox (mounted read-only)
 ├── db/                  SQLite: conversations, tasks, task events, routine runs, seen items, web sessions
 └── logs/
 supervisor/              Telegram bot, task queue / session manager, scheduler, HTTP API (TypeScript, Node 22)
@@ -168,9 +176,11 @@ templates/claude/        seeded into data/claude on every start (never overwrite
 presets/                 shareable agent + skill bundles, installable from the UI
 docs/SPEC.md             requirements & roadmap · docs/LANDSCAPE.md  the neighbours and what is taken from them
 docs/SELF_HOSTED_LLM.md  your own GPU box as a model provider (Ollama + Caddy + search MCP)
+docs/DEPLOY.md           the host's sandbox setup, a release on the server, the 1.7.0 upgrade
 ```
 
-Moving to another host is `rsync data/` + `docker compose up`.
+Moving to another host is `rsync data/` + `docker compose up`; the sandboxes are made again by the
+first task of each project.
 
 ## How a task flows
 
@@ -216,7 +226,7 @@ servers) with its status; **Refresh** runs `claude mcp list` in the factory and 
 servers that still need a sign-in, and **Authorize** runs `claude mcp login <name> --no-browser`
 there and shows you the link (a connector is done on claude.ai; a project's OAuth server wants the
 redirect URL pasted back). The console flow is the fallback:
-`docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser`.
+`sbx exec -it -w <checkout> pf-<project> claude mcp login <name> --no-browser` on the host.
 Tokens land in `data/claude/.credentials.json` and the CLI refreshes them. Logging in from a macOS
 laptop does not help: there the CLI keeps tokens in the Keychain, which the container cannot read.
 A project file's `mcp:` list limits which of the repository's servers a session loads; an agent's

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Container entrypoint: prepare /data on first start, wire git/gh, then exec.
+# Container entrypoint: prepare the data directory on first start, wire git/gh, then exec.
 set -e
 
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/data/claude}"
@@ -7,11 +7,11 @@ DATA_ROOT="${DATA_ROOT:-/data}"
 
 mkdir -p "$CLAUDE_CONFIG_DIR" \
     "$DATA_ROOT/config/projects" \
-    "$DATA_ROOT/workspaces" \
+    "${WORKSPACES_ROOT:-$DATA_ROOT/workspaces}" \
     "$DATA_ROOT/db" \
     "$DATA_ROOT/logs" \
     "$DATA_ROOT/secrets" \
-    "$DATA_ROOT/tools" \
+    "$DATA_ROOT/inbox" \
     "$DATA_ROOT/vault"
 # The vault holds what the owner sets in the UI: nobody but the factory's user reads it.
 chmod 700 "$DATA_ROOT/vault" 2>/dev/null || true
@@ -45,13 +45,13 @@ else
     echo "[entrypoint] warning: no GH_TOKEN / GH_TOKEN_<OWNER> — git push and gh will fail"
 fi
 
-# Toolchains: mise keeps what it installs on the /data/tools volume; the image's
-# policy (/etc/mise/config.toml) names a node, installed here once so the shim
-# resolves everywhere. The docker CLI talks to the dind sidecar when the `docker`
-# compose profile is on.
-if command -v mise >/dev/null 2>&1; then
-    (cd / && mise install 2>&1 | sed 's/^/[entrypoint] mise: /') || echo "[entrypoint] warning: mise install failed (is $DATA_ROOT/tools writable by uid $(id -u)?)"
+# The agents run in Docker Sandboxes: the host's sbx client must be mounted (docker-compose.yml).
+if [ "${SANDBOX:-sbx}" = "sbx" ]; then
+    if command -v sbx >/dev/null 2>&1; then
+        echo "[entrypoint] sandboxes: $(HOME="${SBX_HOME:-$HOME}" sbx version 2>/dev/null | head -n 1 || echo 'sbx does not answer')"
+    else
+        echo "[entrypoint] warning: SANDBOX=sbx but no sbx client is mounted — tasks will fail until it is"
+    fi
 fi
-echo "[entrypoint] toolchains: $(mise --version 2>/dev/null || echo 'mise missing') · php $(php -r 'echo PHP_VERSION;' 2>/dev/null || echo missing) · docker ${DOCKER_HOST:-off}"
 
 exec "$@"

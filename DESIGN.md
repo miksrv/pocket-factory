@@ -35,7 +35,7 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
 - **A long form is split into sections**, each under a heading: `SectionHead` from `ui.tsx`
   (title, one short line under it, actions such as `＋ File` or the Preview / Edit tabs on the
   right, a rule above). A block that is a list of cards or rows (Pipeline, Schedule, Hosts,
-  Toolchain, MCP servers, Tools, a skill's files) and the Markdown body are sections; a
+  Network, MCP servers, Tools, a skill's files) and the Markdown body are sections; a
   `Field` with `section` renders one. The first section of a form has no rule.
 - Plain fields (selects, inputs, checkboxes) are never sections; they sit in rows between them.
 - **"More"** folds what is rarely changed; its summary reads as a section heading and names

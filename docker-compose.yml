@@ -5,71 +5,75 @@ services:
         container_name: pocket-factory
         restart: unless-stopped
         env_file: .env
-        # The container is the sandbox (SPEC §8): bound memory and process
-        # count so a runaway build or fork bomb cannot take the host down.
-        # ≈1 GiB per claude -p session plus whatever the project's tooling needs.
-        mem_limit: ${CONTAINER_MEMORY:-6g}
+        # The container is the control plane (web UI, Telegram, the queue): the agents run in Docker
+        # Sandboxes, one microVM per project on the host (SPEC §8), which the supervisor drives through
+        # the host's sbx daemon. No claude process runs in here.
+        mem_limit: ${CONTAINER_MEMORY:-2g}
         pids_limit: 1024
+        # The host user the sandboxes belong to (sbx keeps its daemon and stores per user): uid 1000 is
+        # also the image's `node`.
+        user: '1000:1000'
         environment:
-            # The container is the sandbox; inside it Claude Code runs unattended.
+            # The sandbox is the boundary; inside it Claude Code runs unattended.
             CLAUDE_PERMISSION_MODE: bypassPermissions
             # WEB_PORT in .env is the host side of the mapping below; inside, the
             # supervisor always listens on 8080 (env_file would hand it the host's value).
             WEB_PORT: 8080
-            # With the `docker` profile on (COMPOSE_PROFILES=docker in .env) the agents' docker
-            # commands go to the dind sidecar below over TLS (its client certificates arrive
-            # through the shared volume); without the profile the CLI has nowhere to connect.
-            DOCKER_HOST: ${COMPOSE_PROFILES:+tcp://docker:2376}
-            DOCKER_TLS_VERIFY: ${COMPOSE_PROFILES:+1}
-            DOCKER_CERT_PATH: ${COMPOSE_PROFILES:+/certs/client}
+            # Every path is the host's own (DATA_DIR, WORKSPACES_DIR): a sandbox mounts the same
+            # directories at the same paths, so cwd, attachments and transcripts mean the same inside.
+            DATA_ROOT: ${DATA_DIR:?set DATA_DIR in .env to the absolute host path of data/}
+            CLAUDE_CONFIG_DIR: ${DATA_DIR:?set DATA_DIR in .env to the absolute host path of data/}/claude
+            WORKSPACES_ROOT: ${WORKSPACES_DIR:?set WORKSPACES_DIR in .env to an absolute host path}
+            # The sbx client acts for the host user: its home holds the daemon's socket and stores.
+            SBX_HOME: ${SBX_HOME:?set SBX_HOME in .env to the home of the host user that runs sbx}
+            # How a sandbox reaches the supervisor (the gateway, the factory's MCP): the host's
+            # loopback through the published port below.
+            SANDBOX_FACTORY_URL: ${SANDBOX_FACTORY_URL:-http://host.docker.internal:${WEB_PORT:-8080}}
         ports:
             # Web UI. Bound to localhost by default: reach it over SSH tunnel /
             # Tailscale, or put Caddy / Cloudflare Tunnel in front and set
             # WEB_AUTH_PASSWORD. Set WEB_BIND=0.0.0.0 to expose it directly.
             - '${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080'
+        extra_hosts:
+            # Previews are published on the host's docker bridge (PREVIEW_BIND); the proxy reaches them here.
+            - 'host.docker.internal:host-gateway'
         volumes:
-            # Claude Code's own home: login, CLAUDE.md, agents/, skills/, transcripts.
-            - ./data/claude:/data/claude
-            # Factory config: projects/*.md, mcp.json (your own MCP servers).
-            - ./data/config:/data/config
-            # Your repositories. Point WORKSPACES_DIR at an existing folder on
-            # your machine to work on the projects you already have checked out.
-            - ${WORKSPACES_DIR:-./data/workspaces}:/data/workspaces
-            - ./data/db:/data/db
-            - ./data/logs:/data/logs
-            # Toolchains mise installs for the agents (Go, Node, Python versions the checkouts ask for).
-            - ./data/tools:/data/tools
-            - docker-certs:/certs:ro
-            # SSH keys for project hosts (linked to ~/.ssh by the entrypoint).
-            - ./data/secrets:/data/secrets:ro
-            # Secrets and variables set in the web UI (Settings → Secrets and variables), owner-only.
-            - ./data/vault:/data/vault
-        # For one-off interactive runs in the container, e.g. an MCP OAuth login:
-        #   docker compose run --rm -it -w /data/workspaces/<repo> supervisor claude mcp login <name> --no-browser
+            # The factory's data at its host path: Claude Code's config (agents/, skills/, CLAUDE.md,
+            # transcripts), data/config (projects, routines, mcp.json), the database, uploads, the vault.
+            - ./data:${DATA_DIR:?set DATA_DIR in .env to the absolute host path of data/}
+            # SSH keys for project hosts, read-only (linked to ~/.ssh in the container and in every sandbox).
+            - ./data/secrets:${DATA_DIR:?set DATA_DIR in .env to the absolute host path of data/}/secrets:ro
+            # Your repositories, at the same path as on the host. Point WORKSPACES_DIR at an
+            # existing folder to work on the projects you already have checked out.
+            - ${WORKSPACES_DIR:?set WORKSPACES_DIR in .env to an absolute host path}:${WORKSPACES_DIR:?set WORKSPACES_DIR in .env to an absolute host path}
+            # The host's Docker Sandboxes client and the three directories of its user it needs: the
+            # daemon's socket and state, the settings, and the file-based secret store (spike S8).
+            # Never created by Docker when missing (sbx not installed yet): the container then fails to start
+            # instead of leaving a root-owned directory where the sbx package goes.
+            - {
+                  type: bind,
+                  source: /usr/bin/sbx,
+                  target: /usr/bin/sbx,
+                  read_only: true,
+                  bind: { create_host_path: false }
+              }
+            - {
+                  type: bind,
+                  source: '${SBX_HOME}/.local/state/sandboxes',
+                  target: '${SBX_HOME}/.local/state/sandboxes',
+                  bind: { create_host_path: false }
+              }
+            - {
+                  type: bind,
+                  source: '${SBX_HOME}/.config/sandboxes',
+                  target: '${SBX_HOME}/.config/sandboxes',
+                  bind: { create_host_path: false }
+              }
+            - {
+                  type: bind,
+                  source: '${SBX_HOME}/.config/com.docker.sandboxes',
+                  target: '${SBX_HOME}/.config/com.docker.sandboxes',
+                  bind: { create_host_path: false }
+              }
         stdin_open: true
         tty: true
-
-    # The agents' own Docker daemon (COMPOSE_PROFILES=docker in .env): a project's
-    # `docker compose up -d db` or a whole application runs here, never on the host's
-    # daemon, and `docker compose down -v` + `rm -rf data/docker` removes every trace.
-    # Workspaces are mounted at the same path, so a project's bind mounts resolve.
-    # dind needs `privileged`; it listens on the compose network only, with TLS (the
-    # image generates the certificates into the shared volume at first start), and the
-    # supervisor stops a task's containers when the task ends.
-    docker:
-        image: docker:29-dind
-        container_name: pocket-factory-docker
-        profiles: [docker]
-        restart: unless-stopped
-        privileged: true
-        mem_limit: ${DOCKER_MEMORY:-8g}
-        environment:
-            DOCKER_TLS_CERTDIR: /certs
-        volumes:
-            - ./data/docker:/var/lib/docker
-            - docker-certs:/certs
-            - ${WORKSPACES_DIR:-./data/workspaces}:/data/workspaces
-
-volumes:
-    # dind's TLS certificates: the daemon writes them, the supervisor reads the client's.
-    docker-certs:
