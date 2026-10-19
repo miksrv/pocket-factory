@@ -50,7 +50,10 @@ export interface DiagnoseCheck {
     message: string
 }
 
-export class SbxError extends Error {}
+export class SbxError extends Error {
+    /** What the command printed before it failed: some report on stdout and still exit non-zero. */
+    stdout = ''
+}
 
 /** What runs one `sbx` command: injectable so tests drive a fake. */
 export type SbxRunner = (
@@ -66,7 +69,9 @@ const defaultRunner =
                 if (!error) return resolve({ stdout, stderr })
                 const said = cleanError(stderr) || cleanError(stdout)
                 const why = (error as NodeJS.ErrnoException).code === 'ENOENT' ? `${bin} is not installed` : said
-                reject(new SbxError(`sbx ${args[0] ?? ''}: ${why || error.message}`))
+                const failed = new SbxError(`sbx ${args[0] ?? ''}: ${why || error.message}`)
+                failed.stdout = stdout
+                reject(failed)
             })
         })
 
@@ -236,6 +241,7 @@ export class Sbx {
     async diagnose(): Promise<DiagnoseCheck[]> {
         // diagnose exits non-zero when a check fails (no KVM inside the container): the report is still on stdout.
         const { stdout } = await this.run(['diagnose', '--json'], LONG_MS).catch((error: unknown) => {
+            if (error instanceof SbxError && error.stdout.trim()) return { stdout: error.stdout, stderr: '' }
             if (error instanceof SbxError) throw error
             throw new SbxError(String(error))
         })

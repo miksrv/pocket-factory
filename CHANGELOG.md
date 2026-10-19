@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.1
+
+### Patch Changes
+
+- Fixed: Settings → Sandboxes showed the Docker login as unknown on a server, though it was signed in
+
 ## 1.7.0
 
 ### Minor Changes
