@@ -14,12 +14,14 @@ import { KnownHosts } from '../files/knownHosts.js'
 import { Providers } from '../files/providers.js'
 import { Presets } from '../presets/index.js'
 import { Routines } from '../routines/service.js'
+import { SandboxManager } from '../sandbox/manager.js'
+import { Previews } from '../sandbox/previews.js'
+import { Sbx } from '../sandbox/sbx.js'
 import { Vault } from '../secrets/vault.js'
 import { Transcripts } from '../sessions/transcripts.js'
 import { openDatabase } from '../store/db.js'
 import { Store } from '../store/index.js'
 import { TaskService, type Workspace } from '../tasks/service.js'
-import { Toolchains } from '../toolchains/service.js'
 import { WebAuth } from '../web/auth.js'
 import type { AppContext, Env } from '../web/context.js'
 import { createApp } from '../web/server.js'
@@ -93,6 +95,17 @@ export function testConfig(dataRoot: string): Config {
             publicUrl: null,
             distDir: path.join(dataRoot, 'no-web-dist')
         },
+        sandbox: {
+            mode: 'local',
+            memory: '',
+            cpus: 0,
+            idleMs: 0,
+            factoryUrl: 'http://127.0.0.1:8080',
+            helpersDir: null,
+            home: undefined,
+            gitIdentity: { name: undefined, email: undefined }
+        },
+        preview: { ports: [18100, 18199], bind: '127.0.0.1', upstreamHost: '127.0.0.1', ttlMs: 0 },
         presetsDir: path.join(dataRoot, 'presets'),
         maxConcurrentSessions: 2,
         logLevel: 'error',
@@ -150,7 +163,15 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     const providers = new Providers(path.join(config.paths.configRoot, 'providers.yaml'))
     const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())
     store.setRedactor({ redact: (text) => vault.redact(text), active: () => vault.hasSecrets() })
-    const tasks = new TaskService(store, config, workspace, providers, vault)
+    const sandboxes: SandboxManager = new SandboxManager(new Sbx(), store, config, {
+        projectPath,
+        projects: workspace.projects,
+        network: () => [],
+        pinned: (name) => previews.pinned(name),
+        allowNetwork: () => undefined
+    })
+    const previews = new Previews(store, config, null, sandboxes)
+    const tasks = new TaskService(store, config, workspace, providers, vault, { previews })
     // The gateway's address for tasks on other providers; tests never listen, so any port.
     tasks.setGatewayPort(8080)
     const routines = new Routines(store, catalog, tasks, config, {
@@ -168,12 +189,6 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         vault
     })
     const auth = new WebAuth(store, config.web)
-    const toolchains = new Toolchains({
-        root: config.paths.workspacesRoot,
-        projectPath,
-        projects: () => catalog.list('projects').map((e) => e.name)
-    })
-    tasks.docker = toolchains.docker
     const ctx: AppContext = {
         config,
         store,
@@ -186,7 +201,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         presets: new Presets(config.presetsDir),
         routines,
         auth,
-        toolchains,
+        sandboxes,
+        previews,
         vault
     }
     const app = createApp(ctx)

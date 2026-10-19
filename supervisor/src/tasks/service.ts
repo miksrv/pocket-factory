@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process'
 import { createHmac, randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -31,6 +30,8 @@ import {
     type TaskGit
 } from '../git/changes.js'
 import { createLogger } from '../logger.js'
+import { collect, type Executor, LaunchError, LocalExecutor } from '../sandbox/executor.js'
+import type { Preview, Previews } from '../sandbox/previews.js'
 import type { ScopeContext, Vault } from '../secrets/vault.js'
 import type {
     Ask,
@@ -43,7 +44,6 @@ import type {
     TaskEvent,
     TaskSource
 } from '../store/index.js'
-import { type DockerContainer, DockerSidecar } from '../toolchains/docker.js'
 
 const log = createLogger('tasks')
 
@@ -117,6 +117,10 @@ const MAX_RESTARTS = 1
 
 /** How many times one task may go back to the queue to wait for a window reset before it fails for good. */
 const MAX_LIMIT_WAITS = 3
+
+/** A task whose sandbox would not start tries again this many times, a minute apart. */
+const MAX_LAUNCH_RETRIES = 3
+const LAUNCH_RETRY_MS = 60_000
 
 /** A minute past the reset, so the first call after it does not land on the old window. */
 const RESET_MARGIN_MS = 60_000
@@ -350,8 +354,10 @@ export function detectProject(
  * transcript — we only remember the session id on the conversation.
  */
 export class TaskService extends EventEmitter<TaskServiceEvents> {
-    /** The factory's Docker daemon (the dind sidecar, when the compose profile is on): a task's containers are stopped at its end. */
-    docker = new DockerSidecar()
+    /** Where every `claude` the factory starts runs: the project's Docker Sandbox, or the supervisor itself. */
+    readonly executor: Executor
+    /** The apps agents show at `/preview/<project>/`; null when previews are off (tests). */
+    readonly previews: Previews | null
     private readonly running = new Map<string, RunHandle>()
     /** Every `run` in flight, to its end: the CLI exits before the run has measured the changes and written the result. */
     private readonly runs = new Set<Promise<void>>()
@@ -365,6 +371,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** The last reachability check per provider (`reachable`): when, and what was wrong (null = it answered). */
     private readonly reach = new Map<string, { at: number; error: string | null }>()
     private readonly reaching = new Map<string, Promise<string | null>>()
+    /** What the factory's MCP server offers each running task (`delegate`, `preview`) and the project a preview is of. */
+    private readonly factoryOffers = new Map<string, { delegate: boolean; preview: boolean; project: string | null }>()
+    /** How often each task's sandbox failed to start, for `retryLaunch`. */
+    private readonly launchRetries = new Map<string, number>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
     /** Tasks found `running` at startup and failed by the store (restart limit reached); announced once a listener can deliver. */
@@ -393,10 +403,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         private readonly workspace: Workspace,
         private readonly providers: Providers,
         /** Secrets and variables set in the UI; a run gets the ones in its scope. */
-        private readonly vault: Vault | null = null
+        private readonly vault: Vault | null = null,
+        options: { executor?: Executor; previews?: Previews | null } = {}
     ) {
         super()
-        this.gatewayBase = `http://127.0.0.1:${config.web.port}/gateway`
+        this.executor = options.executor ?? new LocalExecutor()
+        this.previews = options.previews ?? null
+        // A CLI in a sandbox reaches the supervisor through the host (spike S7), one on the supervisor at its own port.
+        this.gatewayBase =
+            this.executor.kind === 'sbx'
+                ? `${config.sandbox.factoryUrl}/gateway`
+                : `http://127.0.0.1:${config.web.port}/gateway`
         this.inbox = new Inbox(path.join(config.paths.dataRoot, 'inbox'))
         try {
             this.inbox.prune(INBOX_KEEP_DAYS)
@@ -530,6 +547,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     /** Where the web server listens, so the CLI's `ANTHROPIC_BASE_URL` can point at the gateway on it. */
     setGatewayPort(port: number): void {
+        if (this.executor.kind === 'sbx') return
         this.gatewayBase = `http://127.0.0.1:${port}/gateway`
     }
 
@@ -717,17 +735,19 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
     /** `claude mcp list` from the workspaces root: the authoritative status of every server the CLI can see, needs-auth ones included. */
     async refreshMcp(): Promise<McpEntry[]> {
-        const output = await new Promise<string>((resolve, reject) => {
-            execFile(
-                'claude',
-                ['mcp', 'list'],
-                { cwd: this.config.paths.workspacesRoot, env: this.agentEnv(), timeout: 90_000, maxBuffer: 1 << 20 },
-                (error, stdout, stderr) => {
-                    if (error && !stdout) reject(new Error(`claude mcp list: ${stderr.trim() || error.message}`))
-                    else resolve(stdout)
-                }
-            )
-        })
+        const run = await collect(
+            this.executor,
+            {
+                argv: ['claude', 'mcp', 'list'],
+                cwd: this.config.paths.workspacesRoot,
+                env: this.agentEnv(),
+                project: null
+            },
+            90_000
+        )
+        if (run.code !== 0 && !run.stdout)
+            throw new Error(`claude mcp list: ${run.stderr.trim() || `exited with ${run.code ?? 'a signal'}`}`)
+        const output = run.stdout
         const names = new Set(this.mcpRegistry().map((e) => e.name))
         const seen: RegistryUpdate[] = []
         for (const line of output.split('\n')) {
@@ -765,8 +785,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     startMcpLogin(name: string): Promise<McpLoginView> {
         const entry = this.mcpRegistry().find((e) => e.name === name || e.key === name)
         const slug = entry?.source?.startsWith('project:') ? entry.source.slice(8) : null
-        const cwd = (slug && this.workspace.projectPath(slug)) || this.config.paths.workspacesRoot
-        return this.logins.start(entry?.name ?? name, { cwd, env: this.agentEnv() })
+        const checkout = slug ? this.workspace.projectPath(slug) : null
+        const cwd = checkout || this.config.paths.workspacesRoot
+        // A project's server signs in in that project's sandbox, where its tasks will use it.
+        return this.logins.start(entry?.name ?? name, {
+            cwd,
+            env: this.agentEnv(),
+            executor: this.executor,
+            project: checkout ? slug : null
+        })
     }
 
     mcpLogin(id: string): McpLoginView | undefined {
@@ -1119,6 +1146,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             permissionMode: this.config.claude.permissionMode,
             env: this.agentEnv(),
             timeoutMs: PROBE_TIMEOUT_MS,
+            executor: this.executor,
+            project: null,
             mcpConfig: [this.mcpConfigFile()].filter((c): c is string => Boolean(c)),
             onEvent: (event) => {
                 if (event.type === 'init') {
@@ -1157,6 +1186,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     permissionMode: this.config.claude.permissionMode,
                     env: this.agentEnv(),
                     timeoutMs: TITLE_TIMEOUT_MS,
+                    executor: this.executor,
+                    project: null,
                     systemPrompt: TITLE_SYSTEM_PROMPT,
                     tools: [],
                     strictMcp: true,
@@ -1172,36 +1203,6 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 log.warn(`naming a conversation failed: ${error instanceof Error ? error.message : String(error)}`)
             }
         })
-    }
-
-    /** The CLI's environment: the supervisor's own minus its private secrets, plus the config dir. Prefilters run with the same one. */
-    /**
-     * Stop the containers a task started on the factory's Docker, unless another task
-     * still running may own them: one whose project's checkout (or, for a project-less
-     * task, the whole workspaces root) holds the container's compose directory, and any
-     * container without compose labels while another task runs at all. Leaving a
-     * container up costs memory; stopping another task's database costs its tests.
-     */
-    private async stopContainers(task: Task, before: Set<string>): Promise<void> {
-        if (!this.docker.enabled) return
-        const others = this.runningTaskIds()
-            .filter((id) => id !== task.id)
-            .map((id) => this.store.getTask(id)?.project ?? null)
-            .map((project) => (project ? this.workspace.projectPath(project) : this.config.paths.workspacesRoot))
-            .filter((dir): dir is string => Boolean(dir))
-        const under = (file: string, dir: string) => file === dir || file.startsWith(dir.replace(/\/+$/, '') + '/')
-        const keep = (c: DockerContainer) =>
-            others.length > 0 && (!c.compose.working_dir || others.some((dir) => under(c.compose.working_dir!, dir)))
-        const stopped = await this.docker.stopStartedSince(before, keep)
-        if (!stopped.length) return
-        log.info(`${task.id}: stopped ${stopped.join(', ')} (started during the task)`)
-        this.emit(
-            'event',
-            this.store.addEvent(task.id, 'status', {
-                status: 'running',
-                note: `stopped containers: ${stopped.join(', ')}`
-            })
-        )
     }
 
     /**
@@ -1289,6 +1290,40 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         })
     }
 
+    // ---- the factory's MCP tools ------------------------------------------
+
+    /** The tools `/factory/<task>/mcp` lists for a running task. */
+    factoryTools(taskId: string): { delegate: boolean; preview: boolean } {
+        const offers = this.factoryOffers.get(taskId)
+        // A task that is not running (yet): `delegate` as the roles stand, refused with the reason when called.
+        if (!offers) return { delegate: this.delegates().length > 0, preview: false }
+        return { delegate: offers.delegate, preview: offers.preview }
+    }
+
+    /** The agent shows the app it runs on `port` (`preview`): published and proxied at `/preview/<project>/`. */
+    async preview(taskId: string, port: number, strip = false): Promise<Preview> {
+        const offers = this.factoryOffers.get(taskId)
+        if (!offers?.preview || !offers.project || !this.previews)
+            throw new Error('this task has no project to preview')
+        if (this.store.getTask(taskId)?.status !== 'running') throw new Error('the task is not running')
+        const preview = await this.previews.open(offers.project, port, { strip, taskId })
+        this.emit(
+            'event',
+            this.store.addEvent(taskId, 'status', {
+                status: 'running',
+                note: `preview of port ${port}: ${preview.url}`
+            })
+        )
+        return preview
+    }
+
+    async previewStop(taskId: string): Promise<boolean> {
+        const offers = this.factoryOffers.get(taskId)
+        if (!offers?.preview || !offers.project || !this.previews)
+            throw new Error('this task has no project to preview')
+        return this.previews.close(offers.project, 'stopped by the agent')
+    }
+
     // ---- delegation --------------------------------------------------------
 
     /** The roles an orchestrator may delegate: agent files with `provider:`. */
@@ -1304,7 +1339,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return createHmac('sha256', this.gatewaySecret).update(`factory:${taskId}`).digest('hex')
     }
 
-    /** `--mcp-config` (a JSON string) for the factory's own server, pointed at the task's endpoint. */
+    /** `--mcp-config` (a JSON string) for the factory's own server (`delegate`, `preview`), pointed at the task's endpoint. */
     private factoryMcpConfig(taskId: string): string {
         return JSON.stringify({
             mcpServers: {
@@ -1778,6 +1813,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         } finally {
             this.running.delete(task.id)
             this.runningOn.delete(task.id)
+            this.factoryOffers.delete(task.id)
             this.stopRequested.delete(task.id)
             queueMicrotask(() => this.tick())
         }
@@ -1809,13 +1845,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (start) this.store.updateTask(task.id, { git: { start_head: start.head, start_branch: start.branch } })
         }
         /** Every way the run ends: what it changed in the checkout is measured first, so the report can say it. */
-        // Services the agent starts on the factory's Docker (a project's db for its tests) end with the
-        // task. Not awaited here: nothing may yield before the CLI is registered in `running`, or the
-        // worker's concurrency check overshoots (the git snapshot is synchronous for the same reason).
-        const containersBefore = this.docker.snapshot()
         const end = async (patch: Partial<Task>) => {
             await this.recordChanges(task.id, cwd)
-            await this.stopContainers(task, await containersBefore)
             this.finish(task.id, patch)
         }
 
@@ -1869,7 +1900,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const asAgentFile = !provider && !task.parent_id ? agentFile : null
         const asAgent = asAgentFile ? task.agent! : undefined
         const scope = this.scopeOf(task, conversation.project)
+        // The sandbox it runs in: its project's (a delegated role's is its parent's; its directory is in the inbox, mounted everywhere).
+        const sandboxProject = (task.parent_id ? task.project : conversation.project) ?? null
         const env = provider ? this.providerEnv(provider, model, scope) : this.agentEnv(scope)
+        // Where a preview of the project's app is served: the app is configured with this base (vite --base …).
+        if (sandboxProject && this.previews) env.PREVIEW_BASE = this.previews.base(sandboxProject)
         // An orchestrator on the subscription may hand roles to other providers (`delegate`); the
         // roles themselves never reach the CLI's Agent tool, which would run them on Claude.
         const delegates = this.delegates()
@@ -1880,15 +1915,27 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             delegates.length > 0 &&
             (!asAgentFile?.tools ||
                 asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
+        // A project's task on the subscription can show its app to the owner (`preview`); same rule for its tool set.
+        const offersPreview =
+            !provider &&
+            !task.parent_id &&
+            Boolean(sandboxProject) &&
+            this.previews !== null &&
+            (!asAgentFile?.tools ||
+                asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
+        const offersFactory = offersDelegate || offersPreview
         const settings = this.sessionSettings(conversation.project)
-        if (delegates.length && !light) {
+        if (offersFactory || (delegates.length && !light)) {
             const permissions = (settings.permissions ?? {}) as { allow?: string[]; deny?: string[] }
             settings.permissions = {
                 ...permissions,
-                ...(offersDelegate ? { allow: [...(permissions.allow ?? []), `mcp__${FACTORY_MCP}`] } : {}),
-                deny: [...(permissions.deny ?? []), ...delegates.map((a) => `Agent(${a.name})`)]
+                ...(offersFactory ? { allow: [...(permissions.allow ?? []), `mcp__${FACTORY_MCP}`] } : {}),
+                ...(delegates.length && !light
+                    ? { deny: [...(permissions.deny ?? []), ...delegates.map((a) => `Agent(${a.name})`)] }
+                    : {})
             }
         }
+        this.factoryOffers.set(task.id, { delegate: offersDelegate, preview: offersPreview, project: sandboxProject })
         const appendSystemPrompt = offersDelegate
             ? this.delegationPrompt(delegates)
             : task.parent_id && !light
@@ -1928,7 +1975,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             mcpConfig: [
                 this.mcpConfigFile(),
                 provider && this.providerMcpConfig(provider),
-                offersDelegate && this.factoryMcpConfig(task.id)
+                offersFactory && this.factoryMcpConfig(task.id)
             ].filter((c): c is string => Boolean(c)),
             settings,
             appendSystemPrompt,
@@ -1944,6 +1991,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             // A small model gets the factory's own MCP servers (the search) and nothing else: no connectors, no plugins, no project servers.
             strictMcp: Boolean(light),
             timeoutMs: this.config.claude.taskTimeoutMs,
+            executor: this.executor,
+            project: sandboxProject,
             onEvent: (event) => {
                 sawOutput = true
                 const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
@@ -2117,6 +2166,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 await end({ status: 'failed', error: message })
                 return
             }
+            // The sandbox would not start: nothing ran, so the session stays. A daemon still coming up
+            // after a reboot is worth a few minutes; a missing login or a moved checkout fails after that.
+            if (error instanceof LaunchError) {
+                if (this.retryLaunch(task.id, message)) return
+                await end({ status: 'failed', error: message })
+                return
+            }
             if (resuming && !sawOutput && mayRetry) {
                 log.warn(
                     `session ${conversation.session_id} of ${conversation.id} could not be resumed, starting afresh: ${message}`
@@ -2183,6 +2239,37 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return true
     }
 
+    /**
+     * A task whose sandbox would not start goes back to the queue for a minute, `MAX_LAUNCH_RETRIES`
+     * times; true when it waits.
+     */
+    private retryLaunch(taskId: string, reason: string): boolean {
+        const tries = (this.launchRetries.get(taskId) ?? 0) + 1
+        if (tries > MAX_LAUNCH_RETRIES) {
+            this.launchRetries.delete(taskId)
+            return false
+        }
+        this.launchRetries.set(taskId, tries)
+        const updated = this.store.updateTask(taskId, {
+            status: 'queued',
+            not_before: new Date(Date.now() + LAUNCH_RETRY_MS).toISOString(),
+            started_at: null,
+            ask: null,
+            error: null
+        })
+        this.emit(
+            'event',
+            this.store.addEvent(taskId, 'status', {
+                status: 'queued',
+                note: `the sandbox did not start (${reason}); trying again in a minute (${tries} of ${MAX_LAUNCH_RETRIES})`,
+                not_before: updated.not_before
+            })
+        )
+        log.warn(`${taskId}: sandbox did not start, retry ${tries}: ${reason}`)
+        this.emit('task', updated)
+        return true
+    }
+
     /** The task's changes in its checkout (`tasks.git`) and the branch's pull request; never fails the task. */
     private async recordChanges(taskId: string, cwd: string): Promise<void> {
         const task = this.store.getTask(taskId)
@@ -2207,6 +2294,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     private finish(taskId: string, patch: Partial<Task>): void {
+        this.launchRetries.delete(taskId)
         this.stopChildren(taskId)
         const task = this.store.updateTask(taskId, { ...patch, ask: null, finished_at: new Date().toISOString() })
         // Cache reads stay in the payload, apart: the UI shows the rest (see FRESH_TOKENS in the store).

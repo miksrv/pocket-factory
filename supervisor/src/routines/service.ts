@@ -737,6 +737,7 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         return {
             cwd,
             project,
+            executor: this.tasks.executor,
             env: {
                 ...this.refs.agentEnv({ routine: spec.name, project: spec.project }),
                 ROUTINE: spec.name,

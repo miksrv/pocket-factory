@@ -1,7 +1,8 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 
 import { createLogger } from '../logger.js'
+import { type Executor, LocalExecutor } from '../sandbox/executor.js'
 
 /**
  * `claude mcp login <name> --no-browser` driven from the web UI instead of a
@@ -40,6 +41,8 @@ export interface McpLoginView {
 
 interface Login extends McpLoginView {
     child: ChildProcess
+    /** TERM / KILL the CLI wherever it runs (its process group here, its run inside a sandbox). */
+    kill: (sig: NodeJS.Signals) => void
     /** Everything the CLI printed, escapes stripped. */
     output: string
     /** Where the output stood when the last URL was pasted: a prompt after it is a rejection. */
@@ -136,16 +139,26 @@ export class McpLogins {
     constructor(private readonly onAuthorized: (name: string) => void = () => {}) {}
 
     /** Start a sign-in; resolves once the CLI printed the URL and said what comes next, or gave up, or after 30 s. */
-    async start(name: string, options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<McpLoginView> {
+    async start(
+        name: string,
+        options: { cwd: string; env: NodeJS.ProcessEnv; executor?: Executor; project?: string | null }
+    ): Promise<McpLoginView> {
         for (const other of this.logins.values())
             if (other.name === name && (other.state === 'starting' || other.state === 'waiting')) this.cancel(other.id)
         const argv = ['claude', 'mcp', 'login', name, '--no-browser']
-        const { command, args } = ptyCommand(argv)
-        const child = spawn(command, args, {
+        const command = process.platform === 'linux' ? 'script' : 'python3'
+        // In a sandbox the pseudo-terminal wraps `sbx exec -t`, which gives the CLI one inside the VM too.
+        const { child, signal } = await (options.executor ?? new LocalExecutor()).launch({
+            argv,
             cwd: options.cwd,
             env: { ...options.env, TERM: 'dumb', NO_COLOR: '1' },
-            stdio: ['pipe', 'pipe', 'pipe'],
-            detached: process.platform !== 'win32'
+            project: options.project ?? null,
+            stdin: 'pipe',
+            tty: true,
+            wrap: (file, args) => {
+                const wrapped = ptyCommand([file, ...args])
+                return { file: wrapped.command, args: wrapped.args }
+            }
         })
         const login: Login = {
             id: randomUUID(),
@@ -156,6 +169,7 @@ export class McpLogins {
             message: null,
             started_at: new Date().toISOString(),
             child,
+            kill: signal,
             output: '',
             pasted_at: 0,
             pasted: null,
@@ -299,14 +313,7 @@ export class McpLogins {
     }
 
     private signal(login: Login, sig: NodeJS.Signals): void {
-        const pid = login.child.pid
-        if (!pid || login.child.exitCode !== null || login.child.signalCode !== null) return
-        try {
-            if (process.platform !== 'win32') process.kill(-pid, sig)
-            else login.child.kill(sig)
-        } catch {
-            login.child.kill(sig)
-        }
+        login.kill(sig)
     }
 
     private notify(login: Login): void {

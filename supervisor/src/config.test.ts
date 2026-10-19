@@ -83,6 +83,22 @@ describe('loadConfig', () => {
                 publicUrl: null,
                 distDir: path.resolve(process.cwd(), 'web', 'dist')
             },
+            sandbox: {
+                mode: 'local',
+                memory: '8g',
+                cpus: 0,
+                idleMs: 60 * 60_000,
+                factoryUrl: 'http://host.docker.internal:8080',
+                helpersDir: null,
+                home: undefined,
+                gitIdentity: { name: undefined, email: undefined }
+            },
+            preview: {
+                ports: [18100, 18199],
+                bind: '172.17.0.1',
+                upstreamHost: 'host.docker.internal',
+                ttlMs: 24 * 3_600_000
+            },
             presetsDir: path.resolve(process.cwd(), 'presets'),
             maxConcurrentSessions: 2,
             logLevel: 'info',

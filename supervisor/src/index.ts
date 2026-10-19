@@ -12,12 +12,16 @@ import { Providers } from './files/providers.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
 import { Routines } from './routines/service.js'
+import { type Executor, LocalExecutor, SbxExecutor } from './sandbox/executor.js'
+import { SandboxManager } from './sandbox/manager.js'
+import { addProjectNetwork, sandboxNetwork } from './sandbox/network.js'
+import { Previews } from './sandbox/previews.js'
+import { Sbx } from './sandbox/sbx.js'
 import { Vault } from './secrets/vault.js'
 import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
 import { TaskService, type Workspace } from './tasks/service.js'
-import { Toolchains } from './toolchains/service.js'
 import { VERSION } from './version.js'
 import { WebAuth } from './web/auth.js'
 import { startServer } from './web/server.js'
@@ -39,6 +43,7 @@ async function main(): Promise<void> {
     log.info(`pocket-factory v${VERSION}`)
     log.info(`workspaces: ${config.paths.workspacesRoot}`)
     log.info(`claude: permission=${config.claude.permissionMode} maxTurns=${config.claude.maxTurns}`)
+    log.info(`agents run ${config.sandbox.mode === 'sbx' ? 'in Docker Sandboxes' : 'on this machine (SANDBOX=local)'}`)
 
     const store = new Store(openDatabase(config.paths.dbFile))
     // Files of a factory from before 1.5.0 move from schedules/ to routines/, once.
@@ -64,13 +69,19 @@ async function main(): Promise<void> {
     // A project is named by its file, but tasks name it by the checkout directory
     // (detected from tool calls): resolve by file name first, then by the
     // checkout the file points to, case-insensitively.
+    // Project files written before 1.7.0 (and by agents that read the old docs) name the container's
+    // `/data/workspaces/<x>`; the checkouts now sit at their host path.
+    const checkoutOf = (dir: string) =>
+        dir.startsWith('/data/workspaces/') && config.paths.workspacesRoot !== '/data/workspaces'
+            ? path.join(config.paths.workspacesRoot, dir.slice('/data/workspaces/'.length))
+            : dir
     const projectEntry = (slug: string) => {
         if (catalog.exists('projects', slug)) return catalog.get('projects', slug)
         const wanted = slug.toLowerCase()
         return catalog.list('projects').find((entry) => {
             const dir =
                 typeof entry.frontmatter.path === 'string' && entry.frontmatter.path
-                    ? entry.frontmatter.path
+                    ? checkoutOf(entry.frontmatter.path)
                     : path.join(config.paths.workspacesRoot, entry.name)
             return entry.name.toLowerCase() === wanted || path.basename(dir).toLowerCase() === wanted
         })
@@ -82,7 +93,7 @@ async function main(): Promise<void> {
             if (!entry) return null
             const dir =
                 typeof entry.frontmatter.path === 'string' && entry.frontmatter.path
-                    ? entry.frontmatter.path
+                    ? checkoutOf(entry.frontmatter.path)
                     : path.join(config.paths.workspacesRoot, entry.name)
             return fs.existsSync(dir) ? dir : null
         },
@@ -129,7 +140,21 @@ async function main(): Promise<void> {
     // Secrets and variables set in the UI (Settings → Secrets and variables): scoped into runs, masked in the store.
     const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())
     store.setRedactor({ redact: (text) => vault.redact(text), active: () => vault.hasSecrets() })
-    const tasks = new TaskService(store, config, workspace, providers, vault)
+    // Where the agents run: one Docker Sandbox per project (sbx), or this machine (local: yarn dev, tests).
+    const sbx = new Sbx({ home: config.sandbox.home })
+    const sandboxes: SandboxManager = new SandboxManager(sbx, store, config, {
+        projectPath: workspace.projectPath,
+        projects: workspace.projects,
+        network: (project) => sandboxNetwork(catalog, hosts, project),
+        pinned: (name) => previews.pinned(name),
+        allowNetwork: (project, resource) => {
+            const entry = projectEntry(project)
+            if (entry) addProjectNetwork(catalog, entry.name, resource)
+        }
+    })
+    const previews = new Previews(store, config, config.sandbox.mode === 'sbx' ? sbx : null, sandboxes)
+    const executor: Executor = config.sandbox.mode === 'sbx' ? new SbxExecutor(sbx, sandboxes) : new LocalExecutor()
+    const tasks = new TaskService(store, config, workspace, providers, vault, { executor, previews })
     // Routines: an agent's recurring work, files in data/config/routines, fired by their triggers through the same queue.
     const routines = new Routines(store, catalog, tasks, config, {
         projectExists: (slug) => workspace.projectPath(slug) !== null,
@@ -161,14 +186,9 @@ async function main(): Promise<void> {
     // otherwise fight over long polling).
     // The web UI's sign-in: sessions and the lockout live in the store, failed attempts are told in Telegram.
     const auth = new WebAuth(store, config.web)
-    // What the agents build with: mise runtimes on data/tools, the image's PHP, the dind sidecar.
-    const toolchains = new Toolchains({
-        root: config.paths.workspacesRoot,
-        projectPath: workspace.projectPath,
-        projects: () => catalog.list('projects').map((entry) => entry.name)
-    })
-    tasks.docker = toolchains.docker
-    const bot = config.telegram.botToken ? createBot(config, tasks, store, routines, auth, vault) : null
+    const bot = config.telegram.botToken
+        ? createBot(config, tasks, store, routines, auth, vault, { sandboxes, previews })
+        : null
     if (!bot) log.warn('TELEGRAM_BOT_TOKEN not set — Telegram disabled, web UI only')
 
     startServer({
@@ -183,15 +203,20 @@ async function main(): Promise<void> {
         presets: new Presets(config.presetsDir),
         routines,
         auth,
-        toolchains,
+        sandboxes,
+        previews,
         vault
     })
     auth.start()
+    sandboxes.start()
+    previews.start()
 
     const shutdown = (signal: string) => {
         log.info(`${signal} received, stopping`)
         routines.stop()
         auth.stop()
+        sandboxes.stop()
+        previews.stop()
         void bot?.stop()
         void tasks.shutdown().then(() => process.exit(0))
     }

@@ -5,11 +5,12 @@ import type { KnownHosts } from '../files/knownHosts.js'
 import type { Providers } from '../files/providers.js'
 import type { Presets } from '../presets/index.js'
 import type { Routines } from '../routines/service.js'
+import type { SandboxManager } from '../sandbox/manager.js'
+import type { Previews } from '../sandbox/previews.js'
 import type { Vault } from '../secrets/vault.js'
 import type { Transcripts } from '../sessions/transcripts.js'
 import type { Store } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
-import type { Toolchains } from '../toolchains/service.js'
 import type { WebAuth } from './auth.js'
 
 /** Everything the HTTP routes need; assembled once in index.ts. */
@@ -25,7 +26,8 @@ export interface AppContext {
     presets: Presets
     routines: Routines
     auth: WebAuth
-    toolchains: Toolchains
+    sandboxes: SandboxManager
+    previews: Previews
     vault: Vault
 }
 

@@ -52,6 +52,35 @@ export interface Config {
         publicUrl: string | null
         distDir: string
     }
+    /** Where the agents run: a Docker Sandbox per project (`sbx`), or the supervisor itself (`local`: yarn dev, tests). */
+    sandbox: {
+        mode: 'sbx' | 'local'
+        /** `--memory` of a new sandbox (`8g`); empty = sbx's default (half the host). */
+        memory: string
+        /** `--cpus` of a new sandbox; 0 = all of the host's. */
+        cpus: number
+        /** A sandbox nothing ran in for this long is stopped (its state stays); 0 = never. */
+        idleMs: number
+        /** The supervisor as a VM reaches it: the gateway and the factory's MCP server for tasks in a sandbox. */
+        factoryUrl: string
+        /** Where the git / gh wrappers live that every sandbox gets a copy of (the image's /usr/local/bin). */
+        helpersDir: string | null
+        /** The host user's home: sbx finds its daemon socket and its stores under it. */
+        home: string | undefined
+        /** git's identity inside the sandboxes (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`). */
+        gitIdentity: { name: string | undefined; email: string | undefined }
+    }
+    /** An app the agent runs, shown at `/preview/<project>/` through the factory. */
+    preview: {
+        /** Host ports a sandbox's app is published on, first and last. */
+        ports: [number, number]
+        /** The host address a published port binds to: reachable from the supervisor's container, not from the LAN. */
+        bind: string
+        /** How the supervisor reaches that address (the host gateway from inside its container). */
+        upstreamHost: string
+        /** A preview nobody stopped ends after this long; 0 = never. */
+        ttlMs: number
+    }
     presetsDir: string
     maxConcurrentSessions: number
     logLevel: 'debug' | 'info' | 'warn' | 'error'
@@ -156,6 +185,24 @@ export function loadConfig(): Config {
             publicUrl: optional('WEB_PUBLIC_URL')?.replace(/\/+$/, '') ?? null,
             distDir: optional('WEB_DIST') ?? path.resolve(process.cwd(), 'web', 'dist')
         },
+        sandbox: {
+            mode: sandboxMode(optional('SANDBOX')),
+            memory: optional('SANDBOX_MEMORY') ?? '8g',
+            cpus: Math.max(0, Math.floor(number('SANDBOX_CPUS', 0))),
+            idleMs: Math.max(0, number('SANDBOX_IDLE_MIN', 60)) * 60_000,
+            factoryUrl: (
+                optional('SANDBOX_FACTORY_URL') ?? `http://host.docker.internal:${number('WEB_PORT', 8080)}`
+            ).replace(/\/+$/, ''),
+            helpersDir: optional('SANDBOX_HELPERS_DIR') ?? null,
+            home: optional('SBX_HOME'),
+            gitIdentity: { name: optional('GIT_AUTHOR_NAME'), email: optional('GIT_AUTHOR_EMAIL') }
+        },
+        preview: {
+            ports: portRange(optional('PREVIEW_PORTS') ?? '18100-18199'),
+            bind: optional('PREVIEW_BIND') ?? '172.17.0.1',
+            upstreamHost: optional('PREVIEW_UPSTREAM') ?? 'host.docker.internal',
+            ttlMs: Math.max(0, number('PREVIEW_TTL_HOURS', 24)) * 3_600_000
+        },
         presetsDir: optional('PRESETS_DIR') ?? path.resolve(process.cwd(), 'presets'),
         maxConcurrentSessions: Math.max(1, Math.floor(number('MAX_CONCURRENT_SESSIONS', 2))),
         logLevel: logLevel(optional('LOG_LEVEL')),
@@ -168,6 +215,21 @@ export function loadConfig(): Config {
                 Math.max(0, number(either('ROUTINES_ASK_TIMEOUT_MIN', 'SCHEDULES_ASK_TIMEOUT_MIN'), 120)) * 60_000
         }
     }
+}
+
+function sandboxMode(raw: string | undefined): Config['sandbox']['mode'] {
+    if (raw === undefined) return 'local'
+    if (raw === 'sbx' || raw === 'local') return raw
+    throw new Error(`SANDBOX must be sbx or local, got "${raw}"`)
+}
+
+/** `18100-18199`: the first and the last port, inclusive. */
+function portRange(raw: string): [number, number] {
+    const match = /^(\d{1,5})\s*-\s*(\d{1,5})$/.exec(raw)
+    const [first, last] = match ? [Number(match[1]), Number(match[2])] : [NaN, NaN]
+    if (!(first >= 1024 && last <= 65535 && first <= last))
+        throw new Error(`PREVIEW_PORTS must be a range like 18100-18199, got "${raw}"`)
+    return [first, last]
 }
 
 /** A boolean switch: 1 / true / yes / on. */

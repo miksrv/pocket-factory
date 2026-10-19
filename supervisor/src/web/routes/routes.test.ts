@@ -22,28 +22,33 @@ describe('API routes (open mode)', () => {
 
     const put = (url: string, body: unknown) => t.request(url, json(body, { method: 'PUT' }))
 
-    describe('toolchains', () => {
-        it('reports mise, the image and Docker, off or missing here', async () => {
-            const res = await t.request('/api/toolchains')
+    describe('sandboxes', () => {
+        it('reports local mode without asking sbx, and the status carries it', async () => {
+            const res = await t.request('/api/sandboxes')
             expect(res.status).toBe(200)
-            const body = (await res.json()) as {
-                mise: { tools: unknown[] }
-                image: object
-                docker: { enabled: boolean }
-            }
-            expect(Array.isArray(body.mise.tools)).toBe(true)
-            expect(body.image).toHaveProperty('php')
-            expect(body.docker).toHaveProperty('enabled')
-            const status = (await (await t.request('/api/status')).json()) as { toolchains: object; mcp: object }
-            expect(status.toolchains).toHaveProperty('docker')
+            expect(await res.json()).toMatchObject({
+                mode: 'local',
+                ok: null,
+                sandboxes: [],
+                approvals: [],
+                previews: []
+            })
+            const status = (await (await t.request('/api/status')).json()) as { sandboxes: object; mcp: object }
+            expect(status.sandboxes).toMatchObject({ mode: 'local', total: 0, previews: [] })
             expect(status.mcp).toMatchObject({ total: 0, connected: 0, needs_auth: [], failed: [] })
         })
 
-        it('refuses a spec that is not tool@version and an unknown project', async () => {
-            const bad = await t.request('/api/toolchains/install', json({ spec: 'go@1; rm -rf /' }, { method: 'POST' }))
-            expect(bad.status).toBe(400)
-            expect(((await bad.json()) as { error: string }).error).toMatch(/not a tool spec/)
-            expect((await t.request('/api/toolchains/projects/nope')).status).toBe(404)
+        it("shows a project's sandbox name and preview, and 404 for an unknown project", async () => {
+            t.ctx.catalog.save('projects', 'shop', { frontmatter: {}, body: '' })
+            const res = await t.request('/api/sandboxes/projects/shop')
+            expect(await res.json()).toMatchObject({ mode: 'local', name: 'pf-shop', sandbox: null, preview: null })
+            expect((await t.request('/api/sandboxes/projects/nope')).status).toBe(404)
+            expect((await t.request('/api/sandboxes/probe/reset', json({}))).status).toBe(400)
+        })
+
+        it('refuses an approval answer that is not a boolean, and one that is not pending', async () => {
+            expect((await t.request('/api/sandboxes/approvals/x', json({ allow: 'yes' }))).status).toBe(400)
+            expect((await t.request('/api/sandboxes/approvals/x', json({ allow: true }))).status).toBe(409)
         })
     })
 

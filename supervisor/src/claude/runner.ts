@@ -1,8 +1,9 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import readline from 'node:readline'
 
 import { createLogger } from '../logger.js'
+import { type Executor, type Launched, LocalExecutor } from '../sandbox/executor.js'
 
 const log = createLogger('claude')
 
@@ -128,6 +129,10 @@ export interface RunOptions {
     strictMcp?: boolean
     /** Nothing written to disk (`--no-session-persistence`): a side call (a chat's title) leaves no session behind. */
     noSessionPersistence?: boolean
+    /** Where the CLI runs: the project's sandbox, or the supervisor itself (the default). */
+    executor?: Executor
+    /** Whose sandbox (the executor's choice); null = the factory's own. */
+    project?: string | null
     /** Called for each assistant text block / tool call as it streams in. */
     onEvent?: (event: RunnerEvent) => void
 }
@@ -321,28 +326,28 @@ export function runClaude(options: RunOptions): RunHandle {
 
     log.info(`spawn claude in ${options.cwd}${options.resumeSessionId ? ` (resume ${options.resumeSessionId})` : ''}`)
 
-    // Its own process group, so that a stop also reaches the tools the CLI
-    // spawned (a dev server started through Bash would otherwise outlive it).
-    const child: ChildProcess = spawn('claude', args, {
+    const executor = options.executor ?? new LocalExecutor()
+    const aborted = new AbortController()
+    // A sandbox may take a while to make or start: the handle is the caller's at once, the process follows.
+    const launching = executor.launch({
+        argv: ['claude', ...args],
         cwd: options.cwd,
         env: options.env ?? process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32'
+        project: options.project ?? null,
+        stdin: 'pipe',
+        signal: aborted.signal
     })
-
-    // A prompt larger than the pipe buffer raises EPIPE when the CLI exits
-    // before reading it (bad --resume id, auth error). Unhandled, that would
-    // crash the supervisor; `close` reports the real failure anyway.
-    child.stdin!.on('error', (error) => log.debug(`stdin: ${error.message}`))
+    let launched: Launched | null = null
     let stdinOpen = true
     const write = (message: unknown) => {
-        if (!stdinOpen || child.exitCode !== null) return
+        const child = launched?.child
+        if (!child || !stdinOpen || child.exitCode !== null) return
         child.stdin!.write(`${JSON.stringify(message)}\n`)
     }
     const closeStdin = () => {
         if (!stdinOpen) return
         stdinOpen = false
-        child.stdin!.end()
+        launched?.child.stdin!.end()
     }
     let promptSent = false
     const promptUuid = randomUUID()
@@ -355,26 +360,19 @@ export function runClaude(options: RunOptions): RunHandle {
             message: { role: 'user', content: [{ type: 'text', text: options.prompt }] }
         })
     }
-    write({ type: 'control_request', request_id: INIT_REQUEST_ID, request: { subtype: 'initialize', hooks: {} } })
 
-    const signal = (sig: NodeJS.Signals) => {
-        if (child.exitCode !== null || child.signalCode !== null) return
-        try {
-            if (child.pid && process.platform !== 'win32') process.kill(-child.pid, sig)
-            else child.kill(sig)
-        } catch {
-            // already gone
-        }
-    }
+    // The whole tree: the CLI's process group here, the run's processes inside a sandbox.
+    const signal = (sig: NodeJS.Signals) => launched?.signal(sig)
     let timedOut = false
     let stopping = false
     const timers: NodeJS.Timeout[] = []
     const kill = () => {
+        if (stopping) return
         stopping = true
+        aborted.abort()
         signal('SIGTERM')
         timers.push(setTimeout(() => signal('SIGKILL'), KILL_GRACE_MS))
     }
-    timers.push(setTimeout(sendPrompt, HANDSHAKE_MS))
 
     // The wall-clock limit measures the agent's work, not the owner's
     // thinking time: it is disarmed while a request waits and re-armed in
@@ -413,7 +411,13 @@ export function runClaude(options: RunOptions): RunHandle {
         }
     }
 
-    const result = new Promise<RunResult>((resolve, reject) => {
+    const attach = (child: ChildProcess, resolve: (r: RunResult) => void, reject: (e: Error) => void) => {
+        // A prompt larger than the pipe buffer raises EPIPE when the CLI exits
+        // before reading it (bad --resume id, auth error). Unhandled, that would
+        // crash the supervisor; `close` reports the real failure anyway.
+        child.stdin!.on('error', (error) => log.debug(`stdin: ${error.message}`))
+        write({ type: 'control_request', request_id: INIT_REQUEST_ID, request: { subtype: 'initialize', hooks: {} } })
+        timers.push(setTimeout(sendPrompt, HANDSHAKE_MS))
         let finalEvent: StreamEvent | undefined
         let sessionFromInit: string | undefined
         let rateLimits: RateLimits | null = null
@@ -680,6 +684,32 @@ export function runClaude(options: RunOptions): RunHandle {
                 stoppedAgentsAtResult
             })
         })
+    }
+
+    const result = new Promise<RunResult>((resolve, reject) => {
+        launching.then(
+            (proc) => {
+                launched = proc
+                attach(proc.child, resolve, reject)
+                // Stopped while the sandbox was being prepared: the process goes at once.
+                if (stopping) {
+                    proc.signal('SIGTERM')
+                    timers.push(setTimeout(() => proc.signal('SIGKILL'), KILL_GRACE_MS))
+                }
+            },
+            (error: unknown) => {
+                for (const timer of timers) clearTimeout(timer)
+                reject(
+                    timedOut
+                        ? new RunTimeout(options.timeoutMs ?? 0)
+                        : stopping
+                          ? new Error('claude was stopped')
+                          : error instanceof Error
+                            ? error
+                            : new Error(String(error))
+                )
+            }
+        )
     })
 
     return { sessionId, result, kill, answer }

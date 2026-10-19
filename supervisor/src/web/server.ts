@@ -15,6 +15,7 @@ import { gatewayRoutes } from '../gateway/routes.js'
 import { createLogger } from '../logger.js'
 import { ACTIVE_HEADER, SESSION_COOKIE } from './auth.js'
 import type { AppContext, Env } from './context.js'
+import { previewRoutes, previewUpgrade } from './preview.js'
 import { clientIp, clientOf } from './request.js'
 import { activityRoutes } from './routes/activity.js'
 import { auditRoutes } from './routes/audit.js'
@@ -27,12 +28,12 @@ import { toolRoutes } from './routes/models.js'
 import { presetRoutes } from './routes/presets.js'
 import { providerRoutes } from './routes/providers.js'
 import { routineRoutes } from './routes/routines.js'
+import { sandboxRoutes } from './routes/sandboxes.js'
 import { secretRoutes } from './routes/secrets.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { settingsRoutes } from './routes/settings.js'
 import { statusRoutes } from './routes/status.js'
 import { taskRoutes } from './routes/tasks.js'
-import { toolchainRoutes } from './routes/toolchains.js'
 import { usageRoutes } from './routes/usage.js'
 
 const log = createLogger('web')
@@ -59,7 +60,9 @@ export function createApp(app: AppContext): Hono<Env> {
     // The UI controls an agent with repository and host credentials. The
     // sign-in below is the floor; put Tailscale / Caddy / Cloudflare Access
     // in front when the port is reachable from outside.
-    hono.use('*', secureHeaders({ xFrameOptions: 'DENY', referrerPolicy: 'same-origin' }))
+    // A preview sets its own (an opaque origin, open CORS): see preview.ts.
+    const factoryHeaders = secureHeaders({ xFrameOptions: 'DENY', referrerPolicy: 'same-origin' })
+    hono.use('*', (c, next) => (c.req.path.startsWith('/preview/') ? next() : factoryHeaders(c, next)))
 
     // The model gateway for tasks on other providers: the CLI on this machine presents the
     // per-start bearer, nothing else applies (no cookie, no Host guard, bodies as large as a
@@ -67,6 +70,8 @@ export function createApp(app: AppContext): Hono<Env> {
     hono.route('/gateway', gatewayRoutes())
     // The factory's MCP server for orchestrators (`delegate`): per-task bearer, same reasoning.
     hono.route('/factory', factoryRoutes())
+    // The apps agents run (`preview`): the factory's sign-in, then the app under its project's key.
+    hono.route('/preview', previewRoutes())
 
     // Prompts and Markdown files are small; anything bigger is a mistake or an attack.
     // An uploaded file (a photo, a log) gets Telegram's own ceiling instead.
@@ -150,7 +155,7 @@ export function createApp(app: AppContext): Hono<Env> {
     api.route('/providers', providerRoutes())
     api.route('/mcp', mcpRoutes())
     api.route('/settings', settingsRoutes())
-    api.route('/toolchains', toolchainRoutes())
+    api.route('/sandboxes', sandboxRoutes())
     api.route('/secrets', secretRoutes())
     // Before the file routes: /routines/status and /routines/:name/… must not be taken for a file name.
     api.route('/routines', routineRoutes())
@@ -178,10 +183,12 @@ export function createApp(app: AppContext): Hono<Env> {
 export function startServer(app: AppContext): void {
     const { host, port, authPassword } = app.config.web
     const hono = createApp(app)
-    serve({ fetch: hono.fetch, hostname: host, port }, (info) => {
+    const server = serve({ fetch: hono.fetch, hostname: host, port }, (info) => {
         app.tasks.setGatewayPort(info.port)
         log.info(
             `listening on http://${info.address}:${info.port}${authPassword ? ' (sign-in required)' : ' (NO AUTH — keep it on localhost or behind a proxy)'}`
         )
     })
+    // WebSockets of previews (a dev server's hot reload); nothing else here upgrades.
+    server.on('upgrade', previewUpgrade(app))
 }

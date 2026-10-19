@@ -47,6 +47,9 @@ describe('Vault', () => {
             expect(vault.refusal(name)).not.toBeNull()
         expect(vault.refusal('lower')).toMatch(/capital letters/)
         expect(vault.refusal('GSC_REFRESH_TOKEN')).toBeNull()
+        // Names that stay with the supervisor would never reach a sandbox.
+        expect(vault.refusal('LOG_LEVEL')).toMatch(/never reaches a sandbox/)
+        expect(vault.refusal('SANDBOX_URL')).toMatch(/never reaches a sandbox/)
     })
 
     it('gives a run only what its routine or project may see', () => {

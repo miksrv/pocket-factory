@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { hostOnly } from '../sandbox/executor.js'
+
 /**
  * Secrets and variables the owner sets in the UI (Settings → Secrets and
  * variables), as GitHub Actions has them: a **secret** is written and never
@@ -149,6 +151,7 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
         if (!NAME.test(name)) return 'use capital letters, digits and _, not starting with a digit (up to 64)'
         if (RESERVED.has(name) || RESERVED_PREFIXES.some((p) => name.startsWith(p)))
             return `${name} is reserved: the factory sets it or owns it`
+        if (hostOnly(name)) return `${name} is reserved: it stays with the supervisor and never reaches a sandbox`
         if (this.extraReserved().includes(name)) return `${name} is a provider's key: set it in .env`
         return null
     }

@@ -244,6 +244,18 @@ const MIGRATIONS: string[] = [
     // v19 (1.6.0): every run keeps how each of its steps went (name, ok, time, the head of its output).
     `
     ALTER TABLE schedule_runs ADD COLUMN steps TEXT;
+    `,
+    // v20 (1.7.0): an app a project's agent runs in its sandbox, shown at /preview/<project>/ (one per project).
+    `
+    CREATE TABLE previews (
+        project    TEXT PRIMARY KEY,
+        sandbox    TEXT NOT NULL,
+        port       INTEGER NOT NULL,             -- the app's port inside the sandbox
+        host_port  INTEGER NOT NULL,             -- where it is published on the host (= port without a sandbox)
+        strip      INTEGER NOT NULL DEFAULT 0,   -- the app serves at / and gets requests without the prefix
+        task_id    TEXT,
+        created_at TEXT NOT NULL
+    );
     `
 ]
 
