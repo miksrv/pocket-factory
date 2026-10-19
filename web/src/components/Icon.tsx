@@ -1,9 +1,11 @@
 import {
     Activity,
+    AppWindow,
     ArrowDown,
     Bell,
     BellOff,
     Bot,
+    Box,
     Braces,
     Check,
     ChevronDown,
@@ -115,7 +117,10 @@ export const ICONS = {
     alert: CircleAlert,
     /** A routine step's kind: a script, a Trac query (pull requests are `pr`, the agent `agents`). */
     script: SquareTerminal,
-    ticket: Ticket
+    ticket: Ticket,
+    /** Where the agents run (Settings → Sandboxes, a project's card) and the app an agent shows. */
+    sandbox: Box,
+    preview: AppWindow
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

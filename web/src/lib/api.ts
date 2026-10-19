@@ -302,7 +302,7 @@ export interface Status {
         max_turns: number
         config_dir: string
         logged_in: boolean
-        /** `claude.ai (…)` for a full login in the container, `token` for CLAUDE_CODE_OAUTH_TOKEN, `none`. */
+        /** `sandbox`: the login the sandboxes' proxy holds; `claude.ai (…)`: this machine's CLI; `token`: CLAUDE_CODE_OAUTH_TOKEN; `none`. */
         login: string
     }
     /** `token`: the fallback GH_TOKEN is set; `owners`: owners with a token of their own. */
@@ -313,8 +313,8 @@ export interface Status {
     paths: { data: string; workspaces: string; config: string }
     max_concurrent_sessions: number
     workspaces: Array<{ name: string; git: boolean }>
-    /** What the agents build with (Settings → Toolchains); `docker` is the dind sidecar. null: the probe failed. */
-    toolchains: ToolchainsHealth | null
+    /** Where the agents run (Settings → Sandboxes): the daemon, the logins, the sandboxes, what waits for the owner. */
+    sandboxes: SandboxesHealth
     /** The MCP registry in numbers: Overview → Health. */
     mcp: { total: number; connected: number; needs_auth: string[]; failed: string[] }
     /** Other model providers: what runs on each and whether the gateway's last request got through. */
@@ -394,74 +394,79 @@ export interface ProviderTest {
     mcp?: Array<{ name: string; ok: boolean; server?: string; error?: string }>
 }
 
-export interface ToolchainsHealth {
-    mise: string | null
-    tools: number
-    size_kb: number | null
-    php: string | null
-    docker: { enabled: boolean; reachable: boolean; version: string | null; running: number; error: string | null }
-}
-
-export interface ToolVersion {
-    tool: string
-    version: string
-    install_path: string
-    source: string | null
-    active: boolean
-    size_kb: number | null
-    used_by: string[]
-    /** The version file that asked for it, relative to the workspaces root. */
-    asked_by: string | null
-}
-
-export interface DockerContainer {
-    id: string
-    name: string
-    image: string
-    state: string
-    status: string
-    ports: string
-    created: string
-    compose: { working_dir: string | null; project: string | null; service: string | null }
-    /** The factory project whose checkout the compose file ran in. */
-    project: string | null
-}
-
-export interface ToolchainsOverview {
-    mise: {
-        version: string | null
-        data_dir: string
-        size_kb: number | null
-        tools: ToolVersion[]
-        error: string | null
-    }
-    image: { php: string | null; composer: string | null }
-    docker: {
-        enabled: boolean
-        host: string | null
-        reachable: boolean
-        version: string | null
-        error: string | null
-        containers: DockerContainer[]
-        disk: Array<{ type: string; total: number; active: number; size: string; reclaimable: string }>
-    }
-}
-
-export interface ProjectTool {
-    tool: string
+export interface SandboxesHealth {
+    /** `sbx`: a Docker Sandbox per project; `local`: on the supervisor itself (yarn dev). */
+    mode: 'sbx' | 'local'
+    /** The daemon answered the last check; null before it (and in local mode). */
+    ok: boolean | null
+    error: string | null
     version: string | null
-    source: string
-    spec: string
-    status: 'installed' | 'image' | 'missing' | 'unknown'
-    installed_version: string | null
+    docker_login: boolean | null
+    claude_login: boolean | null
+    total: number
+    running: number
+    /** Requests a sandbox's network policy held back, waiting for the owner. */
+    approvals: number
+    previews: Array<{ project: string; url: string }>
 }
 
-export interface ProjectToolchain {
-    slug: string
-    path: string | null
-    tools: ProjectTool[]
-    services: Array<{ file: string; services: string[] }>
-    docker: { enabled: boolean }
+export interface SandboxView {
+    name: string
+    /** null: the factory's own (`pf-factory`, chats without a project). */
+    project: string | null
+    status: string
+    workspaces: string[]
+    /** Runs going on in it now. */
+    active: number
+    last_used_at: string | null
+    created_at: string | null
+    /** An open preview keeps it from the idle stop. */
+    pinned: boolean
+}
+
+export interface SandboxApproval {
+    id: string
+    sandbox: string
+    project: string | null
+    /** What was refused: `host:port`, a domain or an address. */
+    resource: string
+    detail: string
+    seen_at: string
+}
+
+export interface Preview {
+    project: string
+    sandbox: string
+    port: number
+    host_port: number
+    strip: boolean
+    task_id: string | null
+    created_at: string
+    /** What the owner opens (the factory's sign-in, then the app). */
+    url: string
+    base: string
+    expires_at: string | null
+}
+
+export interface SandboxesOverview {
+    mode: 'sbx' | 'local'
+    ok: boolean | null
+    error: string | null
+    version: string | null
+    docker_login: boolean | null
+    claude_login: boolean | null
+    sandboxes: SandboxView[]
+    approvals: SandboxApproval[]
+    previews: Preview[]
+    checked_at: string | null
+}
+
+export interface ProjectSandbox {
+    mode: 'sbx' | 'local'
+    name: string
+    sandbox: SandboxView | null
+    preview: Preview | null
+    approvals: SandboxApproval[]
 }
 
 export type Kind = 'agents' | 'skills' | 'projects' | 'routines'
@@ -1047,19 +1052,20 @@ export const api = {
     /** Runs `claude mcp list` in the factory (about 15 s) and returns the registry with fresh statuses. */
     refreshMcp: () => request<{ servers: McpEntry[] }>('/mcp/refresh', { method: 'POST' }),
 
-    toolchains: () => request<ToolchainsOverview>('/toolchains'),
-    projectToolchain: (slug: string) => request<ProjectToolchain>(`/toolchains/projects/${encodeURIComponent(slug)}`),
-    /** `go@1.25.1`; a Go or Python download takes a minute or two. */
-    installTool: (spec: string) =>
-        request<{ installed: string }>('/toolchains/install', { method: 'POST', body: JSON.stringify({ spec }) }),
-    removeTool: (tool: string, version: string) =>
-        request<{ removed: boolean }>(`/toolchains/tools/${encodeURIComponent(tool)}/${encodeURIComponent(version)}`, {
-            method: 'DELETE'
+    sandboxes: () => request<SandboxesOverview>('/sandboxes'),
+    refreshSandboxes: () => request<SandboxesOverview>('/sandboxes/refresh', { method: 'POST' }),
+    projectSandbox: (slug: string) => request<ProjectSandbox>(`/sandboxes/projects/${encodeURIComponent(slug)}`),
+    stopSandbox: (name: string) =>
+        request<SandboxesOverview>(`/sandboxes/${encodeURIComponent(name)}/stop`, { method: 'POST' }),
+    resetSandbox: (name: string) =>
+        request<SandboxesOverview>(`/sandboxes/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
+    answerApproval: (id: string, allow: boolean) =>
+        request<SandboxesOverview>(`/sandboxes/approvals/${encodeURIComponent(id)}`, {
+            method: 'POST',
+            body: JSON.stringify({ allow })
         }),
-    pruneToolchains: () => request<{ mise: string; docker: string | null }>('/toolchains/prune', { method: 'POST' }),
-    stopContainer: (id: string) =>
-        request<{ stopped: string }>('/toolchains/docker/stop', { method: 'POST', body: JSON.stringify({ id }) }),
-    pruneDocker: () => request<{ reclaimed: string }>('/toolchains/docker/prune', { method: 'POST' }),
+    stopPreview: (project: string) =>
+        request<{ closed: boolean }>(`/sandboxes/previews/${encodeURIComponent(project)}`, { method: 'DELETE' }),
     startMcpLogin: (name: string) =>
         request<{ login: McpLogin }>('/mcp/login', { method: 'POST', body: JSON.stringify({ name }) }),
     mcpLogin: (id: string) => request<{ login: McpLogin }>(`/mcp/login/${encodeURIComponent(id)}`),

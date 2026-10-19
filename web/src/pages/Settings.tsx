@@ -6,9 +6,9 @@ import { Icon } from '../components/Icon'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
 import { ProvidersSection } from '../components/Providers'
+import { SandboxesSection } from '../components/Sandboxes'
 import { SecretsSection } from '../components/Secrets'
 import { SecuritySection } from '../components/Security'
-import { ToolchainsSection } from '../components/Toolchains'
 import { Button, Empty, ErrorBox, PageHead, useToast } from '../components/ui'
 import { type McpEntry, type McpOverview, type McpServerConfig } from '../lib/api'
 import { api } from '../lib/api'
@@ -19,7 +19,6 @@ import { useAsync } from '../lib/useAsync'
 export function SettingsPage() {
     const status = useAsync(() => api.status(), [], 10_000)
     const mcp = useAsync(() => api.mcp(), [], 30_000)
-    const toolchains = useAsync(() => api.toolchains(), [], 60_000)
     const s = status.data
     // `/settings#hosts` opens the page scrolled to that section (the links "Edit in Settings", "Settings → MCP").
     // The sections exist only once the status has loaded, and the MCP list above Hosts grows when its
@@ -57,16 +56,24 @@ export function SettingsPage() {
                     >
                         <Row
                             k='CLI'
-                            v={s.claude.version ?? 'not found'}
+                            v={
+                                s.sandboxes.mode === 'sbx'
+                                    ? 'inside each sandbox (Docker’s agent image)'
+                                    : (s.claude.version ?? 'not found')
+                            }
                         />
                         <Row
                             k='Login'
                             v={
-                                s.claude.login === 'token'
-                                    ? 'CLAUDE_CODE_OAUTH_TOKEN — model calls only, no claude.ai connectors'
-                                    : s.claude.login === 'none'
-                                      ? 'not logged in — docker compose run --rm -it supervisor claude auth login'
-                                      : s.claude.login
+                                s.claude.login === 'sandbox'
+                                    ? 'held by the sandboxes’ proxy — connectors included'
+                                    : s.claude.login === 'token'
+                                      ? 'CLAUDE_CODE_OAUTH_TOKEN — model calls only, no claude.ai connectors'
+                                      : s.claude.login === 'none'
+                                        ? s.sandboxes.mode === 'sbx'
+                                            ? 'not logged in — ssh -t to the server, sbx run pf-factory, then /login'
+                                            : 'not logged in — claude auth login on this machine'
+                                        : s.claude.login
                             }
                         />
                         <ModelRow
@@ -161,14 +168,10 @@ export function SettingsPage() {
                         />
                     </Section>
                     <Section
-                        id='toolchains'
-                        title='Toolchains'
+                        id='sandboxes'
+                        title='Sandboxes'
                     >
-                        <ToolchainsSection
-                            data={toolchains.data}
-                            error={toolchains.error}
-                            onChanged={toolchains.reload}
-                        />
+                        <SandboxesSection />
                     </Section>
                     <Section
                         id='providers'

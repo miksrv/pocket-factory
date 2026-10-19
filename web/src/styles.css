@@ -1698,7 +1698,7 @@ label.row > input[type='radio'],
 .controls > .btn {
     flex: none;
 }
-/* Settings → Toolchains: the installed versions and the sidecar's containers, rows like the MCP list. */
+/* Settings → Sandboxes: the sandboxes, blocked requests and previews, rows like the MCP list. */
 .tc-list {
     display: flex;
     flex-direction: column;
@@ -1707,6 +1707,14 @@ label.row > input[type='radio'],
 .mcp-list {
     display: flex;
     flex-direction: column;
+}
+/* A project's Network list: a host per pill, its remove button inside it. */
+.badge .chip-x {
+    min-height: 0;
+    padding: 0 2px;
+    margin-left: 2px;
+    border: 0;
+    background: transparent;
 }
 .mcp-row {
     display: flex;
