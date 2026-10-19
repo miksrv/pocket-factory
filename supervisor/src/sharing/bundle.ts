@@ -99,7 +99,7 @@ export function readBundle(entries: ZipEntry[], fallback: string): Bundle {
         const roots = new Set(files.map((f) => f.path.split('/')[0]))
         const atRoot = (name: string) => files.some((f) => f.path === name || f.path.startsWith(`${name}/`))
         if (roots.size !== 1 || files.some((f) => !f.path.includes('/'))) break
-        if (MARKERS.some(atRoot)) break
+        if (MARKERS.some(atRoot) || LAYOUT_DIRS.includes([...roots][0])) break
         folder = [...roots][0]
         files = files.map((f) => ({ ...f, path: f.path.slice(folder!.length + 1) }))
     }
@@ -225,7 +225,8 @@ export function installBundle(
         if (item.kind === 'skills' || item.kind === 'routines')
             for (const file of item.files)
                 catalog.writeFolderFile(item.kind, item.name, file.path, file.bytes, {
-                    exec: file.exec,
+                    // A mode only from an archive made on Unix; otherwise the folder's own rule (a new .sh gets +x).
+                    exec: file.exec || undefined,
                     max: ZIP_LIMITS.file
                 })
         installed.push({ kind: item.kind, name: item.name })

@@ -3,7 +3,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { tokenVarProblem } from '../files/providers.js'
+import { createLogger } from '../logger.js'
 import { hostOnly } from '../sandbox/executor.js'
+
+const log = createLogger('vault')
 
 /**
  * Secrets and variables the owner sets in the UI (Settings → Secrets and
@@ -387,8 +390,15 @@ export function migrateEnvKeys(vault: Vault, names: string[], env: NodeJS.Proces
     for (const name of new Set(names)) {
         const value = env[name]?.trim()
         if (!value || vault.has(name) || vault.providerRefusal(name)) continue
-        vault.set(name, { value, provider: true }, '.env')
-        moved.push(name)
+        // A value the vault refuses (a line break, too long) must not stop the supervisor starting.
+        try {
+            vault.set(name, { value, provider: true }, '.env')
+            moved.push(name)
+        } catch (error) {
+            log.warn(
+                `provider key ${name} not moved from .env: ${error instanceof Error ? error.message : String(error)}`
+            )
+        }
     }
     return moved
 }

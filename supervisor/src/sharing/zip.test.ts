@@ -50,6 +50,7 @@ describe('zip', () => {
         expect(() => readZip(handmade('a/../../escape.sh', Buffer.from('x')))).toThrow(/unsafe path/)
         expect(() => readZip(handmade('/etc/passwd', Buffer.from('x')))).toThrow(/unsafe path/)
         expect(() => readZip(handmade('C:\\evil.txt', Buffer.from('x')))).toThrow(/unsafe path/)
+        expect(() => readZip(handmade('a\u0000.sh', Buffer.from('x')))).toThrow(/control characters/)
         expect(() => readZip(handmade('link', Buffer.from('/etc/passwd'), { mode: 0o120777 }))).toThrow(/link/)
     })
 

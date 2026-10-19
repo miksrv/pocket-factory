@@ -145,10 +145,11 @@ export function previewRoutes(): Hono<Env> {
                     ),
                     404
                 )
-            // The bare address and anything under it: the same path under the key.
+            // The bare address and anything under it: the same path under the key (an old key, from before a Reset, dropped).
             const url = new URL(c.req.url)
             url.searchParams.delete('pf_again')
-            return c.redirect(`${prefix}${key}/${rest}${url.search}`, 302)
+            const path = /^[0-9a-f]{32}$/.test(first ?? '') ? tail.join('/') : rest
+            return c.redirect(`${prefix}${key}/${path}${url.search}`, 302)
         }
         if (!upstream)
             return c.html(html('Preview stopped', `<p>The preview of ${escape(project)} is stopped.</p>`), 404)
@@ -250,6 +251,8 @@ async function proxy(
     for (const [name, value] of Object.entries(response.headers)) {
         if (value === undefined || HOP_BY_HOP.has(name) || name === 'set-cookie') continue
         if (name.startsWith('access-control-') || name === 'x-frame-options') continue
+        // Would act on the factory's whole origin (its sign-in, storage, transport), not on the app.
+        if (name === 'clear-site-data' || name === 'strict-transport-security' || name === 'refresh') continue
         if (name === 'location') {
             out.set('location', rewriteLocation(String(value), base, preview.strip, `localhost:${preview.port}`))
             continue

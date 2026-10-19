@@ -13,6 +13,14 @@ const summary = (entries: ZipEntry[], fallback = 'upload') =>
     }))
 
 describe('readBundle', () => {
+    it('keeps a layout folder that is the only one at the root', () => {
+        expect(summary([file('skills/a/SKILL.md', skill('a')), file('skills/b/SKILL.md', skill('b'))])).toEqual([
+            { key: 'skills/a', files: [], errors: [] },
+            { key: 'skills/b', files: [], errors: [] }
+        ])
+        expect(summary([file('repo-main/agents/x.md', skill('x'))]).map((i) => i.key)).toEqual(['agents/x'])
+    })
+
     it('reads the preset layout: agents, skill and routine folders, flat routines, projects; strays are listed', () => {
         const bundle = readBundle(
             [

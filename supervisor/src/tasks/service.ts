@@ -1904,7 +1904,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const sandboxProject = (task.parent_id ? task.project : conversation.project) ?? null
         const env = provider ? this.providerEnv(provider, model, scope) : this.agentEnv(scope)
         // Where a preview of the project's app is served: the app is configured with this base (vite --base …).
-        if (sandboxProject && this.previews) env.PREVIEW_BASE = this.previews.base(sandboxProject)
+        // Only a project with a file has one: `/preview/<project>/` answers to those names alone.
+        const previewable = Boolean(sandboxProject) && this.workspace.projects().includes(sandboxProject!)
+        if (previewable && this.previews) env.PREVIEW_BASE = this.previews.base(sandboxProject!)
         // An orchestrator on the subscription may hand roles to other providers (`delegate`); the
         // roles themselves never reach the CLI's Agent tool, which would run them on Claude.
         const delegates = this.delegates()
@@ -1919,7 +1921,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const offersPreview =
             !provider &&
             !task.parent_id &&
-            Boolean(sandboxProject) &&
+            previewable &&
             this.previews !== null &&
             (!asAgentFile?.tools ||
                 asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))

@@ -133,7 +133,7 @@ describe('ExportDialog', () => {
             'GET /api/skills': [{ name: 'triage' }],
             'GET /api/routines': [{ name: 'nightly' }],
             'POST /api/share/export': () =>
-                new Response(new Blob(['zip']), {
+                new Response('zip', {
                     headers: { 'content-disposition': 'attachment; filename="nightly.zip"', 'x-masked-files': '0' }
                 })
         })

@@ -232,6 +232,18 @@ export class SbxExecutor implements Executor {
         })
         const release = this.manager.hold(name)
         child.once('close', release)
+        // The client gone without a clean exit (a daemon restart, an OOM kill): the CLI may still run in
+        // the VM, and a retry would put a second one on the same session. Its dev servers stay.
+        child.once('close', (code) => {
+            if (code === 0) return
+            this.sbx
+                .exec(name, ['sh', '-c', killByMark(runId, 'SIGKILL', true)], { timeoutMs: 30_000 })
+                .catch((error: unknown) =>
+                    log.warn(
+                        `${name}: sweep after run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`
+                    )
+                )
+        })
         child.once('error', release)
         try {
             await started(child)

@@ -389,7 +389,6 @@ export function runClaude(options: RunOptions): RunHandle {
         }, options.timeoutMs)
         timers.push(timeout)
     }
-    armTimeout()
 
     const answer = (requestId: string, response: AskResponse): boolean => {
         if (!pending.delete(requestId)) return false
@@ -412,6 +411,8 @@ export function runClaude(options: RunOptions): RunHandle {
     }
 
     const attach = (child: ChildProcess, resolve: (r: RunResult) => void, reject: (e: Error) => void) => {
+        // Armed once the CLI runs: making or starting its sandbox is not the agent's time.
+        armTimeout()
         // A prompt larger than the pipe buffer raises EPIPE when the CLI exits
         // before reading it (bad --resume id, auth error). Unhandled, that would
         // crash the supervisor; `close` reports the real failure anyway.

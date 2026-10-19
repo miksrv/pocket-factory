@@ -104,6 +104,9 @@ export const isZip = (bytes: Buffer): boolean =>
 /** A path inside the archive as the bundle uses it, or a ZipError for one that could leave its folder. */
 function cleanPath(raw: string): string {
     const name = raw.replace(/\\/g, '/')
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f]/.test(name))
+        throw new ZipError(`the archive has a name with control characters: ${JSON.stringify(raw)}`)
     if (name.startsWith('/') || /^[A-Za-z]:/.test(name) || name.split('/').some((part) => part === '..'))
         throw new ZipError(`the archive has an unsafe path: ${raw}`)
     return name
