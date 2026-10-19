@@ -11,6 +11,7 @@
 - Fixed: the code editor's search and replace panel (Ctrl+F) is styled in both themes
 - Routines: a step may continue if it fails (Continue if it fails on its card): the run goes on and the agent gets its error
 - Routines: a step can be switched off (Step on on its card): runs pass it by, Run on the card still tries it
+- Routines: a run shows from the moment it starts: its steps live on the routine's page and in its chat thread, before the agent's task
 
 ## 1.7.0
 

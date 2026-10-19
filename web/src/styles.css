@@ -1538,6 +1538,15 @@ label.row > input[type='radio'],
 .routine-note.error {
     color: var(--red);
 }
+.routine-note.running {
+    color: var(--blue);
+}
+.routine-progress {
+    padding: 10px 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--blue);
+}
 .routine-links {
     gap: 10px;
 }
@@ -3968,6 +3977,11 @@ textarea[data-secret] {
     height: 6px;
     border-radius: 50%;
     background: currentColor;
+}
+.step-node-state.running {
+    border-color: var(--blue);
+    color: var(--blue);
+    animation: pulse 1.2s infinite;
 }
 .step-node-state.edited {
     border-color: var(--amber);

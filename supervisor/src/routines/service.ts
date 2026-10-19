@@ -7,7 +7,7 @@ import type { AgentFile } from '../files/agentFiles.js'
 import type { Catalog, CatalogEntry } from '../files/catalog.js'
 import { createLogger } from '../logger.js'
 import { referencedNames, type ScopeContext, type Vault } from '../secrets/vault.js'
-import type { RoutineRun, Store, Task } from '../store/index.js'
+import type { Conversation, RoutineRun, Store, Task } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
 import { cronMatches, inWindow, localTime, nextRun } from './cron.js'
 import { folderNeeds, type ScriptInfo, scriptInfo, scriptOf } from './scripts.js'
@@ -140,6 +140,8 @@ export interface Preview {
 export interface RoutinesEvents {
     /** A routine fired (or was skipped, or missed): the run row as stored. */
     run: [run: RoutineRun, spec: RoutineSpec | null]
+    /** A run's steps are going: its row with the steps so far (no Telegram notice, the end is a `run`). */
+    progress: [run: RoutineRun]
 }
 
 export interface RoutineRefs extends Refs {
@@ -181,6 +183,9 @@ export class Routines extends EventEmitter<RoutinesEvents> {
 
     start(): void {
         if (this.timer) return
+        // A run whose steps a restart cut off would read `running` for ever.
+        const interrupted = this.store.endInterruptedRoutineRuns()
+        if (interrupted) log.info(`${interrupted} routine run(s) interrupted by the restart`)
         // Runs and seen items of a file that is gone (renamed by hand, deleted outside the UI) would never be looked at again.
         const files = new Set(this.catalog.list('routines').map((e) => e.name))
         for (const name of this.store.routineNames()) {
@@ -490,26 +495,22 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         options: {
             /** A manual run that hands over everything the sources see, seen before or not (the owner pressed "Run with all"). */
             everything?: boolean
+            /** The run's row exists (status `running`), before its steps: Run now answers here, not 30 s later. */
+            onStarted?: (run: RoutineRun) => void
         } = {}
     ): Promise<RoutineRun & { found?: number }> {
         const parsed = this.parse(name)
         if (!parsed) throw new Error(`routine "${name}" not found`)
         const fired_at = new Date().toISOString()
         const trigger = firing === 'manual' ? 'manual' : firing.kind
+        // The row of a run whose steps started (`running`): its end updates it rather than adding another.
+        let running: number | null = null
         const record = (status: RoutineRun['status'], note: string | null, extra: Partial<RoutineRun> = {}) => {
             const full = [note, remark].filter(Boolean).join(' · ') || null
-            const run = this.store.addRoutineRun({
-                schedule: name,
-                fired_at,
-                trigger,
-                status,
-                note: full,
-                items: 0,
-                task_id: null,
-                duration_ms: 0,
-                steps: null,
-                ...extra
-            })
+            const fields = { status, note: full, items: 0, task_id: null, duration_ms: 0, steps: null, ...extra }
+            const run =
+                (running !== null && this.store.updateRoutineRun(running, fields)) ||
+                this.store.addRoutineRun({ schedule: name, fired_at, trigger, ...fields })
             log.info(`${name} (${trigger}): ${status}${full ? ` — ${full}` : ''}`)
             this.emit('run', run, parsed.spec)
             return run
@@ -531,8 +532,30 @@ export class Routines extends EventEmitter<RoutinesEvents> {
             // The pipeline: scripts and sources in order, no tokens. A failing step ends the run here.
             let pipeline: PipelineResult
             const started = Date.now()
+            // Seen from the start: the run's row with its steps as they go, and the thread its task will land in.
+            if (spec.agentStep) this.thread(spec)
+            const row = this.store.addRoutineRun({
+                schedule: name,
+                fired_at,
+                trigger,
+                status: 'running',
+                note: remark,
+                items: 0,
+                task_id: null,
+                duration_ms: 0,
+                steps: []
+            })
+            running = row.id
+            this.emit('progress', row)
+            options.onStarted?.(row)
             try {
-                pipeline = await runPipeline(spec.steps, this.stepContext(spec, parsed.entry.path))
+                pipeline = await runPipeline(spec.steps, this.stepContext(spec, parsed.entry.path), (progress) => {
+                    const now = this.store.updateRoutineRun(row.id, {
+                        steps: progress,
+                        duration_ms: Date.now() - started
+                    })
+                    if (now) this.emit('progress', now)
+                })
             } catch (error) {
                 return record('error', error instanceof Error ? error.message : String(error), {
                     duration_ms: Date.now() - started,
@@ -783,6 +806,18 @@ export class Routines extends EventEmitter<RoutinesEvents> {
 
     // ---- the task -----------------------------------------------------------
 
+    /** The routine's chat thread, made when it has none: the chat list shows a run from the moment it starts. */
+    private thread(spec: RoutineSpec): Conversation {
+        const key = conversationKey(spec.name)
+        let conversation = this.store.findConversation('web', key)
+        if (!conversation) conversation = this.store.createConversation('web', key, `⏱ ${spec.name}`, spec.project)
+        else if (conversation.project !== spec.project) {
+            this.store.updateConversation(conversation.id, { project: spec.project, session_id: null })
+            conversation = { ...conversation, project: spec.project, session_id: null }
+        }
+        return conversation
+    }
+
     private queue(
         spec: RoutineSpec,
         body: string,
@@ -792,11 +827,7 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         file: string,
         outputs: StepOutput[] = []
     ): Task {
-        const key = conversationKey(spec.name)
-        let conversation = this.store.findConversation('web', key)
-        if (!conversation) conversation = this.store.createConversation('web', key, `⏱ ${spec.name}`, spec.project)
-        else if (conversation.project !== spec.project)
-            this.store.updateConversation(conversation.id, { project: spec.project, session_id: null })
+        const conversation = this.thread(spec)
         // Memory between runs is the file, not the transcript: each run starts clean unless asked otherwise.
         if (spec.session === 'fresh' && conversation.session_id)
             this.store.updateConversation(conversation.id, { session_id: null })

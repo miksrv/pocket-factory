@@ -1719,7 +1719,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const tools = [...reported, ...known.filter((t) => t.startsWith('mcp__') && !reported.includes(t))]
         if (known.length === tools.length && known.every((t, i) => t === tools[i])) return
         this.store.setMeta('claude.tools', tools)
-        log.info(`claude tools: ${tools.length} (${tools.slice(0, 6).join(', ')}…)`)
+        // The session's own count first: the registry also keeps what other sessions had (a role sees far less).
+        log.info(
+            `claude tools: ${reported.length} in this session (${reported.slice(0, 6).join(', ')}…), ${tools.length} known`
+        )
     }
 
     /**

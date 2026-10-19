@@ -389,7 +389,15 @@ function StepNode({
                   : 'reads the instructions and what the steps found'
     const missing = (facts?.needs ?? []).filter((n) => n.from === null && !n.optional)
     const off = kind !== 'agent' && step.enabled === false
-    const state = edited ? 'edited' : last && !last.skipped && !off ? (last.ok ? 'ok' : 'failed') : 'idle'
+    const state = edited
+        ? 'edited'
+        : last?.running
+          ? 'running'
+          : last && !last.skipped && !off
+            ? last.ok
+                ? 'ok'
+                : 'failed'
+            : 'idle'
     return (
         <button
             type='button'
@@ -412,7 +420,7 @@ function StepNode({
                             name='failed'
                             size={12}
                         />
-                    ) : state === 'edited' ? (
+                    ) : state === 'edited' || state === 'running' ? (
                         <span className='step-node-dot' />
                     ) : null}
                 </span>

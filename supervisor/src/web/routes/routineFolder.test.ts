@@ -149,6 +149,54 @@ describe('routine folders and secrets', () => {
         expect(JSON.stringify(runs)).not.toContain('geo-secret-42')
     })
 
+    it('shows a run from its start: one row, running with its steps as they go, then how it ended', async () => {
+        flat('geo', '  - name: one\n    run: echo first\n  - name: two\n    run: echo second')
+        const progress: Array<{ id: number; status: string; running: string[] }> = []
+        t.ctx.routines.on('progress', (run) =>
+            progress.push({
+                id: run.id,
+                status: run.status,
+                running: (run.steps ?? []).filter((s) => s.running).map((s) => s.name)
+            })
+        )
+        await t.request('/api/routines/geo/run', { method: 'POST' })
+        expect(progress.map((p) => [p.status, p.running])).toEqual([
+            ['running', []],
+            ['running', ['one']],
+            ['running', ['two']]
+        ])
+        const runs = (await (await t.request('/api/routines/geo/runs?all=1')).json()) as Array<{
+            id: number
+            status: string
+            steps: Array<{ name: string; running?: boolean }>
+        }>
+        expect(runs).toHaveLength(1)
+        expect(runs[0]).toMatchObject({ id: progress[0].id, status: 'done' })
+        expect(runs[0].steps.map((s) => [s.name, s.running])).toEqual([
+            ['one', undefined],
+            ['two', undefined]
+        ])
+    })
+
+    it('ends a run a restart left running as an error', () => {
+        const run = t.ctx.store.addRoutineRun({
+            schedule: 'geo',
+            fired_at: new Date().toISOString(),
+            trigger: 'manual',
+            status: 'running',
+            note: null,
+            items: 0,
+            task_id: null,
+            duration_ms: 0,
+            steps: []
+        })
+        expect(t.ctx.store.endInterruptedRoutineRuns()).toBe(1)
+        expect(t.ctx.store.updateRoutineRun(run.id, {})).toMatchObject({
+            status: 'error',
+            note: 'interrupted by a restart'
+        })
+    })
+
     it('keeps a failed step and the ones before it in the run', async () => {
         flat(
             'geo',

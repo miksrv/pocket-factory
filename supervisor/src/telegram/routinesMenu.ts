@@ -70,6 +70,7 @@ const stateWord = (r: RoutineView): string =>
             : 'off'
 
 const RUN_ICON: Record<RoutineRun['status'], string> = {
+    running: '⏳',
     queued: '▶️',
     done: '✅',
     empty: '·',

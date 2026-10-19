@@ -36,6 +36,8 @@ export interface StepResult {
     continued?: boolean
     /** Switched off (`enabled: false`): the run passed it by. */
     skipped?: boolean
+    /** Running now: only in the progress of a run that goes on (`onStep`), never in its final result. */
+    running?: boolean
 }
 
 /** The pipeline up to the agent: the scripts' text and the sources' items, in the order the steps ran. */
@@ -184,7 +186,12 @@ const head = (text: string) => (text.length > STEP_LOG_MAX ? `${text.slice(0, ST
  * agent step is where the pipeline ends. A step with `enabled: false` is
  * passed by.
  */
-export async function runPipeline(steps: Step[], ctx: StepContext): Promise<PipelineResult> {
+export async function runPipeline(
+    steps: Step[],
+    ctx: StepContext,
+    /** Before each step: the steps done so far and the one starting (marked `running`), for a run's live progress. */
+    onStep?: (progress: StepResult[]) => void
+): Promise<PipelineResult> {
     const started = Date.now()
     const result: PipelineResult = { outputs: [], sources: [], steps: [], ms: 0 }
     const fail = (message: string): never => {
@@ -201,6 +208,10 @@ export async function runPipeline(steps: Step[], ctx: StepContext): Promise<Pipe
     }
     for (const [index, step] of steps.entries()) {
         if (step.kind === 'agent') break
+        onStep?.([
+            ...result.steps,
+            { index, name: step.name, kind: step.kind, ok: true, ms: 0, log: '', running: true }
+        ])
         if (!step.enabled) {
             result.steps.push({
                 index,
