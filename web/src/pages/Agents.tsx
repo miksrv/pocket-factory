@@ -361,16 +361,21 @@ function ToolPicker({
                     onChange([...selected.filter((t) => known.includes(t)), ...splitTools(e.target.value)].join(', '))
                 }}
             />
-            <span className='dim'>
-                {selected.length
-                    ? `${selected.length} allowed: ${selected
-                          .map((t) => {
-                              const l = toolLabel(t, mcp)
-                              return l.server ? `${l.server} · ${l.label}` : l.label
-                          })
-                          .join(', ')}`
-                    : 'None selected — the agent inherits every tool.'}
-                {tools?.source === 'default' ? ' · The CLI reports its full list after the first task.' : ''}
+            <span
+                className='dim'
+                title={[
+                    selected
+                        .map((t) => {
+                            const l = toolLabel(t, mcp)
+                            return l.server ? `${l.server} · ${l.label}` : l.label
+                        })
+                        .join(', '),
+                    tools?.source === 'default' ? 'The CLI reports its full list after the first task.' : ''
+                ]
+                    .filter(Boolean)
+                    .join('\n')}
+            >
+                {selected.length ? `${selected.length} allowed` : 'none ticked = every tool'}
             </span>
         </div>
     )
@@ -491,7 +496,7 @@ function AgentEditor() {
                         </Field>
                         {provider && (
                             <Field
-                                label='When the provider is unavailable'
+                                label='If the provider is down'
                                 hint='Down, failing, or not allowed here.'
                             >
                                 <select
@@ -512,8 +517,8 @@ function AgentEditor() {
                             </Field>
                         )}
                         <Field
-                            label='Description — when the dispatcher should use this agent'
-                            hint='Claude Code matches tasks to agents by this text. Be specific.'
+                            label='Description'
+                            hint='when the dispatcher should use it'
                             wide
                         >
                             <GrowingTextarea

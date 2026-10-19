@@ -15,8 +15,9 @@ import {
     type SshKeys
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { Icon } from './Icon'
 import { Modal, useConfirm } from './Modal'
-import { Button, GrowingTextarea, SectionHead } from './ui'
+import { Button, Empty, ErrorBox, GrowingTextarea, SectionHead } from './ui'
 
 /**
  * Shared SSH hosts, the way an IDE keeps SSH configurations once: the list
@@ -57,9 +58,11 @@ function KeySelect({
                 ))}
             </select>
             {keys && names.length === 0 && (
-                <span className='dim'>
-                    No keys yet: `ssh-keygen -t ed25519 -f data/secrets/ssh/id_ed25519 -C pocket-factory`, add the .pub
-                    to the host.
+                <span
+                    className='dim'
+                    title='ssh-keygen -t ed25519 -f data/secrets/ssh/id_ed25519 -C pocket-factory, then add the .pub to the host'
+                >
+                    Put a key into data/secrets/ssh
                 </span>
             )}
         </>
@@ -358,7 +361,10 @@ export function HostDialog({
                     compact
                 />
                 {nameTaken && (
-                    <div className='error small'>{`A shared host named "${host.name.trim()}" already exists — pick another name, or open that host from Settings → Hosts to edit it.`}</div>
+                    <ErrorBox
+                        inline
+                        error={`A shared host named "${host.name.trim()}" already exists — pick another name, or open that host from Settings → Hosts to edit it.`}
+                    />
                 )}
                 {project && (
                     <div className='host-card compact'>
@@ -382,7 +388,10 @@ export function HostDialog({
                         </label>
                     </div>
                 )}
-                {error && <div className='error small'>{error}</div>}
+                <ErrorBox
+                    error={error}
+                    inline
+                />
             </div>
         </Modal>
     )
@@ -416,21 +425,24 @@ export function HostsSection() {
 
     return (
         <div className='stack'>
-            {data.error && <div className='error small'>{data.error}</div>}
+            <ErrorBox error={data.error} />
             {overview?.error && (
-                <div className='error small'>
-                    The file on disk is not valid YAML ({overview.error}); saving a host replaces it.
-                </div>
+                <ErrorBox
+                    inline
+                    error={`The file on disk is not valid YAML (${overview.error}); saving a host replaces it.`}
+                />
             )}
             <div className='row between wrap'>
-                <span className='dim small'>
+                <span
+                    className='dim small'
+                    title='Connections only; each project keeps its own path and notes. Passwords are not supported on purpose.'
+                >
                     {overview
                         ? overview.hosts.length
                             ? `${overview.hosts.length} shared host${overview.hosts.length === 1 ? '' : 's'}`
                             : 'No shared hosts yet'
                         : 'Loading…'}{' '}
-                    · connections only, reached with the keys in {keys.data?.dir ?? 'data/secrets/ssh/'}; each project
-                    keeps its own path and notes · passwords are not supported on purpose
+                    · keys in {keys.data?.dir ?? 'data/secrets/ssh/'}
                 </span>
                 <Button
                     size='sm'
@@ -470,7 +482,12 @@ export function HostsSection() {
                                             .filter(Boolean)
                                             .join(' · ')}
                                     >
-                                        {p.kind === 'routine' ? '⏱ ' : ''}
+                                        {p.kind === 'routine' && (
+                                            <Icon
+                                                name='routines'
+                                                size={12}
+                                            />
+                                        )}
                                         {p.project}
                                     </Link>
                                 ))}
@@ -502,9 +519,11 @@ export function HostsSection() {
                     className='tool-more'
                     open
                 >
-                    <summary className='dim'>
-                        Written inside project files ({overview.inline.length}) — not shared; open the project to move
-                        one into the list
+                    <summary
+                        className='dim'
+                        title='Not shared; open the project to move one into the list'
+                    >
+                        In project files ({overview.inline.length})
                     </summary>
                     <div
                         className='host-list'
@@ -590,7 +609,7 @@ export function ProjectHosts({
         <div className='field wide hosts'>
             <SectionHead
                 title='Hosts'
-                hint={`Servers this ${owner} ${owner === 'project' ? 'runs' : 'works'} on; the connection is shared (Settings → Hosts), path and notes are this ${owner}'s.`}
+                hint={`Servers this ${owner} ${owner === 'project' ? 'runs' : 'works'} on; path and notes are its own.`}
             />
             <select
                 className='add-host'
@@ -611,12 +630,12 @@ export function ProjectHosts({
                         {h.name} — {h.ssh}
                     </option>
                 ))}
-                <option value='__new'>＋ New shared host…</option>
+                <option value='__new'>New shared host…</option>
             </select>
             {value.length === 0 && (
-                <div className='dim small'>
+                <Empty inline>
                     No hosts. The agent can still work on the repository; host checks need at least one.
-                </div>
+                </Empty>
             )}
             {value.map((h, i) =>
                 isHostRef(h) ? (
@@ -700,7 +719,7 @@ function SharedHostCard({
 }) {
     return (
         <div className='host-card shared'>
-            <div className='host-shared-head'>
+            <div className='host-shared-head wide'>
                 <strong>{entry.host}</strong>
                 {host?.ssh ? (
                     <>
@@ -723,7 +742,7 @@ function SharedHostCard({
                     Edit in Settings
                 </Link>
             </div>
-            <label className='field wide'>
+            <label className='field'>
                 <span>Path for this {owner}</span>
                 <input
                     className='mono'

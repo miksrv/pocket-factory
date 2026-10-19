@@ -11,8 +11,10 @@ import {
     type StepRun
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { CodeEditor } from './CodeEditor'
 import { Field, str } from './Editor'
 import { FileEditor, fileTemplate } from './Files'
+import { Icon, type IconName } from './Icon'
 import { Modal, useConfirm } from './Modal'
 import { NeedsLine } from './Secrets'
 import { Button, ErrorBox, SectionHead } from './ui'
@@ -182,9 +184,9 @@ function needsOf(view: RoutineView | undefined, i: number, step: RawStep): EnvNe
 
 /**
  * The pipeline as a graph of cards, the way GitHub Actions draws a workflow's
- * jobs: each step a card with how it went last time (✓ / ✗ and its time),
+ * jobs: each step a card with how it went last time (ok / failed and its time),
  * what it is for, and whether it misses a variable; arrows between them, the
- * agent last. A click opens the step in a window to edit it; ＋ adds one
+ * agent last. A click opens the step in a window to edit it; Add step adds one
  * before the agent. Edits go into the form, which Save writes as usual.
  */
 export function StepsField({
@@ -253,7 +255,12 @@ export function StepsField({
             onClick={() => setAdding(true)}
             title='Add a step before the agent'
         >
-            <span className='step-node-plus'>＋</span>
+            <span className='step-node-plus'>
+                <Icon
+                    name='add'
+                    size={14}
+                />
+            </span>
             <span>Add step</span>
         </button>
     )
@@ -263,7 +270,11 @@ export function StepsField({
         <div className='field wide triggers'>
             <SectionHead
                 title='Pipeline'
-                hint='Top to bottom on every run; a failing step stops it, empty sources skip the agent. Click a step to edit it.'
+                hint={
+                    <span title='A failing step stops the run; when every source is empty, the agent does not run.'>
+                        Runs top to bottom; click a step to edit it.
+                    </span>
+                }
             />
             <div
                 className='pipeline-graph'
@@ -340,7 +351,7 @@ export function StepsField({
     )
 }
 
-const KIND_ICON: Record<StepKind, string> = { run: '›_', 'github-prs': '⇅', trac: '◎', agent: '✦' }
+const KIND_ICON: Record<StepKind, IconName> = { run: 'script', 'github-prs': 'pr', trac: 'ticket', agent: 'agents' }
 
 /** A step's card in the graph: its state, kind, name, what it is for and what it misses. */
 function StepNode({
@@ -390,11 +401,27 @@ function StepNode({
                     className={`step-node-state ${state}`}
                     aria-label={state}
                 >
-                    {state === 'ok' ? '✓' : state === 'failed' ? '✕' : state === 'edited' ? '•' : ''}
+                    {state === 'ok' ? (
+                        <Icon
+                            name='ok'
+                            size={12}
+                        />
+                    ) : state === 'failed' ? (
+                        <Icon
+                            name='failed'
+                            size={12}
+                        />
+                    ) : state === 'edited' ? (
+                        <span className='step-node-dot' />
+                    ) : null}
                 </span>
                 <span className='step-node-name'>{name}</span>
                 <span className='step-node-kind'>
-                    <span aria-hidden>{KIND_ICON[kind]}</span> {kind === 'run' ? 'Script' : KIND_LABEL[kind]}
+                    <Icon
+                        name={KIND_ICON[kind]}
+                        size={12}
+                    />
+                    {kind === 'run' ? 'Script' : KIND_LABEL[kind]}
                 </span>
                 <span className='grow' />
                 {edited ? (
@@ -411,9 +438,13 @@ function StepNode({
             <span className='step-node-about'>{about}</span>
             {(missing.length > 0 || (facts?.needs.length ?? 0) > 0) && (
                 <span className={`step-node-needs ${missing.length ? 'missing' : 'ok'}`}>
+                    <Icon
+                        name={missing.length ? 'alert' : 'secret'}
+                        size={12}
+                    />
                     {missing.length
-                        ? `⚠ ${missing.map((n) => n.name).join(', ')} not set`
-                        : `🔒 ${facts!.needs.length} variable${facts!.needs.length === 1 ? '' : 's'} set`}
+                        ? `${missing.map((n) => n.name).join(', ')} not set`
+                        : `${facts!.needs.length} variable${facts!.needs.length === 1 ? '' : 's'} set`}
                 </span>
             )}
         </button>
@@ -755,7 +786,12 @@ function StepCard({
                     className={`badge ${last.ok ? 'done' : 'failed'}`}
                     title={`last run ${lastRun ? fmt.ago(lastRun.fired_at) : ''}: ${last.ok ? 'ok' : 'failed'} in ${fmt.duration(last.ms)}${last.items !== undefined ? `, ${last.items} item(s)` : ''}`}
                 >
-                    last run {last.ok ? '✓' : '✗'} {fmt.duration(last.ms)}
+                    last run{' '}
+                    <Icon
+                        name={last.ok ? 'ok' : 'failed'}
+                        size={12}
+                    />{' '}
+                    {fmt.duration(last.ms)}
                 </span>
             ) : (
                 <span className='dim small'>{facts ? 'not run yet' : 'changed: Run step tries it as it stands'}</span>
@@ -850,15 +886,19 @@ function StepCard({
                     hint='Runs in the checkout; ${ROUTINE_DIR} is this routine’s folder.'
                     wide
                 >
-                    <textarea
-                        className='mono'
-                        rows={ref ? 2 : 3}
-                        value={str(step.run)}
-                        onChange={(e) => onChange({ ...step, run: e.target.value })}
-                        placeholder={'"${ROUTINE_DIR}/scripts/stats.sh" --days 7'}
-                        spellCheck={false}
+                    <div
+                        className='step-command'
                         title="Environment: the agent's, the secrets and variables this routine may read, plus ROUTINE, ROUTINE_DIR, ROUTINE_FILE, PROJECT, PROJECT_DIR, SKILL_DIR"
-                    />
+                    >
+                        <CodeEditor
+                            value={str(step.run)}
+                            onChange={(run) => onChange({ ...step, run })}
+                            path='command.sh'
+                            label='Command (bash)'
+                            placeholder={'"${ROUTINE_DIR}/scripts/stats.sh" --days 7'}
+                            rows={ref ? 2 : 3}
+                        />
+                    </div>
                 </Field>
                 <Field
                     label='Name'
@@ -897,10 +937,7 @@ function StepCard({
                     group
                     wide
                 >
-                    <div
-                        className='row wrap'
-                        style={{ gap: '6px 16px' }}
-                    >
+                    <div className='row wrap step-checks'>
                         <Check
                             checked={step.items === true}
                             onChange={(on) => onChange({ ...step, items: on ? true : undefined, new_only: undefined })}
@@ -992,7 +1029,6 @@ function StepCard({
                 <Field
                     label='Which pull requests'
                     hint='A new push brings a PR up again.'
-                    wide
                 >
                     <select
                         value={str(options.filter) || 'open'}
@@ -1008,10 +1044,7 @@ function StepCard({
                     group
                     wide
                 >
-                    <div
-                        className='row wrap'
-                        style={{ gap: '6px 16px' }}
-                    >
+                    <div className='row wrap step-checks'>
                         <Check
                             checked={options.mine === true}
                             onChange={(on) => setOptions({ mine: on || undefined })}
@@ -1038,7 +1071,7 @@ function StepCard({
             {needs}
             <Field
                 label='Query'
-                hint='A custom query’s address, from the browser.'
+                hint='Custom query URL from the browser'
             >
                 <TracAddress
                     url={str(options.url)}
@@ -1051,10 +1084,7 @@ function StepCard({
                 group
                 wide
             >
-                <div
-                    className='row wrap'
-                    style={{ gap: '6px 16px' }}
-                >
+                <div className='row wrap step-checks'>
                     <Check
                         checked={options.on_change !== false}
                         onChange={(on) => setOptions({ on_change: on ? undefined : false })}
@@ -1172,7 +1202,10 @@ function StepOutput({ run, error, onClose }: { run: StepRun | null; error: strin
                     Close
                 </Button>
             </div>
-            {run?.error && <div className='error small'>{run.error}</div>}
+            <ErrorBox
+                error={run?.error}
+                inline
+            />
             {run?.stdout && <pre className='mono small'>{run.stdout}</pre>}
             {run?.stderr && (
                 <>

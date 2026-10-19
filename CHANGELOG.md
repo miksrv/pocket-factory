@@ -5,6 +5,13 @@
 ### Patch Changes
 
 - Skills and routines: the new file's path field under ＋ File takes the full width
+- UI: contrast up to WCAG AA in both themes (dim text, placeholders, pills, field edges), a visible focus ring on fields, no animation under reduced motion, text at least 11px
+- UI: shadows and the danger hover come from theme tokens, so the dark theme keeps its edges
+- UI: icons instead of glyphs everywhere (✓ ✗ ⚠ ▸ ↗ ☰ ＋), the same icon for the same thing
+- Forms: shorter hints and labels, buttons beside a field at its height, host cards and the provider window in full rows and sections
+- Code: a step's command, the MCP JSON and a certificate are edited in the code editor
+- Settings: signing out one browser asks first
+- DESIGN.md: an Accessibility section and rules for tokens, icons, inline errors and empty lines
 
 ## 1.6.0
 

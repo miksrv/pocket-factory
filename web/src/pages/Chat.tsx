@@ -8,16 +8,15 @@ import {
     useState
 } from 'react'
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowDown, Paperclip, SendHorizontal } from 'lucide-react'
 
 import { AssistantTurn } from '../components/AssistantTurn'
 import { MAX_FILES, PendingUploads, SentAttachments, useUploads } from '../components/Attachments'
-import { Channel } from '../components/Icon'
+import { Channel, Icon } from '../components/Icon'
 import { STATUS_CHANGED } from '../components/Layout'
 import { LoadEarlier, LoadMore } from '../components/LoadMore'
 import { useConfirm } from '../components/Modal'
 import { ModelPicker } from '../components/Providers'
-import { Button, Empty, FilterSelect, Intro, StopButton } from '../components/ui'
+import { Button, Empty, ErrorBox, FilterSelect, Intro, StopButton } from '../components/ui'
 import {
     api,
     type CatalogEntry,
@@ -89,11 +88,11 @@ export function ChatPage() {
                 </div>
                 <div className='list'>
                     {(error || conversations.error) && (
-                        <div
-                            className='error small'
-                            style={{ padding: '8px 14px' }}
-                        >
-                            {error ?? conversations.error}
+                        <div style={{ padding: '8px 14px' }}>
+                            <ErrorBox
+                                error={error ?? conversations.error}
+                                inline
+                            />
                         </div>
                     )}
                     {conversations.items.map((c) => (
@@ -625,7 +624,11 @@ function Thread({
                         className='jump'
                         onClick={scrollToBottom}
                     >
-                        <ArrowDown size={14} /> New messages
+                        <Icon
+                            name='down'
+                            size={14}
+                        />{' '}
+                        New messages
                     </Button>
                 )}
             </div>
@@ -676,7 +679,10 @@ function Thread({
                         title='Attach photos or files (or paste / drop them here)'
                         aria-label='Attach files'
                     >
-                        <Paperclip size={16} />
+                        <Icon
+                            name='attachment'
+                            size={16}
+                        />
                     </Button>
                     <textarea
                         onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -713,7 +719,10 @@ function Thread({
                         title={files.busy ? 'Waiting for the upload…' : 'Send (Enter)'}
                         aria-label='Send'
                     >
-                        <SendHorizontal size={16} />
+                        <Icon
+                            name='send'
+                            size={16}
+                        />
                     </Button>
                     <div className='composer-hint dim'>
                         Enter to send · Shift+Enter for a new line · paste or drop files

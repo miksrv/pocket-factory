@@ -12,7 +12,7 @@ import {
 import { useAsync } from '../lib/useAsync'
 import { Field } from './Editor'
 import { useConfirm } from './Modal'
-import { Button, useToast } from './ui'
+import { Button, Empty, ErrorBox, useToast } from './ui'
 
 /**
  * What the agents build and test with. Settings → Toolchains lists the
@@ -37,7 +37,15 @@ export function ToolchainsSection({
     const [busy, setBusy] = useState<string | null>(null)
     const [failed, setFailed] = useState<string | null>(null)
     const [spec, setSpec] = useState('')
-    if (!data) return error ? <div className='error small'>{error}</div> : <div className='dim small'>…</div>
+    if (!data)
+        return error ? (
+            <ErrorBox
+                error={error}
+                inline
+            />
+        ) : (
+            <Empty inline>…</Empty>
+        )
 
     const act = async (what: string, run: () => Promise<string>) => {
         setBusy(what)
@@ -63,6 +71,7 @@ export function ToolchainsSection({
     const remove = (t: ToolVersion) =>
         void confirm({
             title: `Remove ${t.tool} ${t.version}?`,
+            icon: 'delete',
             message: t.used_by.length
                 ? `${t.used_by.join(', ')} resolve to it; their next task installs it again.`
                 : 'No project resolves to this version now.',
@@ -98,7 +107,10 @@ export function ToolchainsSection({
     const stopped = docker.containers.length - running.length
     return (
         <div className='stack'>
-            {error && <div className='error small'>{error}</div>}
+            <ErrorBox
+                error={error}
+                inline
+            />
             <div className='kv'>
                 <span>Runtimes</span>
                 <span>
@@ -244,7 +256,10 @@ export function ToolchainsSection({
                     ))}
                 </div>
             )}
-            {failed && <div className='error small'>{failed}</div>}
+            <ErrorBox
+                error={failed}
+                inline
+            />
             {toast}
         </div>
     )
@@ -353,7 +368,10 @@ export function ProjectToolchainField({ slug }: { slug: string }) {
                             </span>
                         </div>
                     ))}
-                    {failed && <div className='error small'>{failed}</div>}
+                    <ErrorBox
+                        error={failed}
+                        inline
+                    />
                     <div className='dim small'>
                         Every installed version, sizes and the containers:{' '}
                         <Link to='/settings#toolchains'>Settings → Toolchains</Link>

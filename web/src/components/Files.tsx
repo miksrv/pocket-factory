@@ -3,8 +3,9 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, fmt, type FolderFile, type FolderKind } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { CodeEditor } from './CodeEditor'
+import { Icon } from './Icon'
 import { Modal, useConfirm } from './Modal'
-import { Button, ErrorBox, SectionHead, Tabs } from './ui'
+import { Button, Empty, ErrorBox, SectionHead, Tabs } from './ui'
 
 /** What a new file starts with, by its extension: a script that says what it is. */
 export function fileTemplate(file: string, description = 'What this script does, in one line.'): string {
@@ -128,7 +129,11 @@ export function FolderFiles({
                     size='sm'
                     onClick={() => setNaming(true)}
                 >
-                    ＋ File
+                    <Icon
+                        name='add'
+                        size={12}
+                    />
+                    File
                 </Button>
                 <Button
                     size='sm'
@@ -164,7 +169,6 @@ export function FolderFiles({
                         autoFocus
                     />
                     <Button
-                        size='sm'
                         variant='primary'
                         type='submit'
                         disabled={!adding.trim()}
@@ -172,7 +176,6 @@ export function FolderFiles({
                         Create
                     </Button>
                     <Button
-                        size='sm'
                         variant='ghost'
                         onClick={() => {
                             setNaming(false)
@@ -184,7 +187,7 @@ export function FolderFiles({
                 </form>
             )}
             {files.data && list.length === 0 && (
-                <div className='dim small'>No files besides the main one yet: ＋ File, or Upload.</div>
+                <Empty inline>No files besides the main one yet: add a file or upload one.</Empty>
             )}
             {list.length > 0 && (
                 <div
@@ -228,7 +231,7 @@ export function FolderFiles({
                     open
                     onClose={close}
                     size='large'
-                    icon='sessions'
+                    icon='file'
                     title={current.path}
                     description={`${fmt.bytes(current.size)} · changed ${fmt.ago(current.updated_at)}${current.exec ? ' · executable' : ''} · ${dir}`}
                     content={
@@ -392,14 +395,12 @@ export function FileEditor({
                             autoFocus
                         />
                         <Button
-                            size='sm'
                             variant='primary'
                             type='submit'
                         >
                             Rename
                         </Button>
                         <Button
-                            size='sm'
                             variant='ghost'
                             onClick={() => setRenaming(null)}
                         >
@@ -499,11 +500,15 @@ export function FileEditor({
                 </div>
             )}
             {!file.text ? (
-                <div className='dim small files-empty'>
-                    Not a text file the editor shows ({fmt.bytes(file.size)}): download it to look inside.
+                <div className='files-empty'>
+                    <Empty inline>
+                        Not a text file the editor shows ({fmt.bytes(file.size)}): download it to look inside.
+                    </Empty>
                 </div>
             ) : content.loading && !content.data ? (
-                <div className='dim small files-empty'>Loading…</div>
+                <div className='files-empty'>
+                    <Empty inline>Loading…</Empty>
+                </div>
             ) : csv && view === 'table' ? (
                 <CsvTable text={shown} />
             ) : (
@@ -557,7 +562,12 @@ const CSV_ROWS = 300
 
 function CsvTable({ text }: { text: string }) {
     const rows = useMemo(() => parseCsv(text), [text])
-    if (!rows.length) return <div className='dim small files-empty'>Empty.</div>
+    if (!rows.length)
+        return (
+            <div className='files-empty'>
+                <Empty inline>Empty.</Empty>
+            </div>
+        )
     const [head, ...body] = rows
     return (
         <div className='card-scroll csv-table'>

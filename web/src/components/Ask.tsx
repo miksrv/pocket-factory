@@ -2,6 +2,7 @@ import { type FormEvent, useState } from 'react'
 
 import { api, type Ask, type AskQuestion, type Task } from '../lib/api'
 import { ToolInput } from './EventFeed'
+import { Icon } from './Icon'
 import { Button } from './ui'
 
 /** The questions of an `AskUserQuestion` call, as far as the input is well-formed. */
@@ -145,7 +146,13 @@ function QuestionForm({
                             {q.question}
                         </legend>
                         {done ? (
-                            <div className='ask-done'>✓ {done}</div>
+                            <div className='ask-done'>
+                                <Icon
+                                    name='ok'
+                                    size={12}
+                                />
+                                {done}
+                            </div>
                         ) : (
                             <>
                                 {(q.options ?? []).map((option) => (

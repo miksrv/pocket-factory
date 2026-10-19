@@ -1,5 +1,3 @@
-import { useState } from 'react'
-
 import { api, fmt, type LoginAttempt, type WebSession } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { useAuth } from './Auth'
@@ -22,19 +20,22 @@ export function SecuritySection({ telegram }: { telegram: boolean }) {
     const log = useAsync(() => api.auth.log(50), [], 30_000)
     const confirm = useConfirm()
     const [toast, showToast] = useToast()
-    const [error, setError] = useState<string | null>(null)
     const { policy } = auth
 
-    const revoke = async (session: WebSession) => {
-        setError(null)
-        try {
-            await api.auth.revokeSession(session.id)
-            showToast(`Signed out ${describe(session.user_agent)}`)
-            sessions.reload()
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e))
-        }
-    }
+    const revoke = (session: WebSession) =>
+        confirm({
+            title: `Sign out ${describe(session.user_agent)}?`,
+            message: 'That session ends now; the browser sees the sign-in page on its next request.',
+            action: 'Sign out',
+            pending: 'Signing out…',
+            danger: true,
+            icon: 'logout',
+            onConfirm: async () => {
+                await api.auth.revokeSession(session.id)
+                showToast(`Signed out ${describe(session.user_agent)}`)
+                sessions.reload()
+            }
+        })
     const signOutOthers = () =>
         confirm({
             title: 'Sign out every other browser?',
@@ -97,7 +98,7 @@ export function SecuritySection({ telegram }: { telegram: boolean }) {
                         : 'Telegram is disabled — only the log below and the supervisor log'}
                 </span>
             </div>
-            <ErrorBox error={error ?? sessions.error ?? log.error} />
+            <ErrorBox error={sessions.error ?? log.error} />
             {auth.mode === 'password' && (
                 <>
                     <div className='security-head'>

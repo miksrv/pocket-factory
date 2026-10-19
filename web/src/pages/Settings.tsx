@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 
 import { HostsSection } from '../components/Hosts'
+import { Icon } from '../components/Icon'
 import { McpLoginDialog } from '../components/McpLogin'
 import { McpServersField } from '../components/McpServers'
 import { ProvidersSection } from '../components/Providers'
 import { SecretsSection } from '../components/Secrets'
 import { SecuritySection } from '../components/Security'
 import { ToolchainsSection } from '../components/Toolchains'
-import { Button, ErrorBox, PageHead, useToast } from '../components/ui'
+import { Button, Empty, ErrorBox, PageHead, useToast } from '../components/ui'
 import { type McpEntry, type McpOverview, type McpServerConfig } from '../lib/api'
 import { api } from '../lib/api'
 import { onThemeChange, setTheme, THEME_CHOICES, themeChoice } from '../lib/theme'
@@ -212,7 +213,12 @@ export function SettingsPage() {
                                     className='badge plain'
                                     title={w.git ? 'git repository' : 'not a git repository'}
                                 >
-                                    {w.git ? '' : '⚠ '}
+                                    {!w.git && (
+                                        <Icon
+                                            name='alert'
+                                            size={11}
+                                        />
+                                    )}
                                     {w.name}
                                 </span>
                             ))}
@@ -256,7 +262,15 @@ function McpSection({ data, error, onSaved }: { data: McpOverview | undefined; e
     // The server whose sign-in dialog is open.
     const [signingIn, setSigningIn] = useState<McpEntry | null>(null)
     // A failed poll must not unmount the editor (and the owner's draft with it): the error shows above it.
-    if (!data) return error ? <div className='error small'>{error}</div> : <div className='dim small'>…</div>
+    if (!data)
+        return error ? (
+            <ErrorBox
+                error={error}
+                inline
+            />
+        ) : (
+            <Empty inline>…</Empty>
+        )
     const refresh = async () => {
         setBusy(true)
         setRefreshError(null)
@@ -277,12 +291,17 @@ function McpSection({ data, error, onSaved }: { data: McpOverview | undefined; e
     const connected = servers.filter((s) => s.status === 'connected').length
     return (
         <div className='stack'>
-            {error && <div className='error small'>{error}</div>}
+            <ErrorBox
+                error={error}
+                inline
+            />
             <div className='row between wrap'>
-                <span className='dim small'>
-                    {servers.length ? `${connected} of ${servers.length} authorized` : 'No servers seen yet'} ·
-                    Authorize starts the sign-in from here (a connector can also be authorized at claude.ai → Settings →
-                    Connectors)
+                <span
+                    className='dim small'
+                    title='Authorize starts the sign-in from here; a connector can also be authorized at claude.ai → Settings → Connectors'
+                >
+                    {servers.length ? `${connected} of ${servers.length} authorized` : 'No servers seen yet'} · sign in
+                    with Authorize
                 </span>
                 <Button
                     size='sm'
@@ -293,7 +312,10 @@ function McpSection({ data, error, onSaved }: { data: McpOverview | undefined; e
                     {busy ? 'Asking the CLI…' : 'Refresh statuses'}
                 </Button>
             </div>
-            {refreshError && <div className='error small'>{refreshError}</div>}
+            <ErrorBox
+                error={refreshError}
+                inline
+            />
             {servers.length > 0 && (
                 <div className='mcp-list'>
                     {[...servers]
@@ -425,10 +447,14 @@ function McpEditor({
                     {busy ? 'Saving…' : 'Save'}
                 </Button>
             </div>
-            {fileError && (
-                <div className='error small'>The file on disk is not valid JSON ({fileError}); saving replaces it.</div>
-            )}
-            {error && <div className='error small'>{error}</div>}
+            <ErrorBox
+                error={fileError && `The file on disk is not valid JSON (${fileError}); saving replaces it.`}
+                inline
+            />
+            <ErrorBox
+                error={error}
+                inline
+            />
             <McpServersField
                 value={servers}
                 onChange={setServers}
@@ -501,9 +527,11 @@ function ThemeRow() {
                         </Button>
                     ))}
                 </span>
-                <span className='dim small'>
-                    this browser only, kept in its storage; the sun / moon in the sidebar foot flips between light and
-                    dark
+                <span
+                    className='dim small'
+                    title="Kept in this browser's storage; the sun / moon in the sidebar foot flips between light and dark"
+                >
+                    this browser only
                 </span>
             </span>
         </div>
@@ -549,8 +577,11 @@ function ModelRow({ model, onSaved }: { model: string; onSaved: () => void }) {
                         </option>
                     ))}
                 </select>
-                <span className='dim small'>
-                    the orchestrator, every next task in every chat; sub-agents keep their own
+                <span
+                    className='dim small'
+                    title='The orchestrator, from the next task on in every chat; sub-agents keep the model of their own files'
+                >
+                    every next task; sub-agents keep theirs
                 </span>
                 {error && (
                     <span

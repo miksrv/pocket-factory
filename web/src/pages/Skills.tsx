@@ -34,8 +34,8 @@ export function SkillsPage() {
             newLabel='New skill'
             form={(fm, set) => (
                 <Field
-                    label='Description — when this skill applies'
-                    hint='Claude Code decides to load the skill from this sentence.'
+                    label='Description'
+                    hint='when this skill applies'
                     wide
                 >
                     <GrowingTextarea

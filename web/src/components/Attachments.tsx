@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { FileText } from 'lucide-react'
 
 import { api, type Attachment, attachmentUrl, fmt, isImage } from '../lib/api'
+import { Icon } from './Icon'
 import { CloseButton } from './ui'
 
 /** The inbox prefixes a timestamp and a random part ("20261006-094112-a1b2c3-"); the owner sees the name they sent. */
@@ -31,7 +31,10 @@ export function SentAttachments({
                         className='attachment-chip gone'
                         title='Removed from the disk together with its conversation'
                     >
-                        <FileText size={13} />
+                        <Icon
+                            name='attachment'
+                            size={13}
+                        />
                         <span className='name'>{displayName(a)}</span>
                         <span className='dim'>removed</span>
                     </span>
@@ -59,7 +62,10 @@ export function SentAttachments({
                         title={a.path}
                         download={displayName(a)}
                     >
-                        <FileText size={13} />
+                        <Icon
+                            name='attachment'
+                            size={13}
+                        />
                         <span className='name'>{displayName(a)}</span>
                         <span className='dim'>{fmt.bytes(a.size)}</span>
                     </a>
@@ -173,7 +179,10 @@ export function PendingUploads({ uploads, onRemove }: { uploads: Upload[]; onRem
                             alt=''
                         />
                     ) : (
-                        <FileText size={13} />
+                        <Icon
+                            name='attachment'
+                            size={13}
+                        />
                     )}
                     <span className='name'>{u.file.name || 'pasted image'}</span>
                     <span className='dim'>

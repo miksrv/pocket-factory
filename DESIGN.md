@@ -8,9 +8,11 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
 
 - **A row is always full.** Fields in a row share its whole width: two selects take half each,
   three take a third each. A row never ends in an empty column.
-  `.form-grid` and `.trigger-card` are flex rows with `flex-wrap`, every field `flex: 1 1 260px`;
-  never lay out a form with `grid` + `auto-fill` (it keeps empty tracks alive).
-- **`wide` takes a row alone**: textareas, pickers, checkbox groups, lists of cards.
+  `.form-grid`, `.trigger-card` and `.host-card` are flex rows with `flex-wrap`, every field
+  `flex: 1 1 260px`; never lay out a form with `grid` + `auto-fill` (it keeps empty tracks alive).
+  A grid of cards (agents, presets) may use `auto-fill`: its cards are not fields.
+- **`wide` takes a row alone**: textareas, pickers, checkbox groups, lists of cards; never a
+  single input or select to make room for its hint (shorten the hint instead).
 - **Order fields so rows fill well**: fields that belong together (Agent + Skill, First run + Max
   items) sit next to each other; a lone short field after a wide one stretches across the row,
   which is fine.
@@ -37,13 +39,15 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
   `Field` with `section` renders one. The first section of a form has no rule.
 - Plain fields (selects, inputs, checkboxes) are never sections; they sit in rows between them.
 - **"More"** folds what is rarely changed; its summary reads as a section heading and names
-  what is inside. A field that only an older file uses (a routine's hosts, a continued session)
+  what is inside. A part of a form that is not folded but set apart by a rule is a section too:
+  it has a `SectionHead`, never a bare line. A field that only an older file uses (a routine's hosts, a continued session)
   shows only when the file has it.
 
 ## Code and files
 
-- **Code is edited in the code editor** (`CodeEditor`, CodeMirror): a script, a config, a data file.
-  A textarea is for prose (instructions, descriptions), never for a script.
+- **Code is edited in the code editor** (`CodeEditor`, CodeMirror): a script, a step's command, a
+  config (JSON), a certificate, a data file. A textarea is for prose (instructions, descriptions),
+  never for a script.
 - **A folder's files** (a skill's, a routine's) are one `FolderFiles` section: a list, one row per
   file under its directory; a click opens the file in a large window (the editor across it, a CSV
   as a table first). A step's window shows its own script in place (`FileEditor compact`).
@@ -66,17 +70,41 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
 ## Components
 
 - Buttons, tabs, stats, empty states, errors and page heads come from `components/ui.tsx`; pages
-  compose them and never repeat their markup.
+  compose them and never repeat their markup. A list's load error is an `ErrorBox`; an error under
+  one control is `<ErrorBox inline>`; "nothing here yet" inside a section is `<Empty inline>`.
 - Every destructive action goes through `useConfirm()`, never `window.confirm`.
-- Icons only through `components/Icon.tsx`: the same icon for the same concept everywhere; a
-  tile never changes size.
+- Icons only through `components/Icon.tsx` (never `lucide-react` directly): the same icon for the
+  same concept everywhere; a tile never changes size. A state mark (done, failed, needs a look), a
+  disclosure arrow, an "open elsewhere" arrow, the menu and the add sign are icons too, never
+  glyphs like `✓ ✗ ⚠ ▸ ↗ ☰ ＋`; arrows inside prose (`Settings → Hosts`) are words and stay.
+- Layout lives in classes: an inline `style` is for a one-off value, never a pattern repeated on
+  the page.
 
 ## Look
 
 - Light theme by default (paper background, dot grid, mono font, pastel pills, icon tiles) and a
-  dark theme on the same tokens. Colours only through the tokens; never a literal `#fff` on an
-  ink or red surface.
+  dark theme on the same tokens. Colours and shadows only through the tokens (`--shadow-sm`,
+  `--shadow`, `--shadow-lg`, `--shadow-drawer`, `--red-hover`…); never a literal colour, `#fff` on
+  an ink or red surface least of all. A new token is defined in both themes.
 - One badge per sidebar item: unread (green) > waiting (amber) > running (blue).
 - No money anywhere: tokens and window shares only.
 - No blinking title. External links in rendered Markdown open in a new tab, links into the
   factory stay.
+
+## Accessibility
+
+WCAG 2.2 AA, checked in both themes (a token change is measured against every surface it sits on).
+
+- **Contrast**: text and placeholders at least 4.5:1 against `--bg`, `--surface` and `--surface-2`
+  (`--text-dim` is the floor, not a lighter shade below it); a pill's text 4.5:1 on its own `-bg`.
+  A field's edge (`--field-border`) and any icon that carries meaning alone 3:1.
+- **Focus is always visible**: buttons and links get the blue `:focus-visible` outline, fields a
+  2px blue ring (border + outline, so it survives forced colours). Never `outline: none` without a
+  replacement of at least that strength.
+- **Motion**: under `prefers-reduced-motion` nothing pulses, blinks, glows or slides (one rule at
+  the end of `styles.css`); state is never shown by motion alone.
+- **Targets** at least 24×24px (`.btn.sm`, chips, tabs); a lone icon button 28px.
+- **Text** at least 11px, labels and badges included.
+- An icon-only control has an `aria-label`; an icon next to a word is `aria-hidden` (`Icon` does
+  it).
+- Nothing appears only on hover: a phone has no hover.

@@ -97,7 +97,7 @@ describe('AskForm: a question', () => {
             questionTask([BRANCH, CHECKS, { question: 'Anything else?' }], { 'Which branch?': 'main' })
         )
         // The answered one is shown as done and is not asked again.
-        expect(screen.getByText('✓ main')).toBeInTheDocument()
+        expect(screen.getByText('main')).toBeInTheDocument()
         expect(screen.queryByRole('radio', { name: 'develop' })).not.toBeInTheDocument()
         expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument()
         await user.click(screen.getByRole('checkbox', { name: 'tests' }))

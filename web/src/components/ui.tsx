@@ -127,12 +127,15 @@ export function PageHead({ title, sub, children }: { title: string; sub?: ReactN
     )
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-    return <div className='empty'>{children}</div>
+/** Nothing to show: a box for a page or a pane; `inline`, one dim line inside a section or a list. */
+export function Empty({ children, inline }: { children: ReactNode; inline?: boolean }) {
+    return <div className={inline ? 'dim small' : 'empty'}>{children}</div>
 }
 
-export function ErrorBox({ error }: { error?: string | null }) {
-    return error ? <div className='card error'>{error}</div> : null
+/** An error: a card above a page or a form; `inline`, one red line under the control it belongs to. */
+export function ErrorBox({ error, inline }: { error?: string | null; inline?: boolean }) {
+    if (!error) return null
+    return <div className={inline ? 'error small' : 'card error'}>{error}</div>
 }
 
 /**
@@ -190,7 +193,7 @@ export function Stat({
 }: {
     label: string
     value: ReactNode
-    sub?: string
+    sub?: ReactNode
     to?: string
     card?: boolean
 }) {
