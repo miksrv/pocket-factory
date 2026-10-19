@@ -101,12 +101,26 @@ stays empty.
    PHP, Node) asks for its tests; a routine's Run now; a Telegram message; a provider task and a
    delegation; a preview opened from another machine; a blocked host allowed from Telegram.
    On the host: `sbx exec pf-factory claude -p "Reply with exactly: OK" --model haiku --max-turns 1`.
-8. After a week without a rollback: delete `data/tools`, `data/docker` and the `docker-certs` volume.
+8. **Provider keys out of `.env`** (they live in the vault since 1.7.0). The first start moves
+   every key a provider names (`token:` in `data/config/providers.yaml`, the provider's and its MCP
+   servers') from `.env` into `data/vault/secrets.json` as a provider key, and logs
+   `provider key <NAME> moved from .env into the vault: remove it from .env`. For an agent doing
+   the upgrade:
+   - `docker compose logs supervisor | grep 'moved from .env'` lists the names moved;
+   - check them: Settings → Secrets marks each as *provider key*, Settings → Providers shows the
+     key picked with no "missing" badge, and the provider's **Test** passes;
+   - then delete those lines from `.env` (`cp .env .env.bak-keys` first), `docker compose up -d`,
+     and run **Test** once more. A key the log does not name was in the vault already, or its
+     name is taken by a run's secret there (the provider then shows the key missing): give the
+     provider a new key with **New secret** beside its API key.
+   No value is printed or copied anywhere else; the rollback keeps working, because 1.6 still
+   reads the lines from `.env.bak-keys`.
+9. After a week without a rollback: delete `data/tools`, `data/docker` and the `docker-certs` volume.
 
 Project files that still say `path: /data/workspaces/<x>` keep working (read as
 `WORKSPACES_DIR/<x>`). The real login in `data/claude/.credentials.json` from 1.6 is harmless: the
 proxy replaces its tokens. Rollback to 1.6: `git checkout v1.6.1`, restore `.env.bak-1.6.1`,
-`docker compose up -d --build` (dind and `data/tools` are on disk until step 8); the sandboxes
+`docker compose up -d --build` (dind and `data/tools` are on disk until step 9); the sandboxes
 stay and do no harm.
 
 ## How the factory uses sbx (for debugging)

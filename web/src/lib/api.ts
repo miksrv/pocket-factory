@@ -353,7 +353,7 @@ export interface ProviderStatus {
 export interface ProviderMcp {
     name: string
     url: string
-    /** Name of the .env variable with its bearer. */
+    /** Name of its bearer: a provider key in Secrets. */
     token?: string
 }
 
@@ -363,7 +363,7 @@ export interface Provider {
     /** `anthropic`: speaks /v1/messages itself (Ollama, vLLM, OpenRouter); `openai`: chat completions, translated by the factory. */
     kind: 'anthropic' | 'openai'
     url: string
-    /** Name of the .env variable with the key; empty for a local server. */
+    /** Name of the key: a provider key in Secrets (access "model providers only"); empty for a local server. */
     token?: string
     models: string[]
     default?: string
@@ -861,9 +861,11 @@ export interface VaultEntry {
     secret: boolean
     value?: string
     scope: SecretScope
+    /** A provider key (access "model providers only"): the gateway adds it, no run gets it. */
+    provider?: true
     created_at: string
     updated_at: string
-    used_by: Array<{ kind: 'routine' | 'config'; name: string; step?: string }>
+    used_by: Array<{ kind: 'routine' | 'config' | 'provider'; name: string; step?: string }>
 }
 
 /** What a skill's scripts read, and which routines running the skill get each name. */
@@ -1239,8 +1241,12 @@ export const api = {
         }),
 
     secrets: () => request<VaultOverview>('/secrets'),
-    /** Create (`create`: refuse a name that exists) or change; a secret without `value` keeps its value. */
-    saveSecret: (name: string, body: { value?: string; secret?: boolean; scope?: SecretScope }, create = false) =>
+    /** Create (`create`: refuse a name that exists) or change; a secret without `value` keeps its value; `provider`: a provider key. */
+    saveSecret: (
+        name: string,
+        body: { value?: string; secret?: boolean; scope?: SecretScope; provider?: boolean },
+        create = false
+    ) =>
         request<VaultEntry>(`/secrets/${encodeURIComponent(name)}${create ? '?create=1' : ''}`, {
             method: 'PUT',
             body: JSON.stringify(body)

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { tokenVarProblem } from '../files/providers.js'
 import { hostOnly } from '../sandbox/executor.js'
 
 /**
@@ -13,6 +14,11 @@ import { hostOnly } from '../sandbox/executor.js'
  * environment of the steps, the sources and the agent's CLI of the runs in
  * their scope. One JSON file, mode 0600, in its own directory outside
  * `config/` (which gets copied around); a name here wins over `.env`.
+ *
+ * A **provider key** (`provider: true`, access "model providers only") is a
+ * secret no run gets: a provider names it as its `token` and only the gateway
+ * reads it (keys never reach an agent). Like secret / variable, a name stays
+ * a provider key or a run's entry for life.
  */
 
 export type Scope = { all: true } | { all: false; routines: string[]; projects: string[] }
@@ -21,6 +27,8 @@ interface Stored {
     value: string
     secret: boolean
     scope: Scope
+    /** A provider's key: the gateway's only, never a run's. */
+    provider?: true
     created_at: string
     updated_at: string
 }
@@ -32,6 +40,8 @@ export interface VaultEntry {
     /** Only for a variable. */
     value?: string
     scope: Scope
+    /** A provider's key (set in Settings → Providers): it reaches no run. */
+    provider?: true
     created_at: string
     updated_at: string
 }
@@ -138,7 +148,7 @@ export const MASK = '••••'
 export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
     private cache: { mtime: number; data: Record<string, Stored> } | null = null
 
-    /** `extraReserved`: more names the vault must not hold (the providers' key variables). */
+    /** `extraReserved`: names a run's entry must not take (the ones providers name as their keys). */
     constructor(
         readonly file: string,
         private readonly extraReserved: () => string[] = () => []
@@ -152,8 +162,25 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
         if (RESERVED.has(name) || RESERVED_PREFIXES.some((p) => name.startsWith(p)))
             return `${name} is reserved: the factory sets it or owns it`
         if (hostOnly(name)) return `${name} is reserved: it stays with the supervisor and never reaches a sandbox`
-        if (this.extraReserved().includes(name)) return `${name} is a provider's key: set it in .env`
+        if (this.extraReserved().includes(name) || this.read()[name]?.provider)
+            return `${name} is a provider's key: its access is "model providers only"`
         return null
+    }
+
+    /** Why a name cannot hold a provider's key, or null: the key-name rules, and no run's entry of that name. */
+    providerRefusal(name: string): string | null {
+        const problem = tokenVarProblem(name)
+        if (problem) return problem
+        const current = this.read()[name]
+        if (current && !current.provider)
+            return `${name} is a ${current.secret ? 'secret' : 'variable'} for runs, not a provider key`
+        return null
+    }
+
+    /** A provider's key held here; null when the vault has none of that name. */
+    providerKey(name: string): string | null {
+        const s = this.read()[name]
+        return s?.provider ? s.value || null : null
     }
 
     list(): VaultEntry[] {
@@ -178,13 +205,20 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
      */
     set(
         name: string,
-        patch: { value?: string; secret?: boolean; scope?: Scope },
+        patch: { value?: string; secret?: boolean; scope?: Scope; provider?: boolean },
         from: string | null = null
     ): VaultEntry {
-        const refused = this.refusal(name)
-        if (refused) throw new VaultError(refused)
         const data = { ...this.read() }
         const current = data[name]
+        const provider = current ? Boolean(current.provider) : Boolean(patch.provider)
+        if (current && patch.provider !== undefined && patch.provider !== provider)
+            throw new VaultError(
+                provider
+                    ? `${name} is a provider key: delete it and add a secret for runs`
+                    : `${name} is a ${current.secret ? 'secret' : 'variable'} for runs: delete it and add a provider key`
+            )
+        const refused = provider ? this.providerRefusal(name) : this.refusal(name)
+        if (refused) throw new VaultError(refused)
         if (!current && patch.value === undefined) throw new VaultError('a value is required')
         if (current && patch.secret !== undefined && patch.secret !== current.secret)
             throw new VaultError(
@@ -195,12 +229,17 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
         if (patch.value !== undefined) {
             if (patch.value.length > 64 * 1024) throw new VaultError('the value is larger than 64 KB')
             if (patch.value.includes('\0')) throw new VaultError('the value contains a NUL byte')
+            if (provider && /[\r\n]/.test(patch.value.trim())) throw new VaultError("a provider's key is one line")
         }
         const at = new Date().toISOString()
         data[name] = {
-            value: patch.value ?? current.value,
-            secret: current?.secret ?? patch.secret ?? true,
-            scope: normalizeScope(patch.scope ?? current?.scope ?? { all: true }),
+            value: provider && patch.value !== undefined ? patch.value.trim() : (patch.value ?? current.value),
+            // A provider key is a secret with no run in its scope: the gateway is its only reader.
+            secret: provider || (current?.secret ?? patch.secret ?? true),
+            scope: provider
+                ? { all: false, routines: [], projects: [] }
+                : normalizeScope(patch.scope ?? current?.scope ?? { all: true }),
+            ...(provider ? { provider: true as const } : {}),
             created_at: current?.created_at ?? at,
             updated_at: at
         }
@@ -222,14 +261,15 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
     /** The values for a run: everything scoped to all, plus what names its routine or project. */
     envFor(ctx: ScopeContext = {}): Record<string, string> {
         const out: Record<string, string> = {}
-        for (const [name, s] of Object.entries(this.read())) if (inScope(s.scope, ctx)) out[name] = s.value
+        for (const [name, s] of Object.entries(this.read()))
+            if (!s.provider && inScope(s.scope, ctx)) out[name] = s.value
         return out
     }
 
     /** Whether a name reaches a run of that routine / project. */
     reaches(name: string, ctx: ScopeContext): boolean {
         const s = this.read()[name]
-        return Boolean(s && inScope(s.scope, ctx))
+        return Boolean(s && !s.provider && inScope(s.scope, ctx))
     }
 
     /** Every secret value long enough to mask, longest first (a value inside another is masked by the longer one). */
@@ -310,6 +350,7 @@ function view(name: string, s: Stored): VaultEntry {
         secret: s.secret,
         ...(s.secret ? {} : { value: s.value }),
         scope: s.scope,
+        ...(s.provider ? { provider: true as const } : {}),
         created_at: s.created_at,
         updated_at: s.updated_at
     }
@@ -335,4 +376,19 @@ export function referencedNames(text: string): string[] {
     const names = new Set<string>()
     for (const m of text.matchAll(/\$\{?([A-Z_][A-Z0-9_]*)\}?/g)) names.add(m[1])
     return [...names]
+}
+
+/**
+ * Once, at start: a provider key still in `.env` (the way before 1.7.0) moves into the vault as a
+ * provider key, so the line can go from `.env`. A name the vault holds already is left alone.
+ */
+export function migrateEnvKeys(vault: Vault, names: string[], env: NodeJS.ProcessEnv = process.env): string[] {
+    const moved: string[] = []
+    for (const name of new Set(names)) {
+        const value = env[name]?.trim()
+        if (!value || vault.has(name) || vault.providerRefusal(name)) continue
+        vault.set(name, { value, provider: true }, '.env')
+        moved.push(name)
+    }
+    return moved
 }

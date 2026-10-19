@@ -27,7 +27,10 @@ page, not the rule. Tokens, components and icons live in `web/src/styles.css`,
   select): it stretches to the field, never sits as a small button in the middle of the row.
   `.row:has(> input, > select) > .btn` does it in `styles.css`; such a button is the default
   size, not `sm`.
-- **A checkbox label is a short phrase** (`drafts`, `new items only`), not a sentence.
+- **A checkbox or radio label is a short phrase starting with a capital** (`Drafts`, `New items only`,
+  `Every routine and chat`), not a sentence. A name picked from a list (a routine, a tool) stays as written.
+- **A choice that cannot be made is visibly off**: a disabled checkbox or radio is dimmed with its
+  caption and shows `not-allowed`; its `title` says why.
 - On a phone or a narrow window (≤ 900px) every field takes the full row.
 
 ## Sections

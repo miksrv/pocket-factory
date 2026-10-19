@@ -232,7 +232,7 @@ const TRAC_COLUMNS = [
 
 /**
  * A Trac query as CSV (`/query?…&format=csv`), the site and the query from
- * the step. Credentials from the environment, shared by every Trac step: TRAC_USER + TRAC_PASSWORD as basic auth (point `url` at the
+ * the step. Credentials from the run's environment (Settings → Secrets), shared by every Trac step: TRAC_USER + TRAC_PASSWORD as basic auth (point `url` at the
  * `/login` path when the server authenticates there), or TRAC_COOKIE with a
  * browser session's `trac_auth` value. The key is `id@changetime` by
  * default, so a ticket that changed after the agent looked at it (a reply,
@@ -263,7 +263,7 @@ async function runTrac(spec: TracStep, env: NodeJS.ProcessEnv): Promise<Item[]> 
     }
     if (response.status === 401 || response.status === 403)
         throw new SourceError(
-            `Trac refused the credentials (${response.status}); check TRAC_USER / TRAC_PASSWORD or TRAC_COOKIE, and whether the URL needs /login`
+            `Trac refused the credentials (${response.status}); check TRAC_USER / TRAC_PASSWORD or TRAC_COOKIE in Settings → Secrets, and whether the URL needs /login`
         )
     if (response.status >= 300 && response.status < 400)
         throw new SourceError(

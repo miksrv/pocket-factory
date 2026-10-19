@@ -17,7 +17,7 @@ import { SandboxManager } from './sandbox/manager.js'
 import { addProjectNetwork, sandboxNetwork } from './sandbox/network.js'
 import { Previews } from './sandbox/previews.js'
 import { Sbx } from './sandbox/sbx.js'
-import { Vault } from './secrets/vault.js'
+import { migrateEnvKeys, Vault } from './secrets/vault.js'
 import { Transcripts } from './sessions/transcripts.js'
 import { openDatabase } from './store/db.js'
 import { Store } from './store/index.js'
@@ -139,6 +139,11 @@ async function main(): Promise<void> {
     }
     // Secrets and variables set in the UI (Settings → Secrets and variables): scoped into runs, masked in the store.
     const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())
+    // A provider's key pasted in Settings → Providers lives in the vault, for the gateway alone.
+    providers.useKeys((name) => vault.providerKey(name))
+    // Before 1.7.0 provider keys lived in .env: each moves into the vault once, and the line can go.
+    for (const name of migrateEnvKeys(vault, providers.tokenVars()))
+        log.info(`provider key ${name} moved from .env into the vault: remove it from .env`)
     store.setRedactor({ redact: (text) => vault.redact(text), active: () => vault.hasSecrets() })
     // Where the agents run: one Docker Sandbox per project (sbx), or this machine (local: yarn dev, tests).
     const sbx = new Sbx({ home: config.sandbox.home })

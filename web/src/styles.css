@@ -1489,6 +1489,21 @@ label:has(> input[type='checkbox']),
 label:has(> input[type='radio']) {
     cursor: pointer;
 }
+/* A choice that cannot be made now: the box and its caption dimmed, the cursor says so (DESIGN.md, Forms). */
+input[type='checkbox']:disabled,
+input[type='radio']:disabled,
+label:has(> input[type='checkbox']:disabled),
+label:has(> input[type='radio']:disabled) {
+    cursor: not-allowed;
+}
+input[type='checkbox']:disabled,
+input[type='radio']:disabled {
+    opacity: 0.4;
+}
+label:has(> input[type='checkbox']:disabled),
+label:has(> input[type='radio']:disabled) {
+    color: var(--text-dim);
+}
 /* A checkbox with its caption in a flex row: the global 100 % input width would otherwise push the caption into a sliver. */
 label.row > input[type='checkbox'],
 label.row > input[type='radio'],

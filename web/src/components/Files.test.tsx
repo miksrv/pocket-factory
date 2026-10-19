@@ -102,6 +102,6 @@ describe('FileEditor', () => {
         await user.type(await screen.findByLabelText('scripts/a.sh'), 'x')
         await user.click(screen.getByRole('button', { name: 'Save file' }))
         expect(await screen.findByRole('button', { name: 'Reload from disk' })).toBeInTheDocument()
-        expect(screen.getByLabelText('executable')).toBeChecked()
+        expect(screen.getByLabelText('Executable')).toBeChecked()
     })
 })

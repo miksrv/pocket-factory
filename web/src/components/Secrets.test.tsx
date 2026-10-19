@@ -56,7 +56,7 @@ describe('SecretsSection', () => {
         await user.type(within(dialog).getByLabelText('Name'), 'gsc-token')
         expect(within(dialog).getByLabelText('Name')).toHaveValue('GSC_TOKEN')
         await user.type(within(dialog).getByLabelText('Secret'), 'tok-123456')
-        await user.click(within(dialog).getByLabelText('only the routines and projects picked'))
+        await user.click(within(dialog).getByLabelText('Only the routines and projects picked'))
         await user.click(within(dialog).getByLabelText('geometki-rewriter'))
         await user.click(within(dialog).getByRole('button', { name: 'Add secret' }))
         expect(fetch.requests().find((r) => r.method === 'PUT')).toMatchObject({
@@ -76,7 +76,7 @@ describe('SecretsSection', () => {
         await user.click(await screen.findByRole('button', { name: 'Update' }))
         const dialog = await screen.findByRole('dialog')
         expect(within(dialog).getByLabelText('New value')).toHaveValue('')
-        await user.click(within(dialog).getByLabelText('every routine and chat'))
+        await user.click(within(dialog).getByLabelText('Every routine and chat'))
         await user.click(within(dialog).getByRole('button', { name: 'Update secret' }))
         const put = fetch.requests().find((r) => r.method === 'PUT')
         expect(put?.body).toEqual({ secret: true, scope: { all: true } })

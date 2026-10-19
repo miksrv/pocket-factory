@@ -162,6 +162,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     }
     const providers = new Providers(path.join(config.paths.configRoot, 'providers.yaml'))
     const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())
+    // A provider's key pasted in Settings → Providers lives in the vault, for the gateway alone.
+    providers.useKeys((name) => vault.providerKey(name))
     store.setRedactor({ redact: (text) => vault.redact(text), active: () => vault.hasSecrets() })
     const sandboxes: SandboxManager = new SandboxManager(new Sbx(), store, config, {
         projectPath,

@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react'
 
-import { api, type Provider, type ProviderMcp, type ProviderTest, type ProviderView } from '../lib/api'
+import { api, type Provider, type ProviderMcp, type ProviderTest, type ProviderView, type VaultEntry } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { CodeEditor } from './CodeEditor'
 import { Icon } from './Icon'
 import { Modal, useConfirm } from './Modal'
+import { SecretDialog } from './Secrets'
 import { Button, ErrorBox, SectionHead } from './ui'
 
 /**
  * Model providers besides the subscription: self-hosted models (Ollama on a
  * GPU box, llama.cpp, vLLM) and cloud APIs (OpenRouter, Gemini, OpenAI, Groq).
  * The list lives in Settings → Providers (`data/config/providers.yaml`); an
- * agent, a routine or a chat picks one with `ModelPicker`. Keys never pass
- * through here: a provider names the .env variable that holds its key.
+ * agent, a routine or a chat picks one with `ModelPicker`. A key is a secret
+ * of Settings → Secrets with the access "model providers only": the form picks
+ * one or adds it, the gateway alone reads it, no run gets it.
  */
 
 export const CLAUDE_ALIASES: Array<{ value: string; label: string }> = [
@@ -21,6 +23,87 @@ export const CLAUDE_ALIASES: Array<{ value: string; label: string }> = [
     { value: 'haiku', label: 'haiku — current Haiku' },
     { value: 'fable', label: 'fable — current Fable (Max plans)' }
 ]
+
+/** The name a new key is offered under: `UNOROUTER_API_KEY`, `BOX_SEARCH_TOKEN`. */
+function defaultTokenVar(provider: string, mcp?: string): string {
+    const part = (s: string) =>
+        s
+            .toUpperCase()
+            .replace(/[^A-Z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+    const base = part(provider || 'provider')
+    const head = /^[A-Z]/.test(base) ? base : `P_${base}`
+    return mcp ? `${head}_${part(mcp)}_TOKEN` : `${head}_API_KEY`
+}
+
+/**
+ * A provider's key: one of the provider keys in Settings → Secrets, or New secret (the same window
+ * as everywhere, its access fixed to "model providers only"). A name no provider key holds stays
+ * in the list as missing, so a file's `token:` is never dropped silently.
+ */
+function KeyPicker({
+    value,
+    onChange,
+    keys,
+    suggest,
+    label,
+    onAdded
+}: {
+    value: string
+    onChange: (name: string) => void
+    keys: VaultEntry[] | undefined
+    /** The name New secret offers. */
+    suggest: string
+    label: string
+    onAdded: () => void
+}) {
+    const [adding, setAdding] = useState(false)
+    const names = (keys ?? []).filter((k) => k.provider).map((k) => k.name)
+    const missing = value && keys && !names.includes(value)
+    return (
+        <span
+            className='row'
+            style={{ gap: 6, flexWrap: 'nowrap', flex: 1, minWidth: 0 }}
+        >
+            <select
+                className='mono'
+                style={{ flex: 1, minWidth: 0 }}
+                value={value}
+                aria-label={label}
+                onChange={(e) => onChange(e.target.value)}
+            >
+                <option value=''>none</option>
+                {names.map((n) => (
+                    <option
+                        key={n}
+                        value={n}
+                    >
+                        {n}
+                    </option>
+                ))}
+                {missing && <option value={value}>{value} — not in Secrets</option>}
+            </select>
+            <Button
+                onClick={() => setAdding(true)}
+                title='A new secret with the access "model providers only"'
+            >
+                New secret
+            </Button>
+            <SecretDialog
+                open={adding}
+                kind='secret'
+                provider
+                name={missing ? value : names.includes(suggest) ? undefined : suggest}
+                onClose={() => setAdding(false)}
+                onSaved={(entry) => {
+                    setAdding(false)
+                    onChange(entry.name)
+                    onAdded()
+                }}
+            />
+        </span>
+    )
+}
 
 const EMPTY: Provider = {
     name: '',
@@ -204,15 +287,27 @@ function TestProvider({ draft, model }: { draft: Partial<Provider>; model?: stri
     )
 }
 
-/** The provider's own MCP servers: name, URL and the .env variable with the bearer, one row each. */
-function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: ProviderMcp[]) => void }) {
+/** The provider's own MCP servers: name, URL and the bearer (a provider key in Secrets), one row each. */
+function McpRows({
+    rows,
+    onChange,
+    provider,
+    keys,
+    onAdded
+}: {
+    rows: ProviderMcp[]
+    onChange: (rows: ProviderMcp[]) => void
+    provider: string
+    keys: VaultEntry[] | undefined
+    onAdded: () => void
+}) {
     const set = (i: number, patch: Partial<ProviderMcp>) =>
         onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
     return (
         <div className='field wide group section'>
             <SectionHead
                 title='MCP servers'
-                hint="HTTP servers for this provider's tasks only; the gateway adds the key from .env"
+                hint="HTTP servers for this provider's tasks only; the gateway adds the key"
             >
                 <Button
                     size='sm'
@@ -247,14 +342,16 @@ function McpRows({ rows, onChange }: { rows: ProviderMcp[]; onChange: (rows: Pro
                         aria-label='MCP server URL'
                         onChange={(e) => set(i, { url: e.target.value })}
                     />
-                    <input
-                        className='mono'
-                        style={{ flex: '0 0 28%', minWidth: 0 }}
-                        value={r.token ?? ''}
-                        placeholder='MYBOX_MCP_TOKEN'
-                        aria-label='MCP key variable'
-                        onChange={(e) => set(i, { token: e.target.value.toUpperCase() })}
-                    />
+                    <span style={{ flex: '0 0 38%', minWidth: 0, display: 'flex' }}>
+                        <KeyPicker
+                            value={r.token ?? ''}
+                            onChange={(token) => set(i, { token })}
+                            keys={keys}
+                            suggest={defaultTokenVar(provider, r.name || 'mcp')}
+                            label='MCP server key'
+                            onAdded={onAdded}
+                        />
+                    </span>
                     <Button
                         variant='danger'
                         onClick={() => onChange(rows.filter((_, j) => j !== i))}
@@ -276,14 +373,17 @@ export function ProviderDialog({
     onSaved
 }: {
     open: boolean
-    initial?: Partial<Provider> & { ca?: ProviderView['ca'] }
+    initial?: Partial<ProviderView>
     /** The saved name of the provider being edited; absent when creating. */
     editing?: string
     taken?: string[]
     onClose: () => void
     onSaved: (provider: Provider) => void
 }) {
-    const [p, setP] = useState<Provider>({ ...EMPTY, ...initial })
+    const [p, setP] = useState<Provider>({ ...EMPTY, ...initial, mcp: undefined })
+    // The provider keys to pick from (Settings → Secrets, access "model providers only").
+    const vault = useAsync(() => (open ? api.secrets() : Promise.resolve(null)), [open])
+    const keys = vault.data?.entries
     const [mcp, setMcp] = useState<ProviderMcp[]>([])
     /** A pasted PEM to trust; '' = untouched. `dropCa` removes the saved one. */
     const [ca, setCa] = useState('')
@@ -294,7 +394,7 @@ export function ProviderDialog({
     const [error, setError] = useState<string | null>(null)
     useEffect(() => {
         if (open) {
-            setP({ ...EMPTY, ...initial })
+            setP({ ...EMPTY, ...initial, mcp: undefined })
             setModels((initial?.models ?? []).join('\n'))
             setMcp((initial?.mcp ?? []).map(({ name, url, token }) => ({ name, url, token })))
             setCa('')
@@ -369,7 +469,7 @@ export function ProviderDialog({
             title={editing ? `Provider ${editing}` : 'Add provider'}
             icon='provider'
             size='wide'
-            description='A model server or cloud API off the subscription; its key stays in .env.'
+            description='A model server or cloud API off the subscription; its key is a secret only the gateway reads.'
             busy={busy}
             footer={
                 <>
@@ -437,16 +537,18 @@ export function ProviderDialog({
                             {p.kind === 'openai' ? 'up to /chat/completions' : 'up to /v1/messages'}
                         </span>
                     </label>
-                    <label className='field'>
-                        <span>Key variable</span>
-                        <input
-                            className='mono'
+                    <div className='field'>
+                        <span>API key</span>
+                        <KeyPicker
                             value={p.token ?? ''}
-                            placeholder='GEMINI_API_KEY'
-                            onChange={(e) => set({ token: e.target.value.toUpperCase() })}
+                            onChange={(token) => set({ token })}
+                            keys={keys}
+                            suggest={defaultTokenVar(p.name)}
+                            label='API key'
+                            onAdded={vault.reload}
                         />
-                        <span className='dim'>a variable in .env, never the key</span>
-                    </label>
+                        <span className='dim'>a secret for model providers; none for a local server</span>
+                    </div>
                     <div className='field wide group section'>
                         <SectionHead
                             title='Models'
@@ -548,7 +650,7 @@ export function ProviderDialog({
                                 checked={p.light}
                                 onChange={(e) => set({ light: e.target.checked })}
                             />
-                            <span>light mode</span>
+                            <span>Light mode</span>
                         </label>
                     </div>
                     <div className='field wide group section'>
@@ -591,6 +693,9 @@ export function ProviderDialog({
                         />
                     </div>
                     <McpRows
+                        provider={p.name}
+                        keys={keys}
+                        onAdded={vault.reload}
                         rows={mcp}
                         onChange={setMcp}
                     />
@@ -702,7 +807,11 @@ export function ProvidersSection() {
                             {p.token && (
                                 <span
                                     className={`badge ${p.token_set ? 'plain' : 'failed'}`}
-                                    title={p.token_set ? `${p.token} is set in .env` : `${p.token} is not set in .env`}
+                                    title={
+                                        p.token_set
+                                            ? `${p.token}: a secret for model providers`
+                                            : `${p.token} is not in Secrets: pick or add the key in the provider`
+                                    }
                                 >
                                     {p.token}
                                     {p.token_set ? '' : ' missing'}
@@ -732,7 +841,9 @@ export function ProvidersSection() {
                                         key={m.name}
                                         className={`badge ${m.token_set ? 'plain' : 'failed'}`}
                                         title={[
-                                            m.token_set ? m.url : `${m.token} is not set in .env`,
+                                            m.token_set
+                                                ? m.url
+                                                : `${m.token} is not in Secrets: pick or add the key in the provider`,
                                             names.length
                                                 ? `Tools: ${names.join(', ')}`
                                                 : 'Its tools show up after the first task on this provider',

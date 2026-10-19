@@ -282,9 +282,21 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 
 - `data/config/providers.yaml`: endpoints besides the subscription. `kind: anthropic` speaks
   `/v1/messages` (Ollama, vLLM, OpenRouter), `kind: openai` speaks chat completions (OpenAI,
-  Gemini, Groq) through `gateway/translate.ts`. Each has `token` (the name of the `.env` variable
-  with its key; never a factory secret), `models`, `default`, `small`, `concurrency`, `light`,
-  `mcp:` and an optional CA (`data/config/certs/<provider>.pem`, added to the CA store at once).
+  Gemini, Groq) through `gateway/translate.ts`. Each has `token` (the name of its key; never a
+  factory secret), `models`, `default`, `small`, `concurrency`, `light`, `mcp:` and an optional CA
+  (`data/config/certs/<provider>.pem`, added to the CA store at once).
+- **`.env` vs Secrets** (owner, 1.7.0): `.env` and `.env.example` hold only the factory's own
+  secrets (bot token and allowed ids, web sign-in, Groq), the GitHub tokens (the supervisor's
+  Changes panel and `github-prs` read them too, until they go through the sbx proxy) and settings.
+  Everything a provider, a routine or an agent needs (provider keys, the Trac login, a script's
+  tokens) is a dynamic secret or variable of the vault, set from the UI; never add such a name to
+  `.env.example`.
+- **Provider keys live in the vault only** (1.7.0, owner's call: no `.env` per provider): a secret
+  with the access "model providers only" (`provider: true`), picked in the provider form beside
+  New secret (the same `SecretDialog`). Only the gateway and the form's test read it; never in
+  `envFor` / `reaches`, whatever the scope; masked like any secret; a name stays a provider key or
+  a run's entry for life, and a provider may not name a run's secret. `.env` is not read for keys:
+  `migrateEnvKeys` moves a provider's key from `.env` into the vault once at start (DEPLOY.md).
 - A task's provider comes from its routine, the agent it runs as (`provider:` +
   `provider_model:`; `model:` stays a CLI alias so the agent still works as a sub-agent), or the
   conversation (Chat selector, `/model provider:model`; a change forgets the session).
@@ -447,7 +459,8 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - Mail has no deterministic source yet (Gmail lives in the session as a connector): a mail
   routine is a schedule at a coarse cadence. Trac is polled over HTTP from the supervisor: the
   step holds the custom query's address as the browser has it (`url:`; no `TRAC_URL`, owner's
-  call), the login is shared by every Trac step (`TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`). Start every routine in its
+  call), the login is shared by every Trac step (`TRAC_USER` / `TRAC_PASSWORD` or `TRAC_COOKIE`, in Secrets,
+  never in `.env`). Start every routine in its
   instructions with "look and report, change nothing" and graduate it.
 - **No mode field** (1.6.0, owner's call): `action:` was only a line in the prompt and looked like a
   safety switch it never was, so what a run may do is written in its instructions. On start

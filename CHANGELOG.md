@@ -12,6 +12,9 @@
 - Toolchains: removed (mise, PHP and Docker in the image, the dind sidecar, Settings → Toolchains); the agent installs what a checkout needs in its sandbox
 - Projects: a Network section and the sandbox card above the form
 - Overview: tokens by day for 7 / 30 / 90 days, each subscription model and each provider apart
+- Providers: the API key (and an MCP server's) is a secret with the access "model providers only", picked or added in the form; no `.env`
+- Providers: keys still in `.env` move into Secrets at start, once
+- Routines: the Trac login is no longer in `.env.example`; it is set in Secrets
 
 ## 1.6.1
 

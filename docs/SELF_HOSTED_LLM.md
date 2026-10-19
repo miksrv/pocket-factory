@@ -231,27 +231,20 @@ Then forward the port on the router (`TCP <external port> → <box LAN IP>:8443`
 
 On the factory host (the directory with `docker-compose.yml` and `data/`):
 
-1. **Keys** into `.env` (the names are yours; a key variable must end with `_TOKEN`, `_KEY`,
-   `_API_KEY` or `_SECRET` and must not start with the factory's own prefixes):
+1. **The provider**: Settings → Providers → Add provider. Everything is in the form, keys
+   included: **New secret** beside **API key** adds a secret with the access "model providers
+   only" (Settings → Secrets marks it *provider key*): only the gateway reads it, no run gets it,
+   it is never shown again. No `.env` edit and no restart.
 
-   ```
-   MYBOX_TOKEN=<LLM_API_TOKEN from the box>
-   MYBOX_MCP_TOKEN=<MCP_HTTP_AUTH_TOKEN from the box>
-   ```
-
-2. Recreate the container so it sees the new variables: `docker compose up -d`.
-
-3. **The provider**: Settings → Providers → Add provider. Everything else is in the form:
-
-   - **URL** `https://203.0.113.10:<external port>`, **Key variable** `MYBOX_TOKEN`, the models
-     (or **Fetch from the endpoint**).
+   - **URL** `https://203.0.113.10:<external port>`, **API key** → New secret `MYBOX_API_KEY` =
+     `LLM_API_TOKEN` from the box, the models (or **Fetch from the endpoint**).
    - **TLS certificate**: paste `ca.crt` (the whole `-----BEGIN CERTIFICATE-----` block). The
      factory keeps it as `data/config/certs/mybox.pem` and trusts it at once, for this box only in
      practice (it signs nothing else); no `NODE_EXTRA_CA_CERTS`, no restart. Compare the
      fingerprint the form shows with the one you noted on the box. Leave it empty with a Let's
      Encrypt certificate or a cloud API.
    - **MCP servers** → Add MCP server: `search`, `https://203.0.113.10:<external port>/mcp`,
-     `MYBOX_MCP_TOKEN`. Only the tasks on this provider get it, through the factory's gateway,
+     its key → New secret `MYBOX_SEARCH_TOKEN` = `MCP_HTTP_AUTH_TOKEN` from the box. Only the tasks on this provider get it, through the factory's gateway,
      which adds the key; a task on the subscription never connects to the box.
 
    The same in `data/config/providers.yaml`, if you prefer the file (the certificate only through
@@ -262,7 +255,7 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
      - name: mybox
        kind: anthropic                      # Ollama speaks /v1/messages itself
        url: https://203.0.113.10:<external port>
-       token: MYBOX_TOKEN                   # the variable's NAME, never the key
+       token: MYBOX_API_KEY                 # the key secret's NAME, never the key
        models: [gemma4:12b, qwen3.5:9b]
        default: gemma4:12b
        concurrency: 1                       # one GPU serves one task at a time
@@ -272,7 +265,7 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
        mcp:                                 # only for the tasks on this provider
          - name: search
            url: https://203.0.113.10:<external port>/mcp
-           token: MYBOX_MCP_TOKEN
+           token: MYBOX_SEARCH_TOKEN
    ```
 
    `light: true` is the point for models under ~30B: Claude Code's own system prompt
@@ -281,7 +274,7 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
    with Read / Write / Edit / Bash / Glob / Grep worked on the first try. A frontier model can
    take `light: false` and the full tool set.
 
-4. **Test**: Settings → Providers → Test on the row (one tool-calling probe from the supervisor
+2. **Test**: Settings → Providers → Test on the row (one tool-calling probe from the supervisor
    and one MCP `initialize` per server; expect "tool calling ok" and "MCP search ok"), then a chat: `/model mybox` in Telegram or the selector in the chat
    head, and a task like "search the web for … and write three lines to notes.md".
 
@@ -305,8 +298,8 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
   ("Providers this project may delegate to"); with none ticked, a role runs on the subscription
   and the reply says so.
 - Ollama has no authentication of its own, so Caddy must stay the only thing published; keep
-  Ollama on `127.0.0.1`. Rotate a token by changing `.env` on both sides and recreating the
-  containers.
+  Ollama on `127.0.0.1`. Rotate a token by changing the box's `.env` and recreating its
+  containers, then **Update** on the key in the factory's Settings → Secrets.
 
 ## Variants
 
