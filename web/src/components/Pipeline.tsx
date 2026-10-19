@@ -388,11 +388,12 @@ function StepNode({
                   ? `skill ${str(step.skill)}`
                   : 'reads the instructions and what the steps found'
     const missing = (facts?.needs ?? []).filter((n) => n.from === null && !n.optional)
-    const state = edited ? 'edited' : last ? (last.ok ? 'ok' : 'failed') : 'idle'
+    const off = kind !== 'agent' && step.enabled === false
+    const state = edited ? 'edited' : last && !last.skipped && !off ? (last.ok ? 'ok' : 'failed') : 'idle'
     return (
         <button
             type='button'
-            className={`step-node ${kind} ${state}`}
+            className={`step-node ${kind} ${state}${off ? ' off' : ''}`}
             onClick={onOpen}
             title={`${KIND_LABEL[kind]}: ${name}${about ? `\n${about}` : ''}${step.continue_on_error === true ? '\nthe run goes on if it fails' : ''}`}
         >
@@ -426,6 +427,8 @@ function StepNode({
                 <span className='grow' />
                 {edited ? (
                     <span className='step-node-time'>unsaved</span>
+                ) : off ? (
+                    <span className='step-node-time'>off</span>
                 ) : (
                     last && (
                         <span className='step-node-time'>
@@ -760,13 +763,22 @@ function StepCard({
     const options = (kind === 'github-prs' || kind === 'trac' ? step[kind] : {}) as RawStep
     const setOptions = (patch: RawStep) => onChange({ ...step, [kind]: { ...options, ...patch } })
     // On every step but the agent: a failure lets the run go on, its error goes to the agent.
+    // And a switch: a step that is off is passed by in a run; Run on its card still tries it.
     const goesOn = (
-        <Check
-            checked={step.continue_on_error === true}
-            onChange={(on) => onChange({ ...step, continue_on_error: on || undefined })}
-            label='Continue if it fails'
-            title='The next steps and the agent still run; the error reaches the agent as this step’s output'
-        />
+        <>
+            <Check
+                checked={step.continue_on_error === true}
+                onChange={(on) => onChange({ ...step, continue_on_error: on || undefined })}
+                label='Continue if it fails'
+                title='The next steps and the agent still run; the error reaches the agent as this step’s output'
+            />
+            <Check
+                checked={step.enabled !== false}
+                onChange={(on) => onChange({ ...step, enabled: on ? undefined : false })}
+                label='Step on'
+                title='Off: a run passes it by; Run on this card still tries it'
+            />
+        </>
     )
     const [run, setRun] = useState<StepRun | null>(null)
     const [running, setRunning] = useState(false)

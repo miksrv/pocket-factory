@@ -63,7 +63,7 @@ describe('parseRoutine', () => {
                 steps: [
                     { name: 'stats', run: '${SKILL_DIR}/scripts/stats.sh', timeout_s: 60, cwd: 'tools' },
                     'echo plain',
-                    { run: 'gh pr list', items: true, continue_on_error: true },
+                    { run: 'gh pr list', items: true, continue_on_error: true, enabled: false },
                     { 'github-prs': { filter: 'review-requested', mine: 'yes', drafts: true, new_only: false } },
                     { name: 'bugs', trac: { query: 'status=new', url: 'https://trac.example.com/login' } },
                     { agent: 'reviewer', skill: 'pr-review' }
@@ -79,7 +79,8 @@ describe('parseRoutine', () => {
                     timeout_s: 60,
                     items: false,
                     new_only: false,
-                    continue_on_error: false
+                    continue_on_error: false,
+                    enabled: true
                 },
                 {
                     kind: 'run',
@@ -89,7 +90,8 @@ describe('parseRoutine', () => {
                     timeout_s: 300,
                     items: false,
                     new_only: false,
-                    continue_on_error: false
+                    continue_on_error: false,
+                    enabled: true
                 },
                 {
                     kind: 'run',
@@ -99,7 +101,8 @@ describe('parseRoutine', () => {
                     timeout_s: 300,
                     items: true,
                     new_only: true,
-                    continue_on_error: true
+                    continue_on_error: true,
+                    enabled: false
                 },
                 {
                     kind: 'github-prs',
@@ -109,7 +112,8 @@ describe('parseRoutine', () => {
                     mine: true,
                     drafts: true,
                     new_only: false,
-                    continue_on_error: false
+                    continue_on_error: false,
+                    enabled: true
                 },
                 {
                     kind: 'trac',
@@ -119,7 +123,8 @@ describe('parseRoutine', () => {
                     on_change: true,
                     max: 100,
                     new_only: true,
-                    continue_on_error: false
+                    continue_on_error: false,
+                    enabled: true
                 },
                 { kind: 'agent', name: 'agent', agent: 'reviewer', skill: 'pr-review' }
             ])
@@ -298,7 +303,8 @@ describe('parseRoutine', () => {
                 on_change: true,
                 max: 100,
                 new_only: true,
-                continue_on_error: false
+                continue_on_error: false,
+                enabled: true
             })
         })
 

@@ -34,6 +34,8 @@ export interface StepResult {
     items?: number
     /** It failed and the run went on (`continue_on_error`). */
     continued?: boolean
+    /** Switched off (`enabled: false`): the run passed it by. */
+    skipped?: boolean
 }
 
 /** The pipeline up to the agent: the scripts' text and the sources' items, in the order the steps ran. */
@@ -179,7 +181,8 @@ const head = (text: string) => (text.length > STEP_LOG_MAX ? `${text.slice(0, ST
  * a source that cannot reach its server) stops the run with its last lines,
  * before a single token is spent, unless it says `continue_on_error`: then
  * the run goes on and the agent gets the error as that step's output. The
- * agent step is where the pipeline ends.
+ * agent step is where the pipeline ends. A step with `enabled: false` is
+ * passed by.
  */
 export async function runPipeline(steps: Step[], ctx: StepContext): Promise<PipelineResult> {
     const started = Date.now()
@@ -198,6 +201,18 @@ export async function runPipeline(steps: Step[], ctx: StepContext): Promise<Pipe
     }
     for (const [index, step] of steps.entries()) {
         if (step.kind === 'agent') break
+        if (!step.enabled) {
+            result.steps.push({
+                index,
+                name: step.name,
+                kind: step.kind,
+                ok: true,
+                ms: 0,
+                log: 'switched off',
+                skipped: true
+            })
+            continue
+        }
         const at = Date.now()
         if (step.kind === 'run') {
             const run = await runScript(step, ctx)

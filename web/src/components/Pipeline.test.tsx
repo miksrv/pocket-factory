@@ -78,6 +78,17 @@ describe('StepsField', () => {
         expect(onChange).toHaveBeenLastCalledWith([STEPS[0], { ...STEPS[1], continue_on_error: true }, STEPS[2]])
     })
 
+    it('switches a step off', async () => {
+        mockFetch({})
+        const onChange = renderGraph()
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Stats/ }))
+        const dialog = await screen.findByRole('dialog')
+        await user.click(within(dialog).getByRole('checkbox', { name: 'Step on' }))
+        await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
+        expect(onChange).toHaveBeenLastCalledWith([{ ...STEPS[0], enabled: false }, STEPS[1], STEPS[2]])
+    })
+
     it('keeps a Trac address as typed and stores it as the site and the query', async () => {
         const onChange = renderGraph(vi.fn(), [{ trac: { url: '' } }, STEPS[2]])
         const user = userEvent.setup()

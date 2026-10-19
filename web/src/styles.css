@@ -3854,6 +3854,9 @@ textarea[data-secret] {
 .step-node.edited {
     border-style: dashed;
 }
+.step-node.off {
+    opacity: 0.55;
+}
 .step-node-head {
     display: flex;
     align-items: center;

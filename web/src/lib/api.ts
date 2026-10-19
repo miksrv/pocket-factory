@@ -721,6 +721,8 @@ export interface RoutineStepResult {
     items?: number
     /** It failed and the run went on (`continue_on_error`). */
     continued?: boolean
+    /** Switched off (`enabled: false`): the run passed it by. */
+    skipped?: boolean
 }
 
 /** A variable a step reads, and whether a run of the routine gets it. */

@@ -265,6 +265,24 @@ describe('providers', () => {
         })
     })
 
+    it('names a provider once in the secrets list when its MCP servers share a token', async () => {
+        t.ctx.vault.set('BOX_MCP_TOKEN', { value: 'mcp-token-1', provider: true })
+        await put('box', {
+            url: 'https://box.test',
+            models: ['m'],
+            mcp: [
+                { name: 'search', url: 'https://box.test/mcp', token: 'BOX_MCP_TOKEN' },
+                { name: 'reader', url: 'https://box.test/reader/mcp', token: 'BOX_MCP_TOKEN' }
+            ]
+        })
+        const secrets = (await (await t.request('/api/secrets')).json()) as {
+            entries: Array<{ name: string; used_by: Array<{ kind: string; name: string }> }>
+        }
+        expect(secrets.entries.find((e) => e.name === 'BOX_MCP_TOKEN')?.used_by).toEqual([
+            { kind: 'provider', name: 'box' }
+        ])
+    })
+
     it("refuses a run's secret as a provider's key", async () => {
         t.ctx.vault.set('GSC_API_KEY', { value: 'run-secret-1', secret: true })
         const res = await put('gsc', { url: 'http://x', models: ['m'], token: 'GSC_API_KEY' })
@@ -312,13 +330,13 @@ describe('providers', () => {
         await put('box', {
             url: 'http://box.test',
             models: ['m'],
-            mcp: [{ name: 'search', url: 'https://box.test/mcp', token: 'BOX_MCP_TOKEN' }]
+            mcp: [{ name: 'search', url: 'https://box.test/mcp', token: 'BOX_MCP_TOKEN_TOKEN' }]
         })
-        t.ctx.vault.set('BOX_MCP_TOKEN', { value: 'mcp-secret', provider: true })
+        t.ctx.vault.set('BOX_MCP_TOKEN_TOKEN', { value: 'mcp-secret', provider: true })
         const { tasks, providers } = t.ctx
         const box = providers.get('box')!
-        expect(providers.tokenVars()).toContain('BOX_MCP_TOKEN')
-        expect(tasks.agentEnv().BOX_MCP_TOKEN).toBeUndefined()
+        expect(providers.tokenVars()).toContain('BOX_MCP_TOKEN_TOKEN')
+        expect(tasks.agentEnv().BOX_MCP_TOKEN_TOKEN).toBeUndefined()
         const config = JSON.parse(tasks.providerMcpConfig(box)!) as {
             mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>
         }

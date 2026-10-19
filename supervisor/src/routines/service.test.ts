@@ -30,7 +30,8 @@ const trac: Step = {
     on_change: true,
     max: 100,
     new_only: true,
-    continue_on_error: false
+    continue_on_error: false,
+    enabled: true
 }
 
 /** A spec whose pipeline is the given steps plus the agent step (the orchestrator unless `agent` says otherwise). */
@@ -167,7 +168,8 @@ describe('buildPrompt', () => {
             timeout_s: 10,
             items: false,
             new_only: false,
-            continue_on_error: false
+            continue_on_error: false,
+            enabled: true
         }
         const prompt = buildPrompt(spec({}, [script]), 'x', [], schedule, paths)
         expect(prompt).not.toContain('## New since the last run')
@@ -181,7 +183,8 @@ describe('buildPrompt', () => {
             timeout_s: 10,
             items: true,
             new_only: true,
-            continue_on_error: false
+            continue_on_error: false,
+            enabled: true
         }
         const withItems = buildPrompt(spec({}, [source]), 'x', [{ key: 'a', title: 'A' }], 'manual', paths)
         expect(withItems).toContain('## Everything the sources see now (1)\n\nA')

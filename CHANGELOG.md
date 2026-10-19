@@ -7,7 +7,9 @@
 - Fixed: Settings → Sandboxes showed the Docker login as unknown on a server, though it was signed in
 - Fixed: a web reply sent to Telegram was lost when the factory's address has no dot (`https://mikserver`): such links stay out of the buttons
 - Fixed: a web reply forwarded to Telegram no longer leaves an empty Telegram chat in the list
+- Fixed: Settings → Secrets named a provider twice when two of its MCP servers share one token
 - Routines: a step may continue if it fails (Continue if it fails on its card): the run goes on and the agent gets its error
+- Routines: a step can be switched off (Step on on its card): runs pass it by, Run on the card still tries it
 
 ## 1.7.0
 
