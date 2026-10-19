@@ -8,7 +8,8 @@ import {
     type RoutineStepResult,
     type RoutineStepView,
     type RoutineView,
-    type StepRun
+    type StepRun,
+    type TaskStatus
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { CodeEditor } from './CodeEditor'
@@ -244,6 +245,7 @@ export function StepsField({
             facts={factsOf(view, saved, i, step)}
             edited={JSON.stringify(saved[i]) !== JSON.stringify(step)}
             last={lastSteps.find((r) => r.index === i && r.name === (view?.steps[i]?.name ?? str(step.name)))}
+            agentStatus={kindOf(step) === 'agent' && view?.last_run?.task_id ? view.last_run.task_status : null}
             onOpen={() => setEditing({ index: i, fresh: false })}
         />
     ))
@@ -360,6 +362,7 @@ function StepNode({
     facts,
     edited,
     last,
+    agentStatus,
     onOpen
 }: {
     index: number
@@ -367,6 +370,8 @@ function StepNode({
     facts?: RoutineStepView
     edited: boolean
     last?: RoutineStepResult
+    /** The agent step: how the last run's task is doing (it has no step result of its own). */
+    agentStatus?: TaskStatus | null
     onOpen: () => void
 }) {
     const kind = kindOf(step)
@@ -391,13 +396,19 @@ function StepNode({
     const off = kind !== 'agent' && step.enabled === false
     const state = edited
         ? 'edited'
-        : last?.running
-          ? 'running'
-          : last && !last.skipped && !off
-            ? last.ok
+        : agentStatus
+          ? agentStatus === 'queued' || agentStatus === 'running'
+              ? 'running'
+              : agentStatus === 'done'
                 ? 'ok'
                 : 'failed'
-            : 'idle'
+          : last?.running
+            ? 'running'
+            : last && !last.skipped && !off
+              ? last.ok
+                  ? 'ok'
+                  : 'failed'
+              : 'idle'
     return (
         <button
             type='button'
@@ -437,6 +448,8 @@ function StepNode({
                     <span className='step-node-time'>unsaved</span>
                 ) : off ? (
                     <span className='step-node-time'>off</span>
+                ) : agentStatus ? (
+                    <span className='step-node-time'>{agentStatus}</span>
                 ) : (
                     last && (
                         <span className='step-node-time'>

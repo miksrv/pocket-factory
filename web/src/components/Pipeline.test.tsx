@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { RoutineView } from '../lib/api'
 import { mockFetch } from '../test/fetch'
 import { renderWithProviders } from '../test/render'
 import { type RawStep, scriptName, scriptRef, StepsField } from './Pipeline'
@@ -76,6 +77,29 @@ describe('StepsField', () => {
         await user.click(within(dialog).getByRole('checkbox', { name: 'Continue if it fails' }))
         await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
         expect(onChange).toHaveBeenLastCalledWith([STEPS[0], { ...STEPS[1], continue_on_error: true }, STEPS[2]])
+    })
+
+    it("shows the agent step with the status of the last run's task", () => {
+        const view = {
+            steps: [],
+            last_run: { id: 1, status: 'queued', task_id: 't1', task_status: 'running', steps: [] }
+        } as unknown as RoutineView
+        renderWithProviders(
+            <StepsField
+                model={null}
+                steps={STEPS}
+                onChange={vi.fn()}
+                agents={['geometki']}
+                skills={[]}
+                routine='geo'
+                view={view}
+                saved={STEPS}
+                onChanged={vi.fn()}
+            />
+        )
+        const agent = screen.getByRole('button', { name: /orchestrator/ })
+        expect(agent).toHaveClass('running')
+        expect(within(agent).getByText('running')).toBeInTheDocument()
     })
 
     it('switches a step off', async () => {

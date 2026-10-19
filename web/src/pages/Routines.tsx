@@ -598,13 +598,20 @@ function Status({
     )
     const [toast, showToast] = useToast()
     const confirm = useConfirm()
-    // While a run's steps go (this Run now, or a timed firing): their progress every second and a half.
-    const going = busy === 'run' || view?.last_run?.status === 'running'
+    // While a run's steps go (this Run now, or a timed firing): their progress every second and a half;
+    // then, while its agent's task waits or works, every three seconds.
+    const task = view?.last_run?.task_id ? view.last_run.task_status : null
+    const pollMs =
+        busy === 'run' || view?.last_run?.status === 'running'
+            ? 1500
+            : task === 'queued' || task === 'running'
+              ? 3000
+              : 0
     useEffect(() => {
-        if (!going) return
-        const timer = setInterval(onChanged, 1500)
+        if (!pollMs) return
+        const timer = setInterval(onChanged, pollMs)
         return () => clearInterval(timer)
-    }, [going, onChanged])
+    }, [pollMs, onChanged])
     if (!view) return null
 
     const act = async (what: 'run' | 'preview' | 'forget' | 'toggle', work: () => Promise<string | null>) => {
