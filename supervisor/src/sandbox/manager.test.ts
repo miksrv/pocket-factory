@@ -332,6 +332,29 @@ network:own    probe     example.com:443        Protocol: TCP allow (Allow), dis
         await expect(manager.decide('network:abc', true)).rejects.toThrow(/no longer pending/)
     })
 
+    it("dismisses the CLI's telemetry and an address's cidr twin without asking the owner", async () => {
+        // As sbx printed them for an `ssh -p 8692` to an address and a refused port of it.
+        sbx.approvals = `APPROVAL       SANDBOX   TITLE                                     DETAIL                                                                    OPTIONS
+network:dd     pf-shop   http-intake.logs.us5.datadoghq.com:443    Protocol: TCP Resource type: domain no matching allow rule (default deny)  allow (Allow), dismiss (Dismiss)
+network:ip     pf-shop   95.105.109.25                             Protocol: TCP Resource type: cidr no matching allow rule (default deny)    allow (Allow), dismiss (Dismiss)
+network:port   pf-shop   95.105.109.25:8443                        Protocol: TCP Resource type: domain no matching allow rule (default deny)  allow (Allow), dismiss (Dismiss)
+`
+        const seen: string[] = []
+        manager.on('approval', (a) => seen.push(a.resource))
+        const release = manager.hold('pf-shop')
+        await manager.pollApprovals()
+        release()
+        expect(seen).toEqual(['95.105.109.25:8443'])
+        expect(manager.approvals().map((a) => a.id)).toEqual(['network:port'])
+        const dismissed = calls('policy')
+            .map((c) => c.join(' '))
+            .filter((c) => c.startsWith('policy approval respond'))
+        expect(dismissed).toEqual([
+            'policy approval respond network:dd --option dismiss',
+            'policy approval respond network:ip --option dismiss'
+        ])
+    })
+
     it('stops an idle sandbox, never a busy one', async () => {
         sbx.sandboxes.push(
             { name: 'pf-shop', status: 'running', last_used_at: new Date(Date.now() - 3_600_000).toISOString() },

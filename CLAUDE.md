@@ -13,7 +13,8 @@ you close your laptop lid*. Four things it adds on top of the CLI, in this order
    sessions in the owner's real checkouts, continue across messages, survive restarts.
 2. **Control over what agents do** — the Audit log (every model call, tool call, file edit,
    sub-agent, per agent and project), rendered transcripts, tokens and subscription windows.
-3. **Management** — agents, skills and projects as Markdown files edited in the UI or by the agent;
+3. **Management** — agents, skills and projects as Markdown files edited in the UI or by the agent
+   (project files only in the UI: they are read-only in a sandbox);
    presets; live model and tool lists.
 4. **Pipelines** — skills chaining sub-agents into repeatable flows; routines (an agent, its
    instructions, a pipeline of steps and schedules).
@@ -246,8 +247,11 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   `meta` `sandbox.rules.<name>` (the owner's rules never touched): the supervisor's port
   (`localhost:<port>`, how the proxy names `host.docker.internal`), a project file's `network:`,
   its SSH hosts, its routines' Trac sites. A blocked request (`sbx policy approval ls`, polled
-  every 5 s while a run goes on) reaches Telegram (`w|a|<id>` / `w|d|<id>`) and the project page;
-  Allow adds the host to the project file.
+  every 5 s while a run goes on) reaches Telegram (`w|a|<id>` / `w|d|<id>`), the project page and
+  a badge beside Settings; Allow adds the host to the project file. Dismissed without asking: the
+  CLI's telemetry (`*.datadoghq.com`; runs also get `DISABLE_TELEMETRY`) and sbx's `cidr` twin of
+  every TCP connection to an IP, which shows even when the `ip:port` rule let it through and which
+  an Allow never settles (a refused connection raises its `ip:port` request too).
 - **Preview** (one per project, owner 2026-10-19): the factory MCP's `preview({port,
   strip_prefix})` publishes the port on `PREVIEW_BIND` (the docker bridge) from `PREVIEW_PORTS`;
   `/preview/<project>/` needs the sign-in and redirects to `/preview/<project>/<key>/`, under which

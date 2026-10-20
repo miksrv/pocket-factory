@@ -76,6 +76,22 @@ const LIST_TTL_MS = 5_000
 const STATUS_TTL_MS = 60_000
 /** Approvals are looked at this often while anything runs in a sandbox. */
 const APPROVALS_EVERY_MS = 5_000
+/**
+ * Hosts a blocked request to is dismissed at once, never asked about: the CLI's own telemetry
+ * (Datadog log intake), which no task needs and the owner cannot judge from a host name.
+ */
+const QUIET_HOSTS = [/(^|\.)datadoghq\.com(:\d+)?$/]
+
+/**
+ * Requests dismissed without asking. Besides the quiet hosts: sbx raises a `cidr` request for the
+ * bare address of every TCP connection to an IP, even one its `ip:port` rule let through, and an
+ * Allow of it never sticks (the address goes into `network:` as a rule the check does not match),
+ * so it came back on every `ssh`. A connection that is really refused also raises its `ip:port`
+ * request, which is the one the owner answers.
+ */
+function quiet(approval: Approval): boolean {
+    return /Resource type: cidr\b/.test(approval.detail) || QUIET_HOSTS.some((re) => re.test(approval.resource))
+}
 const IDLE_EVERY_MS = 60_000
 /** Bumped when the one-time setup inside a sandbox changes: existing sandboxes get it again. */
 const SETUP_VERSION = 1
@@ -591,6 +607,11 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
             for (const id of this.pending.keys()) if (!ids.has(id)) this.pending.delete(id)
             for (const approval of list) {
                 if (this.pending.has(approval.id)) continue
+                if (quiet(approval)) {
+                    await this.sbx.respond(approval.id, 'dismiss').catch(() => undefined)
+                    log.debug(`${approval.sandbox}: ${approval.resource} dismissed without asking`)
+                    continue
+                }
                 const pending: PendingApproval = {
                     ...approval,
                     project: this.projectOf(approval.sandbox),

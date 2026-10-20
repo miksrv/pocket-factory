@@ -12,6 +12,7 @@ import {
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { Icon } from './Icon'
+import { STATUS_CHANGED } from './Layout'
 import { useConfirm } from './Modal'
 import { Button, Empty, ErrorBox, Stat, useToast } from './ui'
 
@@ -187,6 +188,7 @@ export function SandboxesSection() {
     const answer = (a: SandboxApproval, allow: boolean) =>
         void act(`approval ${a.id}`, async () => {
             await api.answerApproval(a.id, allow)
+            window.dispatchEvent(new Event(STATUS_CHANGED))
             return allow ? `Allowed ${a.resource}` : `${a.resource} stays blocked`
         })
     const refresh = () =>
@@ -415,6 +417,7 @@ export function ProjectSandboxCard({ slug }: { slug: string }) {
                             onAnswer={(allow) =>
                                 void act(`approval ${a.id}`, async () => {
                                     await api.answerApproval(a.id, allow)
+                                    window.dispatchEvent(new Event(STATUS_CHANGED))
                                     return allow ? `Allowed ${a.resource}` : `${a.resource} stays blocked`
                                 })
                             }

@@ -58,6 +58,8 @@ export function Layout() {
     const chatActive = status.data?.stats.chat_active ?? 0
     // Routines that need the owner: an invalid file or a prefilter that fails (a missed minute is told on the page and in Telegram).
     const routinesBad = (status.data?.stats.routines?.invalid ?? 0) + (status.data?.stats.routines?.failing.length ?? 0)
+    // Blocked network requests waiting for Allow / Deny in Settings → Sandboxes.
+    const approvals = status.data?.sandboxes?.approvals ?? 0
     // One badge per item: the Chat item shows what needs the owner first —
     // replies not seen yet, then questions waiting for an answer, then work in progress.
     const chatBadge =
@@ -223,6 +225,14 @@ export function Layout() {
                                         title={`${routinesBad} routine(s) need attention`}
                                     >
                                         {routinesBad}
+                                    </span>
+                                )}
+                                {item.to === '/settings' && approvals > 0 && (
+                                    <span
+                                        className='badge ask count'
+                                        title={`${approvals} blocked request(s) waiting for your answer`}
+                                    >
+                                        {approvals}
                                     </span>
                                 )}
                                 {item.to === '/chat' && chatBadge && (
