@@ -3,19 +3,24 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 /**
  * Minimal data hook: load on mount / when deps change, poll, expose reload.
  * Every response carries the generation of the deps it was requested under;
- * a late poll from the previous filter never overwrites the current one.
+ * a late poll from the previous filter never overwrites the current one, and
+ * an older request of the same deps that lands after a newer one is dropped.
  */
 export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], pollMs?: number) {
     const [data, setData] = useState<T | undefined>()
     const [error, setError] = useState<string | undefined>()
     const [loading, setLoading] = useState(true)
     const generation = useRef(0)
+    const sent = useRef(0)
+    const applied = useRef(0)
 
     const reload = useCallback(() => {
         const gen = generation.current
+        const seq = ++sent.current
         loader()
             .then((value) => {
-                if (gen !== generation.current) return
+                if (gen !== generation.current || seq < applied.current) return
+                applied.current = seq
                 setData(value)
                 setError(undefined)
             })

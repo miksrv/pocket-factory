@@ -69,9 +69,7 @@ describe('Changes', () => {
         expect(container).toBeEmptyDOMElement()
     })
 
-    // Bug: useAsync runs before the early return, so every task page without a checkout still asks
-    // GET /api/tasks/:id/changes (and polls nothing, but the request is wasted and fails on the server).
-    it.fails('does not ask for the changes of a task outside a checkout', () => {
+    it('does not ask for the changes of a task outside a checkout', () => {
         const fetch = mockFetch({})
         render(<Changes task={makeTask({ git: null })} />)
         expect(fetch).not.toHaveBeenCalled()

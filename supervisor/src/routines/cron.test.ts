@@ -261,6 +261,25 @@ describe('nextRun', () => {
     })
 })
 
+describe('nextRun across a DST day', () => {
+    it('skips to the real next midnight after a 23-hour day', () => {
+        // Sunday 2027-03-28 00:10 in Warsaw (+01:00); clocks spring forward that night, Monday 00:30 is +02:00.
+        const next = nextRun(parseCron('30 0 * * 1'), {}, 'Europe/Warsaw', utc('2027-03-27T23:10:00'))
+        expect(next?.toISOString()).toBe('2027-03-28T22:30:00.000Z')
+    })
+
+    it('skips to the real next midnight after a 25-hour day', () => {
+        // Sunday 2027-10-31 00:10 in Warsaw (+02:00); clocks fall back that night, Monday 00:30 is +01:00.
+        const next = nextRun(parseCron('30 0 * * 1'), {}, 'Europe/Warsaw', utc('2027-10-30T22:10:00'))
+        expect(next?.toISOString()).toBe('2027-10-31T23:30:00.000Z')
+    })
+
+    it('finds the first minute of a day whose midnight does not exist', () => {
+        const next = nextRun(parseCron('* * 6 9 *'), {}, 'America/Santiago', utc('2026-09-05T12:00:00'))
+        expect(next?.toISOString()).toBe('2026-09-06T04:00:00.000Z')
+    })
+})
+
 describe('startOfDay', () => {
     it('is midnight UTC in UTC', () => {
         expect(startOfDay(utc('2026-10-06T15:42:10'), 'UTC').toISOString()).toBe('2026-10-06T00:00:00.000Z')
@@ -285,10 +304,8 @@ describe('startOfDay', () => {
         expect(startOfDay(utc(at), 'Europe/Warsaw').toISOString()).toBe(expected)
     })
 
-    // Bug: on a day whose midnight does not exist (America/Santiago springs forward at 24:00 on
-    // 2026-09-05, so the 6th starts at 01:00 local = 04:00Z), the second offset read is taken at the
-    // first guess (04:00Z, already -03:00) and the result lands at 03:00Z, 23:00 of the previous day.
-    it.fails('handles a zone whose clocks change at midnight', () => {
+    // America/Santiago springs forward at 24:00 on 2026-09-05: the 6th starts at 01:00 local = 04:00Z.
+    it('handles a zone whose clocks change at midnight', () => {
         const start = startOfDay(utc('2026-09-06T15:00:00'), 'America/Santiago')
         expect(start.toISOString()).toBe('2026-09-06T04:00:00.000Z')
         expect(localTime(start, 'America/Santiago').key.slice(0, 10)).toBe('2026-09-06')

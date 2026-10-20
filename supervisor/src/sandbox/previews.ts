@@ -142,7 +142,17 @@ export class Previews extends EventEmitter<PreviewEvents> {
         let hostPort = port
         if (this.sandboxed) {
             if (old) await this.unpublish(old)
-            hostPort = await this.publish(sandbox, port, project)
+            try {
+                hostPort = await this.publish(sandbox, port, project)
+            } catch (error) {
+                // The old binding is gone: its row would only keep the sandbox from its idle stop.
+                if (old) {
+                    this.store.deletePreview(project)
+                    log.info(`${project}: preview closed (its new port could not be published)`)
+                    this.emit('closed', this.view(old), 'its new port could not be published')
+                }
+                throw error
+            }
         }
         const row = this.store.setPreview({
             project,

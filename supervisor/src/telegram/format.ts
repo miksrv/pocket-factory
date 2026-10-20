@@ -25,14 +25,27 @@ function inline(text: string): string {
     out = out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label: string, url: string) =>
         keep(`<a href="${escapeHtml(url).replace(/"/g, '&quot;')}">${escapeHtml(label)}</a>`)
     )
-    out = escapeHtml(out)
-    out = out.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    const escaped = escapeHtml(out)
+    out = escaped.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
     out = out.replace(/__([^_\n]+)__/g, '<b>$1</b>')
     out = out.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<i>$2</i>')
     out = out.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<i>$2</i>')
     out = out.replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
+    // Overlapping markers (`**a _b** c_`) give crossed tags, and Telegram refuses the whole message: such a
+    // line keeps its markers as text.
+    if (!nested(out)) out = escaped
     // eslint-disable-next-line no-control-regex -- NUL marks the placeholders of the kept spans
     return out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => kept[Number(i)])
+}
+
+/** Whether the emphasis tags open and close in order, each inside the one before. */
+export function nested(html: string): boolean {
+    const open: string[] = []
+    for (const [, closing, tag] of html.matchAll(/<(\/?)(b|i|s)>/g)) {
+        if (!closing) open.push(tag)
+        else if (open.pop() !== tag) return false
+    }
+    return open.length === 0
 }
 
 export function markdownToTelegramHtml(markdown: string): string {

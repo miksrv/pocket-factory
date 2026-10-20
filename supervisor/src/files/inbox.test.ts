@@ -153,6 +153,28 @@ describe('Inbox', () => {
         expect(fs.readdirSync(root).sort()).toEqual(['live', 'stray.txt'])
     })
 
+    it('keeps sweeping past a directory whose name is no conversation id', () => {
+        fs.mkdirSync(path.join(root, 'lost+found'))
+        inbox.save('dead', 'a.txt', Buffer.from('x'))
+        inbox.sweep(() => false)
+        expect(fs.readdirSync(root)).toEqual(['lost+found'])
+    })
+
+    it('never follows a link planted in the inbox, as the file or as the directory', () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-vault-'))
+        try {
+            fs.writeFileSync(path.join(outside, 'secrets.json'), '{}')
+            const saved = inbox.save('conv', 'a.txt', Buffer.from('x'))
+            fs.symlinkSync(path.join(outside, 'secrets.json'), path.join(root, 'conv', 'x.png'))
+            fs.symlinkSync(outside, path.join(root, 'linked'))
+            expect(inbox.get('conv', 'x.png')).toBeNull()
+            expect(inbox.get('linked', 'secrets.json')).toBeNull()
+            expect(inbox.get('conv', saved.name)).not.toBeNull()
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true })
+        }
+    })
+
     it('does nothing when the root does not exist', () => {
         const missing = new Inbox(path.join(root, 'nope'))
         expect(() => missing.sweep(() => false)).not.toThrow()

@@ -932,10 +932,12 @@ export class Store {
 
     /** The last firing of every routine, by name; with `withTask`, the last one that queued a task. */
     lastRoutineRuns(withTask = false): Map<string, RoutineRun> {
-        const filter = withTask ? 'AND task_id IS NOT NULL' : ''
+        // One pass grouped by name: a correlated MAX with the task filter cannot use the index's
+        // min/max shortcut and scanned every routine's runs once per run (seconds at 1000 runs a routine).
+        const filter = withTask ? 'WHERE task_id IS NOT NULL' : ''
         const rows = this.db
             .prepare(
-                `SELECT ${ROUTINE_RUN} WHERE r.id = (SELECT MAX(id) FROM schedule_runs WHERE schedule = r.schedule ${filter})`
+                `SELECT ${ROUTINE_RUN} WHERE r.id IN (SELECT MAX(id) FROM schedule_runs ${filter} GROUP BY schedule)`
             )
             .all()
             .map((row) => routineRunOf(row as unknown as RoutineRunRow))
@@ -957,12 +959,12 @@ export class Store {
      * item is back because it changed — maybe by the agent's own doing.
      */
     seenVariants(schedule: string, base: string): Array<{ key: string; first_seen: string; task_id: string | null }> {
-        const escaped = base.replace(/[\\%_]/g, (c) => `\\${c}`)
+        // `<base>@…` as a range on the primary key ('A' follows '@'): LIKE is case-insensitive and scans.
         return this.db
             .prepare(
-                "SELECT key, first_seen, task_id FROM seen_items WHERE schedule = ? AND key LIKE ? ESCAPE '\\' ORDER BY first_seen DESC"
+                'SELECT key, first_seen, task_id FROM seen_items WHERE schedule = ? AND key >= ? AND key < ? ORDER BY first_seen DESC'
             )
-            .all(schedule, `${escaped}@%`) as Array<{ key: string; first_seen: string; task_id: string | null }>
+            .all(schedule, `${base}@`, `${base}A`) as Array<{ key: string; first_seen: string; task_id: string | null }>
     }
     /** Of the given keys, the ones the routine already handed to a task (or seeded). */
     seenKeys(schedule: string, keys: string[]): Set<string> {
@@ -996,7 +998,9 @@ export class Store {
     dropRoutine(schedule: string): void {
         this.db.prepare('DELETE FROM seen_items WHERE schedule = ?').run(schedule)
         this.db.prepare('DELETE FROM schedule_runs WHERE schedule = ?').run(schedule)
-        this.db.prepare('DELETE FROM meta WHERE key LIKE ?').run(`schedule:${schedule}:%`)
+        // `_` is a LIKE wildcard and routine names may hold it: `pr_review` must not take `pr-review`'s marks.
+        const escaped = schedule.replace(/[\\%_]/g, (c) => `\\${c}`)
+        this.db.prepare("DELETE FROM meta WHERE key LIKE ? ESCAPE '\\'").run(`schedule:${escaped}:%`)
     }
 
     // ---- telegram topics --------------------------------------------------

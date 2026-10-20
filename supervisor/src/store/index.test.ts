@@ -544,4 +544,78 @@ describe('Store', () => {
             expect(store.listLoginAttempts()).toEqual([recent])
         })
     })
+    describe('routine runs and seen items', () => {
+        const run = (schedule: string, taskId: string | null, status: 'queued' | 'empty' = 'queued') =>
+            store.addRoutineRun({
+                schedule,
+                fired_at: T0.toISOString(),
+                trigger: 'cron',
+                status,
+                note: null,
+                items: 0,
+                task_id: taskId,
+                duration_ms: 0,
+                steps: null
+            })
+
+        it('finds the last run of every routine, and the last that queued a task', () => {
+            const c = store.createConversation('web', null)
+            const t1 = store.createTask(c.id, 'web', 'one')
+            const t2 = store.createTask(c.id, 'web', 'two')
+            run('a', t1.id)
+            const lastA = run('a', null, 'empty')
+            const withTaskB = run('b', t2.id)
+            const last = store.lastRoutineRuns()
+            expect(last.get('a')?.id).toBe(lastA.id)
+            expect(last.get('b')?.id).toBe(withTaskB.id)
+            const withTask = store.lastRoutineRuns(true)
+            expect(withTask.get('a')?.task_id).toBe(t1.id)
+            expect(withTask.get('b')?.id).toBe(withTaskB.id)
+        })
+
+        it('reads the last runs quickly with a thousand runs a routine', () => {
+            const insert = db.prepare(
+                'INSERT INTO schedule_runs (schedule, fired_at, trigger, status, items, task_id, duration_ms) VALUES (?, ?, ?, ?, 0, ?, 0)'
+            )
+            // One transaction: ten thousand autocommits take seconds on a slow CI disk.
+            db.exec('BEGIN')
+            for (let r = 0; r < 10; r++)
+                for (let i = 0; i < 1000; i++)
+                    insert.run(`r${r}`, T0.toISOString(), 'cron', 'empty', i % 50 ? null : `t${i}`)
+            db.exec('COMMIT')
+            const started = performance.now()
+            const last = store.lastRoutineRuns(true)
+            expect(performance.now() - started).toBeLessThan(200)
+            expect(last.size).toBe(10)
+            expect(last.get('r0')?.task_id).toBe('t950')
+        })
+
+        it('finds the earlier versions of an item by its exact base', () => {
+            store.markSeen(
+                's',
+                [
+                    { key: '42@1', title: null },
+                    { key: '42@2', title: null },
+                    { key: '420@1', title: null },
+                    { key: 'X42@1', title: null }
+                ],
+                null
+            )
+            expect(
+                store
+                    .seenVariants('s', '42')
+                    .map((v) => v.key)
+                    .sort()
+            ).toEqual(['42@1', '42@2'])
+            expect(store.seenVariants('s', '4_')).toEqual([])
+        })
+
+        it('drops a routine without touching the marks of a name that only matches as a pattern', () => {
+            store.setMeta('schedule:pr_review:seeded', true)
+            store.setMeta('schedule:pr-review:seeded', true)
+            store.dropRoutine('pr_review')
+            expect(store.getMeta('schedule:pr_review:seeded')).toBeUndefined()
+            expect(store.getMeta('schedule:pr-review:seeded')).toBe(true)
+        })
+    })
 })

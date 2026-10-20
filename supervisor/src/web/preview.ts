@@ -13,8 +13,10 @@ import { clientIp } from './request.js'
 
 const log = createLogger('preview')
 
-/** How long the app gets to accept a WebSocket's connection. */
+/** How long the app gets to answer a WebSocket's handshake. */
 const UPGRADE_CONNECT_MS = 10_000
+/** The most an app's handshake answer may carry before its blank line. */
+const UPGRADE_HEAD_MAX = 64 * 1024
 
 /** The most a request body to a preview may carry (a file upload in the app). */
 export const PREVIEW_BODY_MAX = 50 * 1024 * 1024
@@ -39,6 +41,9 @@ const HOP_BY_HOP = new Set([
     'transfer-encoding',
     'upgrade'
 ])
+
+/** Response headers that would act on the factory's whole origin (its sign-in, storage, transport), not on the app. */
+const FACTORY_WIDE = new Set(['clear-site-data', 'strict-transport-security', 'refresh'])
 
 const sameKey = (a: string, b: string) =>
     a.length === b.length && a.length > 0 && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -84,6 +89,13 @@ export function rewriteSetCookie(cookie: string, base: string, strip: boolean): 
     const path = parts.find((p) => /^path=/i.test(p))?.slice(5) ?? '/'
     const scoped = strip ? `${base}${path.replace(/^\//, '')}` : path.startsWith(base) ? path : base
     return [...kept, `Path=${scoped}`].join('; ')
+}
+
+/** The app's `Set-Cookie` lines as the browser gets them: scoped to the prefix, never one named like the factory's session. */
+export function appCookies(lines: string[], base: string, strip: boolean): string[] {
+    return lines
+        .filter((line) => line.split('=')[0].trim() !== SESSION_COOKIE)
+        .map((line) => rewriteSetCookie(line, base, strip))
 }
 
 /** Whether the request may open the signed-in address: a session, or open mode with a local / allowed Host. */
@@ -172,6 +184,12 @@ const CORS_PREFLIGHT = (request: Request) =>
         }
     })
 
+class BodyTooLarge extends Error {
+    constructor() {
+        super('request body too large')
+    }
+}
+
 /** Counts the body as it streams and fails it past PREVIEW_BODY_MAX. */
 function bounded(body: ReadableStream<Uint8Array>): Readable {
     let seen = 0
@@ -180,7 +198,7 @@ function bounded(body: ReadableStream<Uint8Array>): Readable {
             new TransformStream<Uint8Array, Uint8Array>({
                 transform(chunk, controller) {
                     seen += chunk.byteLength
-                    if (seen > PREVIEW_BODY_MAX) controller.error(new Error('request body too large'))
+                    if (seen > PREVIEW_BODY_MAX) controller.error(new BodyTooLarge())
                     else controller.enqueue(chunk)
                 }
             })
@@ -243,6 +261,8 @@ async function proxy(
             } else req.end()
         })
     } catch (error) {
+        // A chunked upload has no length to refuse up front: it is refused where it crosses the limit.
+        if (error instanceof BodyTooLarge) return new Response('request body too large', { status: 413 })
         log.debug(`${preview.project}: ${error instanceof Error ? error.message : String(error)}`)
         return notAnswering(preview.project, preview.port)
     }
@@ -251,16 +271,15 @@ async function proxy(
     for (const [name, value] of Object.entries(response.headers)) {
         if (value === undefined || HOP_BY_HOP.has(name) || name === 'set-cookie') continue
         if (name.startsWith('access-control-') || name === 'x-frame-options') continue
-        // Would act on the factory's whole origin (its sign-in, storage, transport), not on the app.
-        if (name === 'clear-site-data' || name === 'strict-transport-security' || name === 'refresh') continue
+        if (FACTORY_WIDE.has(name)) continue
         if (name === 'location') {
             out.set('location', rewriteLocation(String(value), base, preview.strip, `localhost:${preview.port}`))
             continue
         }
         for (const one of Array.isArray(value) ? value : [value]) out.append(name, one)
     }
-    for (const line of response.headers['set-cookie'] ?? [])
-        out.append('set-cookie', rewriteSetCookie(line, base, preview.strip))
+    for (const line of appCookies(response.headers['set-cookie'] ?? [], base, preview.strip))
+        out.append('set-cookie', line)
     out.append('content-security-policy', PREVIEW_CSP)
     out.set('access-control-allow-origin', '*')
     out.set('cross-origin-resource-policy', 'cross-origin')
@@ -278,13 +297,18 @@ async function proxy(
 
 /**
  * WebSocket upgrades under a preview's key (Vite HMR, Next dev): the handshake goes to the app with
- * the same rewrites, then the two sockets are piped. Anything else is closed.
+ * the same rewrites, its answer comes back with the cookies rewritten as the HTTP path does, then
+ * the two sockets are piped. Anything else is closed.
  */
-export function previewUpgrade(ctx: AppContext) {
+export function previewUpgrade(ctx: AppContext, options: { timeoutMs?: number } = {}) {
+    const timeoutMs = options.timeoutMs ?? UPGRADE_CONNECT_MS
     return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
         // Node drops its own error listener before `upgrade`: an unhandled reset would take the process down.
         socket.on('error', () => socket.destroy())
+        let answered = false
         const fail = (status: string): void => {
+            if (answered) return
+            answered = true
             if (!socket.writable) socket.destroy()
             else socket.end(`HTTP/1.1 ${status}\r\nconnection: close\r\ncontent-length: 0\r\n\r\n`)
         }
@@ -310,19 +334,60 @@ export function previewUpgrade(ctx: AppContext) {
             if (cookie) lines.push(`cookie: ${cookie}`)
             lines.push(`host: localhost:${upstream.preview.port}`)
             const target = net.connect(upstream.port, upstream.host, () => {
-                target.setTimeout(0)
                 target.write(`${lines.join('\r\n')}\r\n\r\n`)
                 if (head.length) target.write(head)
+            })
+            // The app's answer is read up to its blank line before anything reaches the browser.
+            let buffered = Buffer.alloc(0)
+            let piping = false
+            const answer = (chunk: Buffer): void => {
+                buffered = Buffer.concat([buffered, chunk])
+                const end = buffered.indexOf('\r\n\r\n')
+                if (end < 0) {
+                    if (buffered.length > UPGRADE_HEAD_MAX) {
+                        fail('502 Bad Gateway')
+                        target.destroy()
+                    }
+                    return
+                }
+                target.off('data', answer)
+                target.setTimeout(0)
+                const [status, ...fields] = buffered.subarray(0, end).toString('latin1').split('\r\n')
+                const code = /^HTTP\/1\.[01] (\d{3})/.exec(status)?.[1]
+                if (code !== '101') {
+                    // The app refused the upgrade: its status, never its body or headers.
+                    fail(code && /^[45]/.test(code) ? `${code} ${http.STATUS_CODES[code] ?? ''}` : '502 Bad Gateway')
+                    target.destroy()
+                    return
+                }
+                const cookies: string[] = []
+                const kept = fields.filter((field) => {
+                    const name = field.slice(0, field.indexOf(':')).trim().toLowerCase()
+                    if (name === 'set-cookie') cookies.push(field.slice(field.indexOf(':') + 1).trim())
+                    return name !== 'set-cookie' && !FACTORY_WIDE.has(name)
+                })
+                for (const cookie of appCookies(cookies, base, upstream.preview.strip))
+                    kept.push(`set-cookie: ${cookie}`)
+                answered = true
+                piping = true
+                socket.write(`${[status, ...kept].join('\r\n')}\r\n\r\n`)
+                const rest = buffered.subarray(end + 4)
+                if (rest.length) socket.write(rest)
                 target.pipe(socket)
                 socket.pipe(target)
-            })
-            // An app that never answers the connection must not hold both sockets open.
-            target.setTimeout(UPGRADE_CONNECT_MS, () => {
-                target.destroy()
+            }
+            target.on('data', answer)
+            // An app that never answers the handshake must not hold both sockets open.
+            target.setTimeout(timeoutMs, () => {
                 fail('504 Gateway Timeout')
+                target.destroy()
             })
-            target.on('error', () => fail('502 Bad Gateway'))
-            target.on('close', () => socket.destroy())
+            target.on('error', (error) => log.debug(`${project}: websocket: ${error.message}`))
+            // Before the answer the browser hears a 502; once the sockets are piped, a WebSocket is simply cut.
+            target.on('close', () => {
+                if (piping) socket.destroy()
+                else fail('502 Bad Gateway')
+            })
             socket.on('close', () => target.destroy())
         } catch {
             fail('400 Bad Request')

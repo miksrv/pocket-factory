@@ -49,10 +49,18 @@ export interface ChangedFile {
 
 const MAX_PATCH_BYTES = 400 * 1024
 
-function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, timeout = 30_000): Promise<string> {
+function git(
+    cwd: string,
+    args: string[],
+    env?: NodeJS.ProcessEnv,
+    timeout = 30_000,
+    /** Output past this many bytes is cut off and returned as is, not an error. */
+    upTo?: number
+): Promise<string> {
     return new Promise((resolve, reject) => {
-        execFile('git', args, { cwd, env, timeout, maxBuffer: 16 << 20 }, (error, stdout, stderr) => {
-            if (error) reject(new Error(`git ${args[0]}: ${stderr.trim() || error.message}`))
+        execFile('git', args, { cwd, env, timeout, maxBuffer: upTo ?? 16 << 20 }, (error, stdout, stderr) => {
+            if (error && upTo !== undefined && error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') resolve(stdout)
+            else if (error) reject(new Error(`git ${args[0]}: ${stderr.trim() || error.message}`))
             else resolve(stdout)
         })
     })
@@ -225,10 +233,21 @@ export async function filePatch(
     file: ChangedFile
 ): Promise<{ patch: string; truncated: boolean }> {
     const paths = file.from ? [file.from, file.path] : [file.path]
-    const patch = await git(cwd, ['diff', '-M', '--no-color', base, head, '--', ...paths])
-    return patch.length > MAX_PATCH_BYTES
-        ? { patch: patch.slice(0, MAX_PATCH_BYTES), truncated: true }
-        : { patch, truncated: false }
+    // A diff past the limit is cut at it: git is stopped there rather than read whole.
+    const patch = await git(
+        cwd,
+        ['diff', '-M', '--no-color', base, head, '--', ...paths],
+        undefined,
+        30_000,
+        MAX_PATCH_BYTES + 1
+    )
+    // Bytes, not characters: a Cyrillic diff cut at the byte cap is fewer characters than the cap.
+    if (Buffer.byteLength(patch) <= MAX_PATCH_BYTES) return { patch, truncated: false }
+    const cut = Buffer.from(patch)
+        .subarray(0, MAX_PATCH_BYTES)
+        .toString('utf8')
+        .replace(/\uFFFD+$/, '')
+    return { patch: cut, truncated: true }
 }
 
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeout = 60_000): Promise<string> {

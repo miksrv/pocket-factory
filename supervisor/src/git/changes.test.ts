@@ -140,6 +140,33 @@ describe('git snapshots and changes', () => {
         expect(patch.patch).toContain('-b')
     })
 
+    it('cuts a diff larger than any buffer at the limit instead of failing', async () => {
+        git('init', '-q')
+        write('a.txt', 'a\n')
+        const base = commit('base')
+        // Past the old 16 MB buffer: the read used to fail with nothing to show.
+        write('huge.txt', `${'x'.repeat(99)}\n`.repeat(175_000))
+        const head = commit('huge')
+        const [file] = await listFiles(dir, base, head)
+        const patch = await filePatch(dir, base, head, file)
+        expect(patch.truncated).toBe(true)
+        expect(patch.patch).toHaveLength(400 * 1024)
+    }, 30_000)
+
+    it('marks a Cyrillic diff cut at the byte limit as truncated, without a broken character', async () => {
+        git('init', '-q')
+        write('a.txt', 'a\n')
+        const base = commit('base')
+        // ~600 KB of two-byte characters: fewer than 400K characters, more than 400 KB.
+        write('ru.md', `${'ж'.repeat(99)}\n`.repeat(3_000))
+        const head = commit('ru')
+        const [file] = await listFiles(dir, base, head)
+        const patch = await filePatch(dir, base, head, file)
+        expect(patch.truncated).toBe(true)
+        expect(Buffer.byteLength(patch.patch)).toBeLessThanOrEqual(400 * 1024)
+        expect(patch.patch).not.toContain('\uFFFD')
+    })
+
     it('measures a task that stayed on its branch against where it started', async () => {
         git('init', '-q')
         write('a.txt', 'one\n')

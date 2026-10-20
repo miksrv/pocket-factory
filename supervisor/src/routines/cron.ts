@@ -100,6 +100,7 @@ export interface LocalTime {
 }
 
 const formatters = new Map<string, Intl.DateTimeFormat>()
+const MINUTE = 60_000
 
 export function isTimeZone(tz: string): boolean {
     try {
@@ -140,19 +141,43 @@ export function localTime(date: Date, tz: string): LocalTime {
 
 /**
  * The instant the local day of `date` began in `tz` (its midnight), for
- * "today" counters. The zone's offset is read twice, so a day that starts
- * on a DST change still lands on the right side of it.
+ * "today" counters. The zone's offset is read at a guess and again at the
+ * first answer, so a day that starts on a DST change still lands on the
+ * right side of it; a day whose midnight does not exist (clocks jump at
+ * 24:00) starts at the jump.
  */
 export function startOfDay(date: Date, tz: string): Date {
+    const [y, m, d] = localTime(date, tz).key.slice(0, 10).split('-').map(Number)
+    return startOfDate(y, m, d, tz)
+}
+
+/** The first instant of the local date y-m-d in `tz` (the day may overflow: the 32nd is the next month's 1st). */
+function startOfDate(y: number, m: number, d: number, tz: string): Date {
+    const day = (ms: number) => localTime(new Date(ms), tz).key.slice(0, 10)
     const wall = (ms: number) => {
         const t = localTime(new Date(ms), tz)
-        const [y, m, d] = t.key.slice(0, 10).split('-').map(Number)
-        return Date.UTC(y, m - 1, d, t.hour, t.minute)
+        const [ly, lm, ld] = t.key.slice(0, 10).split('-').map(Number)
+        return Date.UTC(ly, lm - 1, ld, t.hour, t.minute)
     }
-    const offset = (ms: number) => wall(ms) - Math.floor(ms / 60_000) * 60_000
-    const [y, m, d] = localTime(date, tz).key.slice(0, 10).split('-').map(Number)
+    const offset = (ms: number) => wall(ms) - Math.floor(ms / MINUTE) * MINUTE
     const midnight = Date.UTC(y, m - 1, d)
-    return new Date(midnight - offset(midnight - offset(midnight)))
+    const target = new Date(midnight).toISOString().slice(0, 10)
+    // The day's first minute: on the date, and the minute before it is not.
+    const first = (ms: number) => day(ms) === target && day(ms - MINUTE) < target
+    const c1 = midnight - offset(midnight)
+    const c2 = midnight - offset(c1)
+    const hit = [c1, c2].filter(first).sort((a, b) => a - b)[0]
+    if (hit !== undefined) return new Date(hit)
+    // Neither guess is the start (the day begins at a transition): the first minute whose date is
+    // the target, between a day before and a day after midnight UTC (every offset is within that).
+    let lo = midnight - 26 * 60 * MINUTE
+    let hi = midnight + 26 * 60 * MINUTE
+    while (hi - lo > MINUTE) {
+        const mid = lo + Math.floor((hi - lo) / 2 / MINUTE) * MINUTE
+        if (day(mid) >= target) hi = mid
+        else lo = mid
+    }
+    return new Date(hi)
 }
 
 function dayMatches(cron: Cron, t: LocalTime): boolean {
@@ -215,30 +240,37 @@ export function inWindow(window: Window, t: LocalTime): boolean {
     return true
 }
 
-const MINUTE = 60_000
-
 /**
  * The first minute after `from` that the cron and the window both allow, or
- * null within a year. Walks minute by minute but jumps to the next hour or
- * day when the larger field cannot match, so a weekly routine is found in a
- * few hundred steps.
+ * null within a year (or past `until`: the scheduler's tick looks no further
+ * than now). Jumps to the next allowed minute, hour or day when a field cannot
+ * match, so a weekly routine is found in a few dozen steps.
  */
-export function nextRun(cron: Cron, window: Window, tz: string, from = new Date()): Date | null {
+export function nextRun(cron: Cron, window: Window, tz: string, from = new Date(), until?: Date): Date | null {
     let t = new Date(Math.floor(from.getTime() / MINUTE) * MINUTE + MINUTE)
-    const limit = t.getTime() + 366 * 24 * 60 * MINUTE
+    const limit = Math.min(t.getTime() + 366 * 24 * 60 * MINUTE, until ? until.getTime() + MINUTE : Infinity)
     for (let steps = 0; steps < 200_000 && t.getTime() < limit; steps++) {
         const local = localTime(t, tz)
         if (!dayMatches(cron, local) || (window.days && !window.days.has(local.dow))) {
-            // Next day, 00:00 local (DST may make it 23:00 or 01:00; the loop corrects).
-            t = new Date(t.getTime() + ((23 - local.hour) * 60 + (60 - local.minute)) * MINUTE)
+            // The next local midnight, wherever DST puts it (a day may be 23 or 25 hours long).
+            const [y, m, d] = local.key.slice(0, 10).split('-').map(Number)
+            const next = startOfDate(y, m, d + 1, tz).getTime()
+            t = new Date(Math.max(next, t.getTime() + MINUTE))
             continue
         }
         if (!cron.hour.has(local.hour)) {
             t = new Date(t.getTime() + (60 - local.minute) * MINUTE)
             continue
         }
-        if (cron.minute.has(local.minute) && inWindow(window, local)) return t
-        t = new Date(t.getTime() + MINUTE)
+        if (cron.minute.has(local.minute)) {
+            if (inWindow(window, local)) return t
+            t = new Date(t.getTime() + MINUTE)
+            continue
+        }
+        // The next minute of the hour the cron allows, or the next hour.
+        let m = local.minute + 1
+        while (m < 60 && !cron.minute.has(m)) m++
+        t = new Date(t.getTime() + (m - local.minute) * MINUTE)
     }
     return null
 }

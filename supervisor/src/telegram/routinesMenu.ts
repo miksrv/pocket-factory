@@ -18,6 +18,10 @@ import { type Button, escapeHtml, row, text, type View } from './view.js'
 export type RoutineAction = 'list' | 'card' | 'run' | 'all' | 'on' | 'off' | 'preview' | 'runs' | 'open' | 'fire'
 
 const DATA_MAX = 64
+/** Telegram takes 4096 characters of text a message: a menu stays under it, with room for a note. */
+export const TEXT_MAX = 3800
+/** A keyboard takes 100 buttons at most; three per routine. */
+const LIST_MAX = 30
 const hashed = (name: string) => createHash('sha1').update(name).digest('hex').slice(0, 12)
 
 /** The key a routine's buttons carry: the name itself when it fits, its hash otherwise. */
@@ -131,17 +135,22 @@ export function routinesList(
             )
         ]
     const on = list.filter((r) => r.enabled && !r.errors.length).length
-    const view: View = [text(`<b>Routines</b> · ${list.length}, ${on} on`)]
+    const head = `<b>Routines</b> · ${list.length}, ${on} on`
+    const view: View = [text(head)]
+    const tail = note ? escapeHtml(note) : ''
+    let length = head.length + tail.length
+    let shown = 0
     for (const r of list) {
         const who = [r.agent, r.project].filter(Boolean).join(' · ')
-        view.push(
-            text(
-                `${routineState(r)} <b>${escapeHtml(r.name)}</b>${who ? ` — ${escapeHtml(who)}` : ''}\n<i>${escapeHtml(whenText(r))} · ${lastAndNext(r, now)}</i>`
-            ),
-            row(...actButtons(r))
-        )
+        const line = `${routineState(r)} <b>${escapeHtml(r.name)}</b>${who ? ` — ${escapeHtml(who)}` : ''}\n<i>${escapeHtml(whenText(r))} · ${lastAndNext(r, now)}</i>`
+        // The rest are in the web: past this a message is "too long" and nothing arrives.
+        if (shown >= LIST_MAX || length + line.length > TEXT_MAX - 60) break
+        length += line.length + 2
+        shown++
+        view.push(text(line), row(...actButtons(r)))
     }
-    if (note) view.push(text(escapeHtml(note)))
+    if (shown < list.length) view.push(text(`…and ${list.length - shown} more (all of them in the web)`))
+    if (tail) view.push(text(tail))
     view.push(
         row(
             { text: '🔄 Refresh', data: routineData('list') },
@@ -208,7 +217,7 @@ export function runsText(r: RoutineView, runs: RoutineRun[], timeZone: string, n
     const lines = [`📜 <b>${escapeHtml(r.name)}</b> · last ${runs.length} run${runs.length === 1 ? '' : 's'}`, '']
     if (!runs.length) lines.push('never ran')
     for (const run of runs) lines.push(runLine(run, timeZone, now))
-    return [text(lines.join('\n')), backToCard(r.name)]
+    return [text(capLines(lines).join('\n')), backToCard(r.name)]
 }
 
 const itemLine = (item: Item, isNew: boolean) =>
@@ -234,7 +243,21 @@ export function previewText(r: RoutineView, preview: Preview, max = 15): View {
         for (const item of preview.items.slice(0, max)) lines.push(itemLine(item, fresh.has(item.key)))
         if (preview.items.length > max) lines.push(`… and ${preview.items.length - max} more`)
     }
-    return [text(lines.join('\n').trim()), backToCard(r.name)]
+    return [text(capLines(lines).join('\n').trim()), backToCard(r.name)]
+}
+
+/**
+ * Lines up to `TEXT_MAX` characters in all, the rest named in a last line.
+ * Each line is whole HTML (a `<pre>` block is one line), so a cut never
+ * leaves a tag open.
+ */
+export function capLines(lines: string[], max = TEXT_MAX): string[] {
+    let length = 0
+    for (const [i, line] of lines.entries()) {
+        length += line.length + 1
+        if (length > max - 40) return [...lines.slice(0, i), `…and ${lines.length - i} more lines`]
+    }
+    return lines
 }
 
 /** The button row under a runs or preview message: back to the card. */

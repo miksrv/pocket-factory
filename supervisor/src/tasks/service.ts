@@ -30,6 +30,7 @@ import {
     type TaskGit
 } from '../git/changes.js'
 import { createLogger } from '../logger.js'
+import { routineOf } from '../routines/spec.js'
 import { collect, type Executor, LaunchError, LocalExecutor } from '../sandbox/executor.js'
 import type { Preview, Previews } from '../sandbox/previews.js'
 import type { ScopeContext, Vault } from '../secrets/vault.js'
@@ -177,6 +178,9 @@ export interface ProviderHealth {
     at: string | null
 }
 
+/** What the CLI prints for a `--resume` id it has no transcript for ("No conversation found with session ID: …"). */
+const SESSION_NOT_FOUND = /no conversation found/i
+
 /** How often the worker looks for queued tasks whose wait for a window reset is over. */
 const WAKE_INTERVAL_MS = 30_000
 /**
@@ -266,6 +270,13 @@ export function cutOffNote(result: Pick<RunResult, 'openAgentsAtResult' | 'stopp
     if (stopped > 0)
         return `⚠️ ${stopped === 1 ? 'A sub-agent' : `${stopped} sub-agents`} stopped before finishing, after this reply was written: the work is incomplete. Say "continue" to pick it up.`
     return ''
+}
+
+/** Why a run ended in an error result that carries no text of its own (max turns, execution errors). */
+export function stopReason(result: Pick<RunResult, 'subtype' | 'numTurns'>): string {
+    if (result.subtype === 'error_max_turns')
+        return `Stopped at the turn limit (${result.numTurns} turns, CLAUDE_MAX_TURNS). The session is kept: say "continue" to go on.`
+    return `claude stopped: ${result.subtype}`
 }
 
 /**
@@ -377,6 +388,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly launchRetries = new Map<string, number>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
     private readonly stopRequested = new Set<string>()
+    /** Tasks whose CLI has ended and whose end is being written (changes measured): too late to stop. */
+    private readonly finishing = new Set<string>()
+    /** Requests the CLI made while another one was shown (`tasks.ask` holds one): shown in turn, oldest first. */
+    private readonly asksWaiting = new Map<string, Ask[]>()
     /** Tasks found `running` at startup and failed by the store (restart limit reached); announced once a listener can deliver. */
     private readonly orphaned: Task[]
     private ticking = false
@@ -407,6 +422,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         options: { executor?: Executor; previews?: Previews | null } = {}
     ) {
         super()
+        // Every SSE stream and Telegram delivery listens here: no warning at the eleventh.
+        this.setMaxListeners(0)
         this.executor = options.executor ?? new LocalExecutor()
         this.previews = options.previews ?? null
         // A CLI in a sandbox reaches the supervisor through the host (spike S7), one on the supervisor at its own port.
@@ -442,6 +459,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             store.addEvent(task.id, 'error', { status: 'failed', error: task.error ?? undefined })
         }
         this.orphaned = failed
+        // A delegated role lives only for its parent: one whose parent failed (or ended) above is not run.
+        for (const child of store.listTasks({ status: 'queued', limit: 10_000 })) {
+            if (!child.parent_id) continue
+            const parent = store.getTask(child.parent_id)
+            if (parent?.status === 'queued' || parent?.status === 'running') continue
+            this.finish(child.id, { status: 'cancelled', error: 'its parent task ended while the supervisor was down' })
+        }
         if (requeued.length > 0)
             log.warn(`${requeued.length} task(s) were running when the supervisor stopped; re-queued`)
         if (failed.length > 0) log.warn(`${failed.length} task(s) hit the restart limit; marked failed`)
@@ -888,9 +912,18 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const question = openQuestions(asking.ask!)[0]
             // Files sent with an answer reach the agent as paths inside the answer text.
             if (question)
-                return this.answer(asking.id, {
-                    answers: { [question.question]: prompt + attachmentNote(attachments) }
-                })
+                try {
+                    return this.answer(asking.id, {
+                        answers: { [question.question]: prompt + attachmentNote(attachments) }
+                    })
+                } catch (error) {
+                    // A routine's thread is a log: a late answer there starts nothing.
+                    if (routineOf(conversation) || asking.schedule) throw error
+                    // The CLI ended meanwhile: the message is a new task, not an answer nobody reads.
+                    log.info(
+                        `${asking.id}: question no longer open, queued as a task: ${error instanceof Error ? error.message : String(error)}`
+                    )
+                }
         }
         // A bound conversation's task runs in that project's checkout, so that is its
         // project; an unbound one gets it detected from the task's own tool calls.
@@ -983,11 +1016,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         if (!handle.answer(ask.request_id, response)) {
             // The CLI no longer waits (cancelled, or the run ended meanwhile): drop the stale ask.
-            const updated = this.store.updateTask(taskId, { ask: null })
-            this.emit('task', updated)
+            this.emit('task', this.nextAsk(task))
             throw new Error('the request is no longer open')
         }
-        const updated = this.store.updateTask(taskId, { ask: null })
+        const updated = this.nextAsk(task)
         this.emit(
             'event',
             this.store.addEvent(
@@ -1007,6 +1039,23 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         log.info(`${taskId} answered: ${ask.kind} ${ask.tool_name} → ${response.behavior}`)
         this.emit('task', updated)
         return updated
+    }
+
+    /** The shown request is settled: the next one waiting takes its place, or none. */
+    private nextAsk(task: Task): Task {
+        const next = this.asksWaiting.get(task.id)?.shift()
+        const updated = this.store.updateTask(task.id, { ask: next ?? null })
+        if (next) {
+            log.info(`${task.id} asks: ${next.kind} ${next.tool_name} (was waiting)`)
+            this.settleLater(updated, next)
+        }
+        return updated
+    }
+
+    /** A request nobody will answer in person is answered for the owner (a role at once, a routine's after a while). */
+    private settleLater(task: Task, ask: Ask): void {
+        if (task.parent_id) this.answerLater(task.id, ask, true)
+        else if (task.schedule) this.answerLater(task.id, ask)
     }
 
     /**
@@ -1073,6 +1122,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     stop(taskId: string): boolean {
         this.stopChildren(taskId)
         const handle = this.running.get(taskId)
+        // The CLI has ended and its end is being written: nothing left to stop.
+        if (handle && this.finishing.has(taskId)) return false
         if (handle) {
             this.stopRequested.add(taskId)
             handle.kill()
@@ -1808,7 +1859,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     )
                         continue
                 }
-                const run = this.run(task).finally(() => this.runs.delete(run))
+                const run = this.run(task)
+                    .catch((error) =>
+                        log.error(`run of ${task.id} threw: ${error instanceof Error ? error.message : String(error)}`)
+                    )
+                    .finally(() => this.runs.delete(run))
                 this.runs.add(run)
             }
         } finally {
@@ -1817,17 +1872,31 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     private async run(task: Task): Promise<void> {
-        this.runningOn.set(task.id, task.provider)
-        const started = this.store.updateTask(task.id, { status: 'running', started_at: new Date().toISOString() })
-        this.emit('task', started)
-        this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running' }))
         try {
+            this.runningOn.set(task.id, task.provider)
+            const started = this.store.updateTask(task.id, { status: 'running', started_at: new Date().toISOString() })
+            this.emit('task', started)
+            this.emit('event', this.store.addEvent(task.id, 'status', { status: 'running' }))
             await this.attempt(task, true)
+        } catch (error) {
+            // Anything thrown while the run is set up (a vault file that does not parse …) ends the task, not the process.
+            const message = error instanceof Error ? error.message : String(error)
+            log.error(`task ${task.id} could not run: ${message}`)
+            try {
+                if (this.store.getTask(task.id)?.status === 'running')
+                    this.finish(task.id, { status: 'failed', error: message })
+            } catch (inner) {
+                log.error(
+                    `task ${task.id} could not be failed: ${inner instanceof Error ? inner.message : String(inner)}`
+                )
+            }
         } finally {
             this.running.delete(task.id)
             this.runningOn.delete(task.id)
             this.factoryOffers.delete(task.id)
             this.stopRequested.delete(task.id)
+            this.finishing.delete(task.id)
+            this.asksWaiting.delete(task.id)
             queueMicrotask(() => this.tick())
         }
     }
@@ -2056,16 +2125,28 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                             origin
                         )
                     )
-                    this.emit('task', this.store.updateTask(task.id, { ask }))
+                    // The row holds one request: another one (a second sub-agent) waits for its turn.
+                    if (this.store.getTask(task.id)?.ask) {
+                        const waiting = this.asksWaiting.get(task.id) ?? []
+                        waiting.push(ask)
+                        this.asksWaiting.set(task.id, waiting)
+                        log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name} (waits behind another)`)
+                        return
+                    }
+                    const updated = this.store.updateTask(task.id, { ask })
+                    this.emit('task', updated)
                     log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name}`)
-                    if (task.parent_id) this.answerLater(task.id, ask, true)
-                    else if (task.schedule) this.answerLater(task.id, ask)
+                    this.settleLater(updated, ask)
                     return
                 }
                 if (event.type === 'ask_cancelled') {
                     const current = this.store.getTask(task.id)
-                    if (current?.ask?.request_id === event.requestId)
-                        this.emit('task', this.store.updateTask(task.id, { ask: null }))
+                    if (current?.ask?.request_id === event.requestId) this.emit('task', this.nextAsk(current))
+                    else {
+                        const waiting = this.asksWaiting.get(task.id)
+                        const at = waiting?.findIndex((a) => a.request_id === event.requestId) ?? -1
+                        if (at >= 0) waiting!.splice(at, 1)
+                    }
                     return
                 }
                 const { type, agent: _agent, parentToolUseId: _parent, ...payload } = event
@@ -2120,6 +2201,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
 
         try {
             const result = await handle.result
+            this.finishing.add(task.id)
             if (result.sessionId) this.store.updateConversation(conversation.id, { session_id: result.sessionId })
             const last = result.rateLimits?.five_hour ?? null
             const before = previous && last && previous.resets_at === last.resets_at ? previous : first
@@ -2151,11 +2233,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 session_id: result.sessionId || conversation.session_id,
                 result: cutOff ? `${result.text}\n\n${cutOff}` : result.text,
                 // Error results (max turns, budget, execution errors) often carry no text: name the reason.
-                error: result.isError
-                    ? typeof waits === 'string'
-                        ? waits
-                        : result.text || `claude stopped: ${result.subtype}`
-                    : null,
+                error: result.isError ? (typeof waits === 'string' ? waits : result.text || stopReason(result)) : null,
                 num_turns: result.numTurns,
                 cost_usd: result.costUsd,
                 // Wall clock: the result's duration stops at the orchestrator's last turn, before background sub-agents end.
@@ -2167,6 +2245,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 window_5h_delta: delta
             })
         } catch (error) {
+            this.finishing.add(task.id)
             const message = error instanceof Error ? error.message : String(error)
             if (this.stopped && !this.stopRequested.has(task.id)) {
                 // Supervisor shutdown, not the owner's stop: leave the task
@@ -2189,7 +2268,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 await end({ status: 'failed', error: message })
                 return
             }
-            if (resuming && !sawOutput && mayRetry) {
+            // The CLI's own word that the session is gone forgets it; so does a resumed run that died before
+            // its first event (a stop, a timeout and a sandbox that would not start are handled above), since
+            // the CLI's words may not come through `sbx exec`, and a chat stuck on a dead session fails for ever.
+            if (resuming && mayRetry && (SESSION_NOT_FOUND.test(message) || !sawOutput)) {
                 log.warn(
                     `session ${conversation.session_id} of ${conversation.id} could not be resumed, starting afresh: ${message}`
                 )
@@ -2202,6 +2284,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     })
                 )
                 this.running.delete(task.id)
+                this.finishing.delete(task.id)
+                this.asksWaiting.delete(task.id)
                 await this.attempt(task, false)
                 return
             }

@@ -218,14 +218,15 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 ### Sessions and tasks
 
 - Every task is a one-shot `claude -p`; the conversation keeps the session id and the next task
-  resumes it. A session that cannot be resumed is forgotten and the task runs once more fresh. A
+  resumes it. A session the CLI cannot find ("No conversation found") is forgotten and the task runs once more fresh; any other early failure keeps it. A
   session cannot follow a cwd change: when the transcript's directory slug differs from the cwd,
   a fresh session starts.
 - **Sandboxes** (1.7.0; host setup, the upgrade and how sbx behaves: `docs/DEPLOY.md`): one persistent
   Docker Sandbox per project (`pf-<slug>`; `pf-factory` for project-less chats, titles, the limits
   probe, `claude mcp list`), made on first use with the checkout (or the workspaces root),
-  `data/claude`, `data/config`, `data/inbox` and `data/secrets/ssh` (ro) mounted **at their host
-  paths** (the container mounts them at the same paths, `DATA_DIR`, so cwd, attachments and
+  `data/claude`, `data/config` (ro, with `data/config/routines` rw inside: the supervisor trusts
+  project paths / networks, provider URLs and CAs from it; an older sandbox with it rw is made again),
+  `data/inbox` and `data/secrets/ssh` (ro) mounted **at their host paths** (the container mounts them at the same paths, `DATA_DIR`, so cwd, attachments and
   transcripts mean the same everywhere; `/data/<x>` links inside point at them for the files that
   name the old paths). `CLAUDE_CONFIG_DIR` = the host path of `data/claude`. Setup once per
   sandbox: the gh / git wrappers into `~/.local/bin`, git identity and credential helper, `~/.ssh`,
@@ -236,7 +237,9 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   dev servers stay: an open preview may need them). The manager starts a stopped sandbox itself
   and refuses a cwd it does not mount (a moved checkout: Reset). A sandbox that will not start
   (`LaunchError`) re-queues the task a minute later, three times, keeping its session. A project
-  named `factory` gets `pf-factory-project`. Vault names that stay on the host are refused. Idle `SANDBOX_IDLE_MIN` → stopped;
+  named `factory` gets `pf-factory-project`; names that slug alike (`my_app` / `my-app`) get a hash
+  suffix, all but the one that is its own slug. A checkout outside the workspaces is refused, and
+  `SANDBOX=sbx` refuses to start without `WEB_AUTH_PASSWORD`. Vault names that stay on the host are refused. Idle `SANDBOX_IDLE_MIN` → stopped;
   removed only by the owner's Reset. Routine scripts run in the routine's project sandbox;
   `github-prs` / `trac` sources and the Changes panel's git / gh stay on the supervisor.
 - **Network per sandbox**: sbx's `balanced` policy plus the factory's own rules, tracked by id in
@@ -265,7 +268,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   task stays `running`, the wall-clock timeout pauses, the slot is held for as long as it waits
   (owner's decision). Answered from the web (`Ask.tsx`; a message typed while a question is open
   is the answer) or Telegram (inline buttons `a|task|q|opt`, free text too). Under
-  `bypassPermissions` (the container) only `AskUserQuestion` arrives; in `acceptEdits` / `default`
+  `bypassPermissions` (the sandboxes) only `AskUserQuestion` arrives; in `acceptEdits` / `default`
   every unsettled tool does. A supervisor restart drops the pending ask; the resumed session asks
   again.
 - **Restarts**: a task left `running` by a supervisor restart is re-queued once (`tasks.restarts`)
@@ -332,7 +335,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   project file's `mcp:` list turns the others off via `--settings disabledMcpjsonServers`, since
   an allowlist does not work in `-p`), the owner's `data/config/mcp.json` passed with
   `--mcp-config` to every session, and `mcpServers:` in an agent's frontmatter for role-owned
-  tools. Secrets only as `${VAR}` from `.env`; `${VAR}` is **not** expanded in frontmatter (a stdio
+  tools. Secrets only as `${VAR}` from the run's environment (a vault secret in scope; `.env` only for the factory's own names); `${VAR}` is **not** expanded in frontmatter (a stdio
   server inherits the CLI's environment instead).
 - Role-owned servers: `mcpServers:` in an agent file is a **list** (a bare name or
   `- name: { type, command, … }`); the server starts for that sub-agent only. The call is still
@@ -366,15 +369,17 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   <provider>:<model>` set the chat's defaults for new chats (`meta` `telegram.chat.<id>`).
   `/mode thread` is the old behaviour: one conversation until `/new`, a reply switches and sticks.
   A question from a task that is not the topic says "reply to this message".
-- **No forum topics** (1.6.0, owner's call after 1.5.0: the clients handle a bot's private-chat
-  topics badly): the chat is flat, nothing sends `message_thread_id`, `telegram_threads` is dropped.
+- **No forum topics** (owner's call, 1.6.0: the clients handle a bot's private-chat topics badly):
+  the chat is flat, nothing sends `message_thread_id`.
 - **Buttons inside messages** (1.6.0): every message of the bot with buttons is a *view*
   (`telegram/view.ts`: text / buttons / footer blocks) sent as a rich message (`sendRichMessage`
   with `html`, `<tg-button-row>`, Bot API 10.3) and edited in place with `editMessageText` +
   `rich_message`; when Telegram refuses the rich form the same view goes as classic HTML with an
   inline keyboard. The agent's reply is rich *Markdown* with the footer and the button rows
-  appended as HTML. Callback data: `a|task|q|opt` answers, `p|task|allow|deny`, `r|action|key[|l]`
-  routines (`|l` = tapped in the list, redraw the list), `n|project` new chat, `m|alias`,
+  appended as HTML. Telegram never edits a message sent with `force_reply`, so only a question
+  without options asks for a reply; a stale tap gets a toast saying the answer it already has. Callback data: `a|task|q|opt` answers, `p|task|allow|deny`, `r|action|key[|l]`
+  routines (`|l` = tapped in the list, redraw the list), `c|task` continues a failed chat whose
+  session is kept (the turn limit), `n|project` new chat, `m|alias`,
   `md|mode`, `s|stop|task[|l|c]` (stay on the list / card), `u|refresh`, `v|<view>` menu. A
   routine button is acknowledged *before* the routine fires (a slow step outlives Telegram's
   callback window). The live draft (`telegram/draft.ts`) shows steps and the tool, never prose,
@@ -387,7 +392,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - The footer names the task's project and the windows with the task's share, not turns / tokens
   (those stay on the task page). The bot marks a conversation read only once delivery succeeded.
 
-### Routines (Schedules until 1.4.2)
+### Routines
 
 - A **routine** = a pipeline (`steps:`) and when it runs (`triggers:`); the body is the instruction
   for the agent step and the agent's own notes. **Files, not rows**: a folder
@@ -404,7 +409,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   checkout, `timeout_s:` 300, `items: true` makes it a source, `new_only:`), `- github-prs: {repo,
   filter, mine, drafts, new_only}`, `- trac: {url, query, on_change, max, new_only}` and, last and
   at most once, `- agent: <name | orchestrator>` with `skill:`. `routines/steps.ts` runs the
-  pipeline (`bash -c` in its own process group, SIGTERM then SIGKILL on timeout; env = the agent's
+  pipeline (`bash -c` in its own process group, in the sandbox marked as one run; SIGTERM then SIGKILL on timeout; env = the agent's
   plus `ROUTINE`, `ROUTINE_FILE`, `ROUTINE_DIR`, `PROJECT`, `PROJECT_DIR`, `SKILL_DIR`, and the vault's
   values in its scope); `routines/sources.ts` has
   the built-in sources and `parseItems`. A script's stdout (16k cap) lands in the prompt under
@@ -543,25 +548,24 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - Agents, skills and projects live only in `data/` (gitignored); `templates/` and `presets/` are
   the install-time seed. What an agent did, including edits to its own files, is the Audit log
   (built live from stream-json, never from transcripts after the fact).
-- **UI**: the rules are in `DESIGN.md` (forms: a row is always full, a hint is one short line). Light, Guild.ai-like (paper background, dot grid, mono font, pastel pills, icon tiles)
-  plus a dark theme on the same tokens (`:root[data-theme='dark']`; never write a literal `#fff`
-  on an ink or red surface). No UI framework. Icons are `lucide-react`, mapped once in
-  `components/Icon.tsx` (the same icon for the same concept everywhere); a tile never changes size;
-  agents get a pixel mascot. **One badge per sidebar item**: Chat shows unread (green) > waiting
-  (amber) > running (blue), never two. No blinking title. External links in rendered Markdown open
-  in a new tab, links into the factory stay.
+- **UI**: the rules are in `DESIGN.md` (look, components, forms, badges, motion). No UI
+  framework; agents get a pixel mascot.
 
 ## Next
 
-1. Routines: trigger `api` (a per-routine token, `POST /api/routines/<name>/fire`, see
-   `docs/plans/routines.md`); an IMAP source; steps after the agent (publish what it wrote);
-   whether the Trac source needs `/login` is unverified.
+1. Routines: trigger `api` (a per-routine token, `POST /api/routines/<name>/fire`, an optional
+   payload handed over as an untrusted item; covers `POST /api/tasks/fire` too); an IMAP source;
+   steps after the agent (publish what it wrote); renaming a routine's folder; a step's output as
+   a live log while it runs; whether the Trac source needs `/login` is unverified.
 2. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
-   `POST /api/tasks/fire`, "continue in chat" for a laptop session, Merge from the UI, files back
+   "continue in chat" for a laptop session, Merge from the UI, files back
    to the chat, budgets per agent / project, audit export.
-3. Providers: tokens moved off the subscription on the Overview, the delegation line in Telegram,
-   the 1.3.0 review follow-ups (`docs/plans/providers.md`).
+3. Providers: the follow-ups in `docs/plans/providers.md`.
 4. Sandboxes: the open checks of `docs/DEPLOY.md` (OAuth refresh over days, a reboot with the user
    unit), GitHub tokens and SSH keys through the sbx proxy instead of the env.
-5. Hardening: backups of `data/`, README for forkers, `useBlocker` for browser back, one shared
-   status poll, CodeMirror.
+5. Hardening: backups of `data/` (`docs/plans/database.md`), `useBlocker` for browser back, one
+   shared status poll.
+6. From the 2026-10-19 review: the chat thread re-renders whole on every keystroke and event
+   (memo + a separate composer); the task page refetches all events every 3 s; `beforeunload` in
+   the file and MCP editors; page tests for Chat, Agents, Audit, Settings, Projects and the bot.
+   UI simplifications waiting for the owner's call: `docs/plans/ui-review.md`.

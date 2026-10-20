@@ -103,9 +103,7 @@ describe('createApp security middleware', () => {
     })
 
     describe('body limit', () => {
-        // BUG: hono's bodyLimit throws an HTTPException(413) and app.onError in server.ts turns every
-        // error that is not BadName / NotFound into a 500, so an oversized body answers 500 instead of 413.
-        it.fails('refuses a JSON body over 2 MB with 413', async () => {
+        it('refuses a JSON body over 2 MB with 413', async () => {
             const big = 'x'.repeat(2 * 1024 * 1024 + 1)
             const res = await open().request('/api/conversations', {
                 method: 'POST',
@@ -115,8 +113,7 @@ describe('createApp security middleware', () => {
             expect(res.status).toBe(413)
         })
 
-        // BUG: same as above (HTTPException → 500 in app.onError).
-        it.fails('refuses an oversized body even without a Content-Length', async () => {
+        it('refuses an oversized body even without a Content-Length', async () => {
             const big = new Uint8Array(2 * 1024 * 1024 + 10)
             const stream = new ReadableStream<Uint8Array>({
                 start(controller) {

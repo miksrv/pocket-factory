@@ -84,6 +84,40 @@ describe('usePaged', () => {
         expect(result.current.loading).toBe(false)
     })
 
+    it('empties the list when the fresh first page is empty', async () => {
+        const backend = server([row('a', '1')])
+        const { result } = renderHook(() => usePaged(backend.fetchPage, options))
+        await waitFor(() => expect(ids(result.current.items)).toEqual(['a']))
+        // The last running task finished: the `running` filter now holds nothing.
+        backend.set([])
+        act(() => result.current.refresh())
+        await waitFor(() => expect(result.current.items).toEqual([]))
+        expect(result.current.hasMore).toBe(false)
+    })
+
+    it('starts over when more than a page arrived between polls, instead of leaving a hole', async () => {
+        const backend = server([row('b', '2'), row('a', '1')])
+        const { result } = renderHook(() => usePaged(backend.fetchPage, options))
+        await waitFor(() => expect(ids(result.current.items)).toEqual(['b', 'a']))
+        backend.set([row('e', '5'), row('d', '4'), row('c', '3'), row('b', '2'), row('a', '1')])
+        act(() => result.current.refresh())
+        await waitFor(() => expect(ids(result.current.items)).toEqual(['e', 'd']))
+        expect(result.current.hasMore).toBe(true)
+        act(() => result.current.loadMore())
+        await waitFor(() => expect(ids(result.current.items)).toEqual(['e', 'd', 'c', 'b']))
+    })
+
+    it('runs a load more asked for while a poll is in flight', async () => {
+        const backend = server([row('d', '4'), row('c', '3'), row('b', '2'), row('a', '1')])
+        const { result } = renderHook(() => usePaged(backend.fetchPage, options))
+        await waitFor(() => expect(result.current.items).toHaveLength(2))
+        act(() => {
+            result.current.refresh()
+            result.current.loadMore()
+        })
+        await waitFor(() => expect(ids(result.current.items)).toEqual(['d', 'c', 'b', 'a']))
+    })
+
     it('polls the first page', async () => {
         vi.useFakeTimers()
         const backend = server([row('a', '1')])

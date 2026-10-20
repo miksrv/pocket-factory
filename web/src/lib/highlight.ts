@@ -67,6 +67,8 @@ export function languageOf(filePath: string): string | undefined {
 /** Highlighted HTML for a code block; plain escaped text when nothing matches. */
 export function highlight(code: string, language?: string): { html: string; language: string } {
     if (language === 'plaintext' || language === 'text') return { html: escape(code), language: 'plaintext' }
+    // A lockfile or a generated bundle would hold the main thread for seconds: past this size it stays plain.
+    if (code.length > 100_000) return { html: escape(code), language: language ?? 'plaintext' }
     if (language && hljs.getLanguage(language)) {
         const result = hljs.highlight(code, { language, ignoreIllegals: true })
         return { html: result.value, language: result.language ?? language }

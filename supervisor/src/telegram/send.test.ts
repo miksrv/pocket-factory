@@ -44,4 +44,27 @@ describe('sendReply', () => {
         expect(await sendReply(bot, 1, 'short reply')).toEqual([7])
         expect(sendMessage).not.toHaveBeenCalled()
     })
+
+    it('does not send a second form after a timeout: the first may have arrived', async () => {
+        const { bot, sendMessage } = fakeBot()
+        ;(bot.api.sendRichMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network request timed out'))
+        const error = await sendReply(bot, 1, 'short reply').catch((e: unknown) => e)
+        expect(error).toBeInstanceOf(DeliveryError)
+        expect(sendMessage).not.toHaveBeenCalled()
+    })
+})
+
+describe('sendMarkdown fallback', () => {
+    it('sends plain text only when Telegram refuses the markup', async () => {
+        const { bot, sendMessage } = fakeBot()
+        sendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"))
+        expect(await sendMarkdown(bot, 1, 'a *b*')).toHaveLength(1)
+        expect(sendMessage).toHaveBeenCalledTimes(2)
+        expect(sendMessage.mock.calls[1][2]).not.toHaveProperty('parse_mode')
+
+        sendMessage.mockClear()
+        sendMessage.mockRejectedValueOnce(new Error('Internal Server Error'))
+        await expect(sendMarkdown(bot, 1, 'a *b*')).rejects.toThrow('1 chunk(s) not delivered')
+        expect(sendMessage).toHaveBeenCalledTimes(1)
+    })
 })

@@ -123,8 +123,11 @@ export class Inbox {
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return null
         const file = path.join(this.dir(conversationId), name)
         try {
-            const stat = fs.statSync(file)
+            // The inbox is mounted read-write in every sandbox: a link planted there (to the vault, the
+            // database) is never followed, whether it is the file or the conversation's directory.
+            const stat = fs.lstatSync(file)
             if (!stat.isFile()) return null
+            if (fs.realpathSync(file) !== path.join(fs.realpathSync(this.root), conversationId, name)) return null
             return { name, path: file, type: typeOf(name), size: stat.size }
         } catch {
             return null
@@ -149,7 +152,9 @@ export class Inbox {
     sweep(isLive: (conversationId: string) => boolean): void {
         if (!fs.existsSync(this.root)) return
         for (const entry of fs.readdirSync(this.root, { withFileTypes: true })) {
-            if (entry.isDirectory() && !isLive(entry.name)) this.remove(entry.name)
+            // A name that is no conversation id (lost+found, a directory an agent made) is not ours to judge.
+            if (!entry.isDirectory() || !/^[A-Za-z0-9-]+$/.test(entry.name)) continue
+            if (!isLive(entry.name)) this.remove(entry.name)
         }
     }
 

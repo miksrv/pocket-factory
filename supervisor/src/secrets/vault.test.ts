@@ -104,6 +104,20 @@ describe('Vault', () => {
         expect(vault.hasSecrets()).toBe(true)
     })
 
+    it('masks a secret pasted with a trailing newline or CRLF when it is printed without', () => {
+        vault.set('TOKEN', { value: 'tok-123456789\n', secret: true })
+        vault.set('CRLF', { value: 'line-one-abc\r\nline-two-def\r\n', secret: true })
+        expect(vault.redact('echo tok-123456789 done')).toBe(`echo ${MASK} done`)
+        expect(vault.redact('first line-one-abc, then line-two-def')).toBe(`first ${MASK}, then ${MASK}`)
+    })
+
+    it('sees a value changed in the file by hand', () => {
+        vault.set('PASS', { value: 'first-secret', secret: true })
+        expect(vault.redact('first-secret')).toBe(MASK)
+        vault.set('PASS', { value: 'second-secret' })
+        expect(vault.redact('first-secret second-secret')).toBe(`first-secret ${MASK}`)
+    })
+
     it('tells every change, never the value', () => {
         const changes: VaultChange[] = []
         vault.on('change', (c) => changes.push(c))

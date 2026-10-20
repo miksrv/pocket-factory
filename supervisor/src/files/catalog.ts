@@ -345,7 +345,12 @@ export class Catalog {
         } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
             existed = true
-            fd = fs.openSync(full, O_WRONLY | O_NOFOLLOW)
+            try {
+                fd = fs.openSync(full, O_WRONLY | O_NOFOLLOW)
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'EISDIR') throw new BadName(`"${rel}" is not a file`)
+                throw error
+            }
         }
         try {
             const stat = fs.fstatSync(fd)
@@ -369,6 +374,7 @@ export class Catalog {
         const src = this.folderFilePath(kind, name, from)
         const dst = this.folderFilePath(kind, name, to)
         if (!fs.existsSync(src)) throw new NotFound(`${kind}/${name}/${from} not found`)
+        if (!fs.lstatSync(src).isFile()) throw new BadName(`"${from}" is not a file`)
         if (fs.existsSync(dst)) throw new Conflict(`${to} exists already`)
         fs.mkdirSync(path.dirname(dst), { recursive: true })
         fs.renameSync(src, dst)
@@ -379,6 +385,7 @@ export class Catalog {
     removeFolderFile(kind: FolderKind, name: string, rel: string): void {
         const full = this.folderFilePath(kind, name, rel)
         if (!fs.existsSync(full)) throw new NotFound(`${kind}/${name}/${rel} not found`)
+        if (!fs.lstatSync(full).isFile()) throw new BadName(`"${rel}" is not a file`)
         fs.rmSync(full)
         this.pruneEmpty(kind, name, path.dirname(full))
     }

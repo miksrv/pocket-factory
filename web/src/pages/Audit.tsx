@@ -172,7 +172,7 @@ export function AuditPage() {
     const setProject = setParam('project', '')
     const [open, setOpen] = useState<number | null>(null)
     // Totals and facets come with the first page; the list itself is keyset-paged by event id.
-    const [summary, setSummary] = useState<Pick<Audit, 'stats' | 'facets'> | null>(null)
+    const [summary, setSummary] = useState<Required<Pick<Audit, 'stats' | 'facets'>> | null>(null)
     const hasMoreRef = useRef(false)
     // usePaged drops a page requested under older filters, but the side effects below run
     // regardless: they apply only when the request's filters are still the current ones.
@@ -183,7 +183,7 @@ export function AuditPage() {
         (before) =>
             api.audit({ period, kind, agent, project, before: before ? Number(before.id) : undefined }).then((page) => {
                 if (filters === current.current) {
-                    if (!before) setSummary({ stats: page.stats, facets: page.facets })
+                    if (!before && page.stats && page.facets) setSummary({ stats: page.stats, facets: page.facets })
                     hasMoreRef.current = page.has_more
                 }
                 return page.events

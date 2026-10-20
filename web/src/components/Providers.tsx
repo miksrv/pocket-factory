@@ -773,7 +773,7 @@ export function ProvidersSection() {
                             ? `${overview.providers.length} provider${overview.providers.length === 1 ? '' : 's'} besides the subscription`
                             : 'No other providers yet'
                         : 'Loading…'}{' '}
-                    · keys stay in .env
+                    · keys live in Secrets
                 </span>
                 <Button
                     size='sm'

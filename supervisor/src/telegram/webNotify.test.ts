@@ -119,4 +119,18 @@ describe('WebNotifier', () => {
         vi.advanceTimersByTime(10 * MIN)
         expect(told).toEqual([])
     })
+
+    it('logs a timer whose store call throws instead of crashing the process', () => {
+        notifier = new WebNotifier({
+            afterMs: MIN,
+            task: () => {
+                throw new Error('database is locked')
+            },
+            conversation: () => conversation,
+            notify: (kind, task) => told.push([kind, task.id])
+        })
+        finish()
+        expect(() => vi.advanceTimersByTime(MIN)).not.toThrow()
+        expect(told).toEqual([])
+    })
 })

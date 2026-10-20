@@ -160,7 +160,7 @@ export function RoutinesPage() {
                     const expr = cronOf(t).trim()
                     if (!expr) return `schedule ${i + 1}: a cron is required`
                     const check = cron.result(expr)
-                    if (check && !check.ok) return `schedule ${i + 1}: ${check.error}`
+                    if (check && !check.ok && !check.offline) return `schedule ${i + 1}: ${check.error}`
                 }
                 const steps = stepsOf(fm)
                 if (!steps.length) return 'the pipeline is empty: add a step or the agent'
@@ -491,7 +491,7 @@ export function RoutinesPage() {
  * the form's validation can consult it synchronously.
  */
 function useCronCheck() {
-    const [results, setResults] = useState<Record<string, CronCheck>>({})
+    const [results, setResults] = useState<Record<string, CronCheck & { offline?: boolean }>>({})
     const [pending, setPending] = useState('')
     useEffect(() => {
         const expr = pending.trim()
@@ -499,15 +499,17 @@ function useCronCheck() {
         const timer = setTimeout(() => {
             api.checkCron(expr)
                 .then((r) => setResults((prev) => ({ ...prev, [expr]: r })))
+                // The check could not be made (offline, signed out): said in the hint, never a reason to
+                // refuse the save (the server reads the cron again).
                 .catch((e: Error) =>
-                    setResults((prev) => ({ ...prev, [expr]: { ok: false, error: e.message, tz: '' } }))
+                    setResults((prev) => ({ ...prev, [expr]: { ok: false, error: e.message, tz: '', offline: true } }))
                 )
         }, 300)
         return () => clearTimeout(timer)
     }, [pending, results])
     return {
         ask: (expr: string) => setPending(expr),
-        result: (expr: string): CronCheck | undefined => results[expr.trim()]
+        result: (expr: string): (CronCheck & { offline?: boolean }) | undefined => results[expr.trim()]
     }
 }
 

@@ -12,7 +12,11 @@ import { Button, ErrorBox, Markdown } from './ui'
  * diff of one file only when it is tapped.
  */
 export function Changes({ task, onChanged }: { task: Task; onChanged?: () => void }) {
-    const changes = useAsync(() => api.taskChanges(task.id), [task.id, task.git?.head])
+    // A task outside a checkout has no changes to ask for (the hook runs before the early return).
+    const changes = useAsync(
+        () => (task.git?.head ? api.taskChanges(task.id) : Promise.resolve(undefined)),
+        [task.id, task.git?.head]
+    )
     const [pr, setPr] = useState<PullRequest | null>(null)
     const [creating, setCreating] = useState(false)
     const [prError, setPrError] = useState<string | null>(null)

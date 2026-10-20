@@ -57,14 +57,19 @@ export function started(child: ChildProcess): Promise<void> {
     })
 }
 
-/** Signal a process group started with `detached: true`; the child alone when that fails. */
+/**
+ * Signal a process group started with `detached: true`; the child alone when that fails. A KILL
+ * reaches the group even after its leader exited: a TERM ends bash first, and a child that
+ * ignores TERM (`trap '' TERM`) is still in the group.
+ */
 export function signalGroup(child: ChildProcess, sig: NodeJS.Signals): void {
-    if (child.exitCode !== null || child.signalCode !== null) return
+    const exited = child.exitCode !== null || child.signalCode !== null
+    if (exited && sig !== 'SIGKILL') return
     try {
         if (child.pid && process.platform !== 'win32') process.kill(-child.pid, sig)
-        else child.kill(sig)
+        else if (!exited) child.kill(sig)
     } catch {
-        // already gone
+        // already gone (ESRCH: the group is empty)
     }
 }
 
@@ -253,7 +258,8 @@ export class SbxExecutor implements Executor {
             })
         }
         const signal = (sig: NodeJS.Signals) => {
-            if (child.exitCode !== null || child.signalCode !== null) return
+            // A KILL goes in even when the client is gone: what ignored the TERM still carries the mark.
+            if (sig !== 'SIGKILL' && (child.exitCode !== null || child.signalCode !== null)) return
             this.sbx
                 .exec(name, ['sh', '-c', killByMark(runId, sig)], { timeoutMs: 30_000 })
                 .catch((error: unknown) =>

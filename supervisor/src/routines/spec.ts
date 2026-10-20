@@ -405,8 +405,9 @@ function parseTriggers(
     warnings: string[]
 ): { triggers: Trigger[]; legacySources: unknown[] } {
     const legacySources: unknown[] = []
-    const topPrefilter =
-        fm.prefilter !== undefined && fm.prefilter !== null && fm.prefilter !== '' && fm.prefilter !== false
+    // An empty `prefilter:` (`''`, `false`, nothing) is no source, wherever it stands.
+    const given = (v: unknown) => v !== undefined && v !== null && v !== '' && v !== false
+    const topPrefilter = given(fm.prefilter)
     // As in 1.5.0, a top-level prefilter counts only without `triggers:` (there it was ignored, with a warning).
     if (topPrefilter && (fm.triggers === undefined || fm.triggers === null)) {
         warnings.push('prefilter: is read as the first step; move it under steps:')
@@ -439,7 +440,7 @@ function parseTriggers(
         }
         // A poll of 1.5.0: the same minute as a schedule; its prefilter is a source step now.
         if (isPoll) {
-            if (o.prefilter !== undefined && o.prefilter !== null) legacySources.push(o.prefilter)
+            if (given(o.prefilter)) legacySources.push(o.prefilter)
             warnings.push(`${at}: poll: is read as schedule:, its prefilter as a step; move it under steps:`)
         } else if (o.prefilter !== undefined)
             warnings.push(`${at}: a schedule has no prefilter; sources live under steps:`)

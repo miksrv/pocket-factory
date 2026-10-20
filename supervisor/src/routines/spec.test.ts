@@ -278,6 +278,12 @@ describe('parseRoutine', () => {
             )
         })
 
+        it.each([[''], [false]])('reads a poll with an empty prefilter (%j) as a plain schedule, no step', (empty) => {
+            const parsed = parse({ triggers: [{ poll: '0 8 * * *', prefilter: empty }], agent: 'reviewer' })
+            expect(parsed.errors).toEqual([])
+            expect(parsed.spec?.steps).toMatchObject([{ kind: 'agent', agent: 'reviewer' }])
+        })
+
         it('refuses a schedule next to a poll with a prefilter: one pipeline would gate the schedule too', () => {
             const parsed = parse({
                 triggers: [

@@ -192,7 +192,7 @@ export interface ViewSendOptions {
  * does not know): the classic form is worth a try. A timeout or a 5xx may have delivered the
  * message, a 429 says wait, a 403 says nobody is there: a second send would only add noise.
  */
-function refused(error: unknown): boolean {
+export function refused(error: unknown): boolean {
     if (error instanceof GrammyError) return error.error_code === 400 || error.error_code === 404
     return /bad request|not found/i.test(errorText(error))
 }

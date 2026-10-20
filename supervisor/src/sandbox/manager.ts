@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -65,6 +66,8 @@ export interface SandboxStatus {
 export interface ManagerEvents {
     /** A request a sandbox's policy held back, seen for the first time. */
     approval: [approval: PendingApproval]
+    /** A sandbox made with an older set of mounts was removed to be made again (what Reset does). */
+    recreated: [name: string, reason: string]
 }
 
 /** How long `sbx ls` is trusted inside `ensure`, so a burst of tasks does not list once each. */
@@ -78,19 +81,43 @@ const IDLE_EVERY_MS = 60_000
 const SETUP_VERSION = 1
 /** The wrappers that give git and gh a token per repository owner, copied into every sandbox. */
 const HELPERS = ['gh', 'gh-token', 'git-credential-owner']
+/** A rule the factory added whose id sbx did not give: kept so it is not added again. */
+const UNTRACKED_RULE = '?'
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-/** `pf-<slug>`: a project slug as sbx accepts it (lower case, letters, digits, hyphens, periods). */
-export function sandboxName(project: string | null): string {
-    if (!project) return FACTORY_SANDBOX
+/** The slug part of `pf-<slug>` as sbx accepts it (lower case, letters, digits, hyphens, periods). */
+function slugOf(project: string): string {
     const slug = project
         .toLowerCase()
         .replace(/[^a-z0-9.-]+/g, '-')
         .replace(/^[-.]+|[-.]+$/g, '')
         .slice(0, 60)
     // A project named "factory" must not take the factory's own sandbox.
-    return `${SANDBOX_PREFIX}${slug === 'factory' ? 'factory-project' : slug || 'project'}`
+    return slug === 'factory' ? 'factory-project' : slug || 'project'
+}
+
+/**
+ * `pf-<slug>`. Slugging loses case and `_`, so when another of `projects` comes out the same
+ * (`my_app` next to `my-app`), each name that is not its own slug gets a short hash of itself:
+ * they never share a sandbox, and a name that collides with nothing keeps the sandbox it has.
+ */
+export function sandboxName(project: string | null, projects: readonly string[] = []): string {
+    if (!project) return FACTORY_SANDBOX
+    const slug = slugOf(project)
+    const clash = slug !== project && projects.some((other) => other !== project && slugOf(other) === slug)
+    if (!clash) return `${SANDBOX_PREFIX}${slug}`
+    const hash = createHash('sha256').update(project).digest('hex').slice(0, 8)
+    return `${SANDBOX_PREFIX}${slug.slice(0, 51).replace(/[-.]+$/, '')}-${hash}`
+}
+
+/** The path with its links resolved, or as given when it does not exist. */
+const realpath = (p: string) => {
+    try {
+        return fs.realpathSync(p)
+    } catch {
+        return path.resolve(p)
+    }
 }
 
 /** Whether `file` is `dir` or inside it. */
@@ -119,6 +146,7 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
     private approvalsBusy = false
     /** Idle stops in flight: an `ensure` waits for one rather than exec into a VM going down. */
     private readonly stopping = new Map<string, Promise<void>>()
+    private idling = false
     /** Rule updates one after another per sandbox: they read and write the same `meta` row. */
     private readonly ruling = new Map<string, Promise<void>>()
 
@@ -161,13 +189,27 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
     }
 
     nameFor(project: string | null): string {
-        return sandboxName(project)
+        const projects = this.refs.projects()
+        return sandboxName(project && this.canonical(project, projects), projects)
+    }
+
+    /**
+     * The project file's own name for what a chat or a detection called it (`Geometki` for
+     * `geometki.md`, a checkout's folder name): one project, one sandbox, however it is spelled.
+     */
+    private canonical(project: string, projects: string[]): string {
+        if (projects.includes(project)) return project
+        const lower = project.toLowerCase()
+        const byCase = projects.find((p) => p.toLowerCase() === lower)
+        if (byCase) return byCase
+        const checkout = this.refs.projectPath(project)
+        return (checkout && projects.find((p) => this.refs.projectPath(p) === checkout)) || project
     }
 
     /** The project a `pf-*` sandbox belongs to (null for the factory's own or a stranger). */
     projectOf(name: string): string | null {
         if (name === FACTORY_SANDBOX) return null
-        return this.refs.projects().find((p) => sandboxName(p) === name) ?? null
+        return this.refs.projects().find((p, _, all) => sandboxName(p, all) === name) ?? null
     }
 
     /** A run started in the sandbox; the returned function ends it. */
@@ -204,7 +246,7 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
      * sbx's own words when it cannot be made (no Docker login, no KVM, a checkout that is gone).
      */
     ensure(project: string | null, cwd?: string): Promise<string> {
-        const name = sandboxName(project)
+        const name = this.nameFor(project)
         const busy = this.ensuring.get(name)
         if (busy) return busy.then((n) => (cwd ? this.mounted(n, cwd).then(() => n) : n))
         const job = this.prepare(name, project, cwd).finally(() => this.ensuring.delete(name))
@@ -226,15 +268,39 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
         await this.stopping.get(name)
         const workspace = project ? this.refs.projectPath(project) : this.config.paths.workspacesRoot
         if (!workspace) throw new Error(`project "${project}" has no checkout on disk`)
+        // A project file says where its checkout is, and it is mounted read-write: never the data
+        // directory, the vault or anything else outside the workspaces.
+        if (project && !under(realpath(workspace), realpath(this.config.paths.workspacesRoot)))
+            throw new Error(
+                `project "${project}": ${workspace} is outside the workspaces (${this.config.paths.workspacesRoot})`
+            )
         let found: SandboxInfo | undefined
         try {
             found = (await this.list()).find((s) => s.name === name)
         } catch (error) {
             throw new Error(`Docker Sandboxes: ${message(error)}`, { cause: error })
         }
+        if (found && this.writableConfig(found)) {
+            // Made before data/config went read-only: its mounts only change with a new sandbox. Not
+            // while another run or an open preview uses it; the next task that finds it free does it.
+            if (this.activeRuns(name) || this.refs.pinned(name))
+                log.warn(`${name}: still mounts ${this.config.paths.configRoot} read-write; made again once it is free`)
+            else {
+                await this.sbx.rm(name)
+                this.swept.delete(name)
+                this.listing = null
+                found = undefined
+                const reason = 'its data/config mount was read-write; the agent may no longer change it'
+                log.info(`${name}: removed to be made again (${reason})`)
+                this.emit('recreated', name, reason)
+            }
+        }
         if (!found) {
             const mounts = this.mounts(workspace)
             log.info(`creating sandbox ${name} (${mounts.join(', ')})`)
+            // Forgotten before the create: a half-made sandbox is set up and given its rules on the next run.
+            this.store.setMeta(`sandbox.setup.${name}`, null)
+            this.store.setMeta(`sandbox.rules.${name}`, {})
             try {
                 await this.sbx.create(name, mounts, {
                     memory: this.config.sandbox.memory || undefined,
@@ -244,8 +310,6 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
                 throw new Error(`Docker Sandboxes could not create ${name}: ${message(error)}`, { cause: error })
             }
             this.listing = null
-            this.store.setMeta(`sandbox.setup.${name}`, null)
-            this.store.setMeta(`sandbox.rules.${name}`, {})
             this.swept.add(name)
         } else if (!this.swept.has(name)) {
             // A previous supervisor's runs outlive it inside the VM (killing `sbx exec` does not reach
@@ -287,17 +351,34 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
         return name
     }
 
-    /** Mounted read-write at their own paths, so every path means the same inside and out (spike S3). */
+    /**
+     * Mounted at their own paths, so every path means the same inside and out (spike S3). The
+     * checkout, `data/claude` (agents, skills, sessions) and the inbox read-write; `data/config` read
+     * only, because the supervisor trusts it (a project's path and network, a provider's URL, the
+     * CAs), with only its routines writable inside: an agent keeps its notes in its routine.
+     */
     private mounts(workspace: string): string[] {
         const { dataRoot, configRoot } = this.config.paths
         const inbox = path.join(dataRoot, 'inbox')
+        const routines = path.join(configRoot, 'routines')
         fs.mkdirSync(inbox, { recursive: true })
-        fs.mkdirSync(configRoot, { recursive: true })
-        const dirs = [workspace, this.config.claude.configDir, configRoot, inbox]
+        fs.mkdirSync(routines, { recursive: true })
+        const list = [...new Set([workspace, this.config.claude.configDir, inbox])]
+        list.push(`${configRoot}:ro`, routines)
         const ssh = path.join(dataRoot, 'secrets', 'ssh')
-        const list = [...new Set(dirs)]
         if (fs.existsSync(ssh)) list.push(`${ssh}:ro`)
         return list
+    }
+
+    /**
+     * Whether a sandbox was made before `data/config` went read-only (its mounts are fixed until a
+     * Reset). Told by what every newer one has, a mount of its own for the routines, never by how sbx
+     * spells a read-only mount: a misreading would make every sandbox again on every task.
+     */
+    private writableConfig(found: SandboxInfo): boolean {
+        const { configRoot } = this.config.paths
+        const dirs = (found.workspaces ?? []).map((w) => w.replace(/:ro$/, ''))
+        return dirs.includes(configRoot) && !dirs.includes(path.join(configRoot, 'routines'))
     }
 
     /**
@@ -375,18 +456,40 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
         )
         const known = this.store.getMeta<Record<string, string>>(`sandbox.rules.${name}`) ?? {}
         const next: Record<string, string> = {}
-        for (const [resource, id] of Object.entries(known)) {
-            if (wanted.has(resource)) next[resource] = id
-            else await this.sbx.policyRemove(name, id).catch((error: unknown) => log.warn(`${name}: ${message(error)}`))
+        // Saved whatever happens: a rule added before a failure keeps its id, a failed removal is tried again.
+        try {
+            for (const [resource, id] of Object.entries(known)) {
+                if (wanted.has(resource)) next[resource] = id
+                else if (id === UNTRACKED_RULE)
+                    log.warn(`${name}: the rule on ${resource} has no id; remove it by hand`)
+                else
+                    await this.sbx.policyRemove(name, id).catch((error: unknown) => {
+                        next[resource] = id
+                        log.warn(`${name}: ${message(error)}`)
+                    })
+            }
+            for (const resource of wanted) {
+                if (next[resource]) continue
+                next[resource] =
+                    (await this.sbx.policyAllow(name, resource)) ?? (await this.ruleId(name, resource, next))
+                log.info(`${name}: allowed ${resource}`)
+            }
+        } finally {
+            this.store.setMeta(`sandbox.rules.${name}`, next)
         }
-        for (const resource of wanted) {
-            if (next[resource]) continue
-            const id = await this.sbx.policyAllow(name, resource)
-            if (id) next[resource] = id
-            else log.warn(`${name}: sbx gave no id for the rule on ${resource}; it is not tracked`)
-            log.info(`${name}: allowed ${resource}`)
-        }
-        this.store.setMeta(`sandbox.rules.${name}`, next)
+    }
+
+    /**
+     * The id of a rule sbx added without naming it, from its policy list: the one rule on the resource
+     * not tracked yet. Otherwise a placeholder, so the rule is not added again on every run.
+     */
+    private async ruleId(name: string, resource: string, tracked: Record<string, string>): Promise<string> {
+        const ids = new Set(Object.values(tracked))
+        const rules = await this.sbx.policyList(name).catch(() => [])
+        const matches = rules.filter((r) => r.id && !ids.has(r.id) && r.resources.includes(resource))
+        if (matches.length === 1) return matches[0].id
+        log.warn(`${name}: sbx gave no id for the rule on ${resource}; it is not removed when the project drops it`)
+        return UNTRACKED_RULE
     }
 
     /** The supervisor as the VM reaches it: `host.docker.internal:<port>` goes to the host's loopback, which the policy calls `localhost` (spike S7). */
@@ -406,7 +509,7 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
         if (!this.enabled) return
         const names = new Set((await this.list(true)).map((s) => s.name))
         for (const project of [null, ...this.refs.projects()]) {
-            const name = sandboxName(project)
+            const name = this.nameFor(project)
             if (names.has(name))
                 await this.syncRules(name, project).catch((error: unknown) => log.warn(`${name}: ${message(error)}`))
         }
@@ -441,28 +544,37 @@ export class SandboxManager extends EventEmitter<ManagerEvents> {
     /** Stop the factory's sandboxes nobody used for `SANDBOX_IDLE_MIN`; a stopped one starts again in ~2 s. */
     async idleStop(): Promise<void> {
         const idleMs = this.config.sandbox.idleMs
-        if (!this.enabled || idleMs <= 0) return
-        let sandboxes: SandboxInfo[]
+        // One pass at a time: a slow `sbx stop` must not meet the next tick stopping the same VM.
+        if (!this.enabled || idleMs <= 0 || this.idling) return
+        this.idling = true
         try {
-            sandboxes = await this.list(true)
-        } catch {
-            return
-        }
-        for (const s of sandboxes) {
-            if (!s.name.startsWith(SANDBOX_PREFIX) || s.status !== 'running') continue
-            if (this.activeRuns(s.name) || this.ensuring.has(s.name) || this.refs.pinned(s.name)) continue
-            const last = Math.max(this.touched.get(s.name) ?? 0, s.last_used_at ? Date.parse(s.last_used_at) || 0 : 0)
-            if (Date.now() - last < idleMs) continue
-            const stop = this.sbx.stop(s.name).then(
-                () => log.info(`${s.name}: stopped after ${Math.round(idleMs / 60_000)} min idle`),
-                (error: unknown) => log.warn(`${s.name}: idle stop failed: ${message(error)}`)
-            )
-            this.stopping.set(s.name, stop)
-            await stop
-            this.stopping.delete(s.name)
+            let sandboxes: SandboxInfo[]
+            try {
+                sandboxes = await this.list(true)
+            } catch {
+                return
+            }
+            for (const s of sandboxes) {
+                if (!s.name.startsWith(SANDBOX_PREFIX) || s.status !== 'running' || this.stopping.has(s.name)) continue
+                if (this.activeRuns(s.name) || this.ensuring.has(s.name) || this.refs.pinned(s.name)) continue
+                const last = Math.max(
+                    this.touched.get(s.name) ?? 0,
+                    s.last_used_at ? Date.parse(s.last_used_at) || 0 : 0
+                )
+                if (Date.now() - last < idleMs) continue
+                const stop = this.sbx.stop(s.name).then(
+                    () => log.info(`${s.name}: stopped after ${Math.round(idleMs / 60_000)} min idle`),
+                    (error: unknown) => log.warn(`${s.name}: idle stop failed: ${message(error)}`)
+                )
+                this.stopping.set(s.name, stop)
+                await stop
+                if (this.stopping.get(s.name) === stop) this.stopping.delete(s.name)
+                this.listing = null
+            }
             this.listing = null
+        } finally {
+            this.idling = false
         }
-        this.listing = null
     }
 
     // ---- approvals --------------------------------------------------------
