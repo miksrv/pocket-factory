@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.3
+
+### Patch Changes
+
+- Sidebar: a badge beside Settings counts blocked network requests waiting for an answer
+- Sandboxes: no more requests for the CLI's telemetry (Datadog) and no repeated request for a bare IP on every SSH to a host
+- Agents: told that project files are read-only for them; they hand over the text to paste, `onboard-project` included
+
 ## 1.7.2
 
 ### Patch Changes
