@@ -1269,6 +1269,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             // ("Background tasks still running after …; terminating"): a sub-agent resumed with
             // SendMessage always runs in the background. CLAUDE_TASK_TIMEOUT_MIN is the limit here.
             CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0',
+            // The CLI's telemetry and error reports only ever hit the sandbox's network policy.
+            DISABLE_TELEMETRY: '1',
+            DISABLE_ERROR_REPORTING: '1',
             ...process.env,
             CLAUDE_CONFIG_DIR: this.config.claude.configDir
         }
