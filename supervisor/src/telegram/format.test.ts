@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { markdownToTelegramHtml as html } from './format.js'
+import { markdownToTelegramHtml as html, nested } from './format.js'
 
 describe('markdownToTelegramHtml', () => {
     it('escapes HTML in plain text', () => {
@@ -77,4 +77,62 @@ describe('markdownToTelegramHtml', () => {
     it('does not let a NUL in the input pick a kept span', () => {
         expect(html('\u00000\u0000 and `code`')).not.toContain('undefined')
     })
+
+    it.each([
+        ['**a _b** c_', '**a _b** c_'],
+        ['~~a **b~~ c**', '~~a **b~~ c**'],
+        ['**a ~~b** c~~ `x`', '**a ~~b** c~~ <code>x</code>']
+    ])('keeps crossed emphasis as text in %j', (md, out) => {
+        const result = html(md)
+        expect(balanced(result)).toBe(true)
+        if (!nested(result.replace(/<\/?code>/g, ''))) throw new Error(result)
+        expect(result).toBe(out)
+    })
+
+    it('always gives balanced, nested tags (fuzz)', () => {
+        const alphabet = [
+            '*',
+            '**',
+            '_',
+            '__',
+            '~~',
+            'a',
+            ' ',
+            '`',
+            '[',
+            ']',
+            '(',
+            ')',
+            'https://x.y',
+            '<',
+            '&',
+            '\n',
+            '>',
+            '#',
+            '-'
+        ]
+        const unbalanced: string[] = []
+        let seed = 42
+        const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+        for (let n = 0; n < 3000; n++) {
+            const md = Array.from(
+                { length: 1 + Math.floor(random() * 30) },
+                () => alphabet[Math.floor(random() * alphabet.length)]
+            ).join('')
+            const out = html(md)
+            if (!balanced(out)) unbalanced.push(`${JSON.stringify(md)} → ${out}`)
+        }
+        expect(unbalanced).toEqual([])
+    })
 })
+
+/** Every tag Telegram knows opens and closes in order; no stray `<` outside a tag. */
+function balanced(out: string): boolean {
+    const open: string[] = []
+    for (const [, closing, tag] of out.matchAll(/<(\/?)(b|i|s|u|code|pre|a)(?: href="[^"<>]*")?>/g)) {
+        if (!closing) open.push(tag)
+        else if (open.pop() !== tag) return false
+    }
+    const stray = out.replace(/<\/?(b|i|s|u|code|pre|a)(?: href="[^"<>]*")?>/g, '')
+    return open.length === 0 && !/[<>]/.test(stray)
+}

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { RoutineView } from '../routines/service.js'
 import type { RoutineRun } from '../store/index.js'
 import {
+    capLines,
     findRoutine,
     parseRoutineData,
     previewText,
@@ -10,7 +11,8 @@ import {
     routineData,
     routineKey,
     routinesList,
-    runsText
+    runsText,
+    TEXT_MAX
 } from './routinesMenu.js'
 import { renderPlain } from './view.js'
 import { type Button, type View } from './view.js'
@@ -221,5 +223,25 @@ describe('runsText and previewText', () => {
         expect(text).toContain('2 items, 1 would be handed over')
         expect(text).toContain('🆕 <a href="https://t/a">Ticket A</a>')
         expect(text).toContain('· Ticket B (changed)')
+    })
+})
+
+describe('message length', () => {
+    it('lists as many routines as fit and names the rest', () => {
+        const list = Array.from({ length: 80 }, (_, i) => view({ name: `routine-${i}-${'x'.repeat(60)}` }))
+        const v = routinesList(list, null, NOW, 'a note')
+        expect(textOf(v).length).toBeLessThanOrEqual(TEXT_MAX + 100)
+        expect(textOf(v)).toMatch(/…and \d+ more \(all of them in the web\)/)
+        expect(textOf(v)).toContain('a note')
+        expect(datas(v).length).toBeLessThanOrEqual(100)
+    })
+
+    it('cuts a long preview on whole lines', () => {
+        const lines = Array.from({ length: 500 }, (_, i) => `<pre>${i} ${'y'.repeat(30)}</pre>`)
+        const cut = capLines(lines)
+        expect(cut.join('\n').length).toBeLessThanOrEqual(TEXT_MAX)
+        expect(cut.at(-1)).toMatch(/^…and \d+ more lines$/)
+        expect(cut.slice(0, -1).every((line) => line.endsWith('</pre>'))).toBe(true)
+        expect(capLines(['a', 'b'])).toEqual(['a', 'b'])
     })
 })

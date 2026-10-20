@@ -8,8 +8,8 @@ import {
     errorText,
     escapeHtml,
     inlineKeyboard,
+    refused,
     replyParameters,
-    retryAfter,
     richButtonRows,
     withRetry
 } from './view.js'
@@ -23,32 +23,36 @@ export const TELEGRAM_MAX_LENGTH = 4000
 /** Message effects (private chats only): the ids are Telegram's own. */
 export const EFFECT = { party: '5046509860389126442', thumbsUp: '5107584321108051014' } as const
 
+const FENCE_CLOSE = '\n```'
+
 /**
  * Split long replies so every chunk fits Telegram's message limit. Cuts fall
  * on line breaks, and a fenced code block that straddles a cut is closed at
  * the end of one chunk and reopened at the start of the next, so the fence
- * markers stay balanced in every message.
+ * markers stay balanced in every message. Every cut leaves room for that
+ * closing fence, and never splits a surrogate pair (an emoji).
  */
 export function chunk(text: string, limit = TELEGRAM_MAX_LENGTH): string[] {
     const parts: string[] = []
     let rest = text
-    let openFence: string | null = null
     while (rest.length > limit) {
-        const budget = limit - (openFence === null ? 0 : 4)
+        const budget = limit - FENCE_CLOSE.length
         let cut = rest.lastIndexOf('\n', budget)
         if (cut < budget / 2) cut = budget
+        const code = rest.charCodeAt(cut - 1)
+        if (code >= 0xd800 && code <= 0xdbff) cut--
         let head = rest.slice(0, cut)
         rest = rest.slice(cut).trimStart()
         // Which fence is open at the end of this chunk? The head already
         // starts with the re-opened fence when one carried over, so the
         // scan starts from a clean state.
-        openFence = null
+        let openFence: string | null = null
         for (const line of head.split('\n')) {
             const fence = line.match(/^\s*```(\S*)/)
             if (fence) openFence = openFence === null ? fence[1] : null
         }
         if (openFence !== null) {
-            head += '\n```'
+            head += FENCE_CLOSE
             rest = `\`\`\`${openFence}\n${rest}`
         }
         parts.push(head)
@@ -85,7 +89,8 @@ async function sendOne(bot: Bot, chatId: number, part: string, options: SendOpti
         )
         return sent.message_id
     } catch (error) {
-        if (retryAfter(error) !== null) throw error
+        // Only a refusal of the markup: after a timeout or a 5xx the message may have arrived, a 429 says wait.
+        if (!refused(error)) throw error
         // Telegram rejected the markup — better a plain message than none.
         log.warn(`html reply rejected, falling back to plain text: ${errorText(error)}`)
         const sent = await bot.api.sendMessage(chatId, part, other)
@@ -166,7 +171,8 @@ export async function sendReply(
             )
             ids.push(sent.message_id)
         } catch (error) {
-            if (retryAfter(error) !== null) throw new DeliveryError(errorText(error), ids)
+            // A timeout or a 5xx may have delivered it, a 429 says wait: a second form would only duplicate it.
+            if (!refused(error)) throw new DeliveryError(errorText(error), ids)
             log.warn(`rich message rejected, sending HTML instead: ${errorText(error)}`)
             try {
                 ids.push(

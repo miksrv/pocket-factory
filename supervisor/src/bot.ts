@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 
 import { Bot, type Context } from 'grammy'
@@ -16,7 +17,14 @@ import type { Previews } from './sandbox/previews.js'
 import type { Vault } from './secrets/vault.js'
 import type { Ask, Conversation, RateLimitSnapshot, RoutineRun, Store, Task, TaskEvent } from './store/index.js'
 import { transcribe } from './stt/groq.js'
-import { askQuestions, type Delegation, openQuestions, type TaskService, titleFrom } from './tasks/service.js'
+import {
+    type Answer,
+    askQuestions,
+    type Delegation,
+    openQuestions,
+    type TaskService,
+    titleFrom
+} from './tasks/service.js'
 import { type DraftState, LiveDraft } from './telegram/draft.js'
 import {
     findRoutine,
@@ -34,6 +42,7 @@ import {
     editView,
     errorText,
     escapeHtml,
+    replyParameters,
     row,
     sendView,
     text,
@@ -42,7 +51,7 @@ import {
 } from './telegram/view.js'
 import { WebNotifier } from './telegram/webNotify.js'
 import { VERSION } from './version.js'
-import { describeUserAgent, type WebAuth } from './web/auth.js'
+import { describeUserAgent, type LoginNotice, type WebAuth } from './web/auth.js'
 
 const log = createLogger('bot')
 
@@ -97,6 +106,8 @@ export function routineNotice(
         if (spec?.notify === 'none' || run.trigger === 'manual') return null
         return `✅ Routine **${run.schedule}** ran its steps${run.items ? ` (${run.items} new item(s))` : ''}:\n\n${note || '(no output)'}`
     }
+    // A run by hand tells its outcome where it was pressed (the card's note, the routine's page).
+    if (run.trigger === 'manual') return null
     if (lastNotice.get(run.schedule) === note) return null
     lastNotice.set(run.schedule, note)
     return run.status === 'missed'
@@ -200,9 +211,11 @@ function permissionSummary(input: Record<string, unknown>): string {
 /**
  * A question of the agent as a message: the question, its options with
  * their descriptions, and one button per option inside the message; free
- * text is the "Other" choice — the client is asked for a reply to the
- * question, which lands in the right conversation whichever chat is the
- * topic. A permission request gets a green Allow and a red Deny.
+ * text is the "Other" choice. A question without options asks the client for
+ * a reply, which lands in the right conversation whichever chat is the
+ * topic; one with buttons does not: Telegram never edits a message sent with
+ * `force_reply`, so its buttons would outlive the answer. A permission
+ * request gets a green Allow and a red Deny.
  */
 export function askMessage(task: Task, ask: Ask): { key: string; view: View; forceReply: boolean } | null {
     if (ask.kind === 'permission') {
@@ -214,8 +227,8 @@ export function askMessage(task: Task, ask: Ask): { key: string; view: View; for
                     `🔐 The agent asks to run <b>${escapeHtml(ask.tool_name)}</b>:\n<pre>${escapeHtml(permissionSummary(ask.input))}</pre>`
                 ),
                 row(
-                    { text: '✅ Allow', data: `p|${task.id}|allow`, style: 'success' },
-                    { text: '⛔ Deny', data: `p|${task.id}|deny`, style: 'danger' }
+                    { text: '✅ Allow', data: `p|${task.id}|allow|${askTag(ask.request_id)}`, style: 'success' },
+                    { text: '⛔ Deny', data: `p|${task.id}|deny|${askTag(ask.request_id)}`, style: 'danger' }
                 )
             ]
         }
@@ -248,12 +261,82 @@ export function askMessage(task: Task, ask: Ask): { key: string; view: View; for
         view.push(
             row({
                 text: Array.from(option.label).slice(0, 60).join(''),
-                data: `a|${task.id}|${index}|${i}`,
+                data: `a|${task.id}|${index}|${i}|${askTag(ask.request_id)}`,
                 style: 'primary'
             })
         )
     )
-    return { key: `${ask.request_id}:${index}`, view, forceReply: true }
+    return { key: `${ask.request_id}:${index}`, view, forceReply: !options.length }
+}
+
+/** A short tag of an ask's request id: its buttons carry it, so a late or double tap never answers a newer request. */
+export const askTag = (requestId: string): string => createHash('sha1').update(requestId).digest('hex').slice(0, 8)
+
+/** A tap on a button whose request is settled: said as a toast, not an alert, since nothing went wrong. */
+export class StaleTap extends Error {}
+
+/**
+ * A tap on a question's option (`a|<task>|<question>|<option>|<tag>`) or a
+ * permission's button (`p|<task>|allow|<tag>`) as the answer to the task's
+ * open ask, or a StaleTap when that ask is not the one the button was sent
+ * for. `task` is the task as it is now; `answered` what the request the
+ * button names was settled with, when the bot knows.
+ */
+export function askTap(
+    data: string,
+    task: Pick<Task, 'status' | 'ask'> | null | undefined,
+    answered?: string
+): { taskId: string; answer: Answer; said: string } {
+    const [kind, taskId, b, c, d] = data.split('|')
+    const tag = kind === 'p' ? c : d
+    const ask = task?.ask
+    if (!ask || !tag || askTag(ask.request_id) !== tag || ask.kind !== (kind === 'p' ? 'permission' : 'question'))
+        throw new StaleTap(
+            answered
+                ? `Already answered: ${answered}`
+                : task && task.status !== 'running'
+                  ? 'The task has ended: nothing waits for this answer any more.'
+                  : 'This question is already answered.'
+        )
+    if (kind === 'p') {
+        const allow = b === 'allow'
+        return { taskId, answer: { behavior: allow ? 'allow' : 'deny' }, said: allow ? '✓ Allowed' : 'Denied' }
+    }
+    const question = askQuestions(ask)[Number(b)]
+    const option = question?.options?.[Number(c)]
+    if (!question || !option) throw new Error('this option is no longer available')
+    return { taskId, answer: { answers: { [question.question]: option.label } }, said: `✓ ${option.label}` }
+}
+
+/** A callback query's answer: Telegram takes 200 characters at most and refuses the whole answer beyond. */
+export const toast = (text: string): string => {
+    const chars = Array.from(text)
+    return chars.length > 190 ? `${chars.slice(0, 189).join('')}…` : text
+}
+
+/**
+ * What the owner hears about the web UI's door, as HTML. The address, the
+ * client and the name typed are the visitor's words: escaped, so a name
+ * never turns into a link or markup in the owner's chat.
+ */
+export function signInNotice(
+    notice: LoginNotice,
+    policy: { max_failures: number; lock_minutes: number },
+    timeZone: string
+): string {
+    const where = `from <code>${escapeHtml(notice.ip)}</code> (${escapeHtml(describeUserAgent(notice.userAgent))})`
+    const name = notice.username ? ` as <code>${escapeHtml(notice.username)}</code>` : ''
+    if (notice.kind === 'ok')
+        return `🔓 Signed in to the web UI ${where}. Not you? Settings → Security → Sign out everywhere, and change WEB_AUTH_PASSWORD.`
+    if (notice.kind === 'locked') {
+        const until = new Date(notice.locked_until ?? Date.now()).toLocaleTimeString('en-GB', {
+            timeZone,
+            hour: '2-digit',
+            minute: '2-digit'
+        })
+        return `🔒 Web sign-in locked for ${where} until ${until} after ${notice.failures} wrong passwords${name}.`
+    }
+    return `⚠️ Wrong web password ${where}${name}. ${policy.max_failures - notice.failures} more and that address is locked for ${policy.lock_minutes} min.`
 }
 
 /**
@@ -472,6 +555,9 @@ export function createBot(
         const message = ctx.callbackQuery?.message
         if (message) await editSent(message.chat.id, message.message_id, view, taskId)
     }
+    /** `edit` after the tap was answered: a flood wait in it must not hold up the next update. */
+    const redraw = (ctx: Context, view: View, taskId?: string | null) =>
+        detached('redraw', () => edit(ctx, view, taskId))
 
     // ---- the owner's message: a reaction per state, a draft while it runs -----------------
 
@@ -639,18 +725,19 @@ export function createBot(
         switch (parsed.action) {
             case 'list':
                 await ctx.answerCallbackQuery()
-                return edit(ctx, listView())
+                return redraw(ctx, listView())
             case 'card':
                 await ctx.answerCallbackQuery()
-                return edit(ctx, cardView(name)!)
-            case 'open':
+                return redraw(ctx, cardView(name)!)
+            case 'open': {
                 await ctx.answerCallbackQuery()
-                await send(chatId, cardView(name)!)
-                return
+                const card = cardView(name)!
+                return detached('routine card', async () => void (await send(chatId, card)))
+            }
             case 'run':
             case 'all':
             case 'fire': {
-                await ctx.answerCallbackQuery({ text: `▶️ ${name}…` })
+                await ctx.answerCallbackQuery({ text: toast(`▶️ ${name}…`) })
                 // The query is answered already: what goes wrong from here is said in the message itself.
                 // Detached, as the steps may take minutes and grammY handles one update at a time.
                 // The message says at once that the run started (a new one for `fire`, the list or the
@@ -688,13 +775,13 @@ export function createBot(
             case 'off': {
                 const on = parsed.action === 'on'
                 routines.setEnabled(name, on)
-                await ctx.answerCallbackQuery({ text: on ? `🟢 ${name} is on` : `⚪️ ${name} is off` })
+                await ctx.answerCallbackQuery({ text: toast(on ? `🟢 ${name} is on` : `⚪️ ${name} is off`) })
                 // The list stays a list, the card stays a card.
-                return edit(ctx, parsed.from === 'list' ? listView() : cardView(name)!)
+                return redraw(ctx, parsed.from === 'list' ? listView() : cardView(name)!)
             }
             case 'runs':
                 await ctx.answerCallbackQuery()
-                return edit(ctx, runsText(view!, routines.runs(name, 8, true), config.timezone))
+                return redraw(ctx, runsText(view!, routines.runs(name, 8, true), config.timezone))
             case 'preview': {
                 await ctx.answerCallbackQuery({ text: 'Running the steps…' })
                 // A step may take a while (a host, a timeout): the bot must not stall meanwhile.
@@ -897,6 +984,8 @@ export function createBot(
             return
         }
         tasks.stop(active.id)
+        // A queued task ends at once, and its reply ("⏹ Stopped.") says so when it comes here: one message, not two.
+        if (active.status === 'queued' && delivered(active)) return
         await ctx.reply(active.status === 'queued' ? '⏹ Cancelled.' : 'Stopping…')
     })
 
@@ -1019,14 +1108,12 @@ export function createBot(
     // The message gets a reaction (seen, then every state the task goes through) and a draft
     // under it shows the task at work; a message of the bot is sent only when there is more
     // to say than "working": a switched thread, an answer passed on, files taken along.
-    const submit = async (ctx: Context, prompt: string, attachments: Attachment[] = []) => {
-        const chatId = ctx.chat!.id
-        // Files sent a moment ago without a caption go with this message.
-        attachments = [...takePending(chatId), ...attachments]
+    /** Where a message goes (see routeMessage), and the task it becomes there. */
+    const route = (ctx: Context, chatId: number, prompt: string, attachments: Attachment[]) => {
         const replyTo = ctx.message?.reply_to_message
         const topic = topicFor(chatId)
         const replied = repliedConversation(chatId, replyTo)
-        const route = routeMessage({
+        const where = routeMessage({
             mode: mode(),
             replied: Boolean(replied),
             topicAsks: Boolean(tasks.pendingAsk(topic.id)),
@@ -1036,7 +1123,7 @@ export function createBot(
         if (replied) {
             if (replied.id !== topic.id) store.setTelegramTopic(chatId, replied.id)
             conversation = replied
-        } else if (route === 'fresh') {
+        } else if (where === 'fresh') {
             conversation = freshConversation(chatId)
             // A reply whose chat is gone (deleted, or older than the bot remembers) brings the message it answers.
             const quoted = replyTo ? quoteReply(replyTo.text ?? replyTo.caption) : null
@@ -1046,6 +1133,22 @@ export function createBot(
         const first = isEmpty(conversation)
         const answering = Boolean(tasks.pendingAsk(conversation.id))
         const task = tasks.submit(conversation.id, 'telegram', prompt, { attachments })
+        return { task, conversation, switched, first, answering }
+    }
+
+    const submit = async (ctx: Context, prompt: string, attachments: Attachment[] = []) => {
+        const chatId = ctx.chat!.id
+        // Files sent a moment ago without a caption go with this message; they wait for the next one if it fails.
+        const held = takePending(chatId)
+        attachments = [...held, ...attachments]
+        let routed: ReturnType<typeof route>
+        try {
+            routed = route(ctx, chatId, prompt, attachments)
+        } catch (error) {
+            if (held.length) holdFiles(chatId, held)
+            throw error
+        }
+        const { task, conversation, switched, first, answering } = routed
         // The owner's own message: a reply to it later continues this chat, and its reactions tell the task's state.
         if (ctx.message) {
             remember(chatId, ctx.message.message_id, conversation.id, task.id)
@@ -1088,20 +1191,26 @@ export function createBot(
         const chatId = ctx.chat!.id
         try {
             switch (kind) {
-                case 'a': {
-                    const ask = tasks.task(a)?.ask
-                    if (!ask) throw new Error('this request is no longer open')
-                    const question = askQuestions(ask)[Number(b)]
-                    const option = question?.options?.[Number(c)]
-                    if (!question || !option) throw new Error('this option is no longer available')
-                    tasks.answer(a, { answers: { [question.question]: option.label } })
-                    await ctx.answerCallbackQuery({ text: `✓ ${option.label}` })
+                case 'a':
+                case 'p': {
+                    // The button names the request it was sent for: a late tap never answers a newer one.
+                    const tap = askTap(data, tasks.task(a), answeredAsks.get(data.split('|').at(-1)!))
+                    tasks.answer(tap.taskId, tap.answer)
+                    await ctx.answerCallbackQuery({ text: toast(tap.said) })
                     return
                 }
-                case 'p': {
-                    if (!tasks.task(a)?.ask) throw new Error('this request is no longer open')
-                    tasks.answer(a, b === 'allow' ? { behavior: 'allow' } : { behavior: 'deny' })
-                    await ctx.answerCallbackQuery({ text: b === 'allow' ? '✓ Allowed' : 'Denied' })
+                case 'c': {
+                    // Continue a failed task's chat: "continue" as the next message of its conversation.
+                    const task = tasks.task(a)
+                    const conversation = task && tasks.conversationOf(task)
+                    if (!task || !conversation) throw new Error('that chat is gone')
+                    if (tasks.activeTask(conversation.id) || tasks.queuedTask(conversation.id))
+                        throw new StaleTap('This chat is already at work.')
+                    const next = tasks.submit(conversation.id, 'telegram', 'continue')
+                    switchTo(chatId, conversation)
+                    const message = ctx.callbackQuery.message
+                    if (message) remember(chatId, message.message_id, conversation.id, next.id)
+                    await ctx.answerCallbackQuery({ text: '▶️ Continuing…' })
                     return
                 }
                 case 'r':
@@ -1109,23 +1218,23 @@ export function createBot(
                 case 'n': {
                     const project = a === '-' ? null : a
                     if (project && !tasks.hasProject(project)) throw new Error(`project "${project}" is gone`)
-                    await ctx.answerCallbackQuery({ text: project ? `New chats in ${project}` : 'No project' })
+                    await ctx.answerCallbackQuery({ text: toast(project ? `New chats in ${project}` : 'No project') })
                     const { said, conversation } = startNew(chatId, project)
-                    await edit(ctx, [text(escapeHtml(said)), ...projectPicker(chatId).slice(1)])
                     const message = ctx.callbackQuery.message
                     if (message) remember(chatId, message.message_id, conversation.id)
+                    redraw(ctx, [text(escapeHtml(said)), ...projectPicker(chatId).slice(1)])
                     return
                 }
                 case 'm': {
                     const said = applyModel(chatId, a)
-                    await ctx.answerCallbackQuery({ text: said })
-                    await edit(ctx, modelView(chatId)).catch(() => undefined)
+                    await ctx.answerCallbackQuery({ text: toast(said) })
+                    redraw(ctx, modelView(chatId))
                     return
                 }
                 case 'md': {
                     if (a === 'fresh' || a === 'thread') store.setMeta(MODE_META, a)
                     await ctx.answerCallbackQuery({ text: `Mode: ${mode()}` })
-                    await edit(ctx, modeView()).catch(() => undefined)
+                    redraw(ctx, modeView())
                     return
                 }
                 case 's': {
@@ -1140,37 +1249,67 @@ export function createBot(
                     const schedule = a === 'stop' ? tasks.task(b)?.schedule : undefined
                     const view =
                         c === 'l' ? listView() : c === 'c' && schedule ? cardView(schedule) : statusView(chatId)
-                    await edit(ctx, view ?? listView()).catch(() => undefined)
+                    redraw(ctx, view ?? listView())
                     return
                 }
                 case 'w': {
                     if (!sandbox) throw new Error('sandboxes are off')
+                    const { sandboxes } = sandbox
                     const allow = a === 'a'
-                    const approval = await sandbox.sandboxes.decide(data.slice(4), allow)
-                    await ctx.answerCallbackQuery({ text: allow ? '✓ Allowed' : 'Denied' })
-                    await edit(ctx, [
-                        text(
-                            `${allow ? '✅' : '🚫'} <code>${escapeHtml(approval.resource)}</code> ${allow ? (approval.project ? `allowed for ${escapeHtml(approval.project)} (its project file's network: list)` : 'allowed') : 'stays blocked'}.`
-                        )
-                    ]).catch(() => undefined)
+                    // sbx may take seconds: the tap is answered first, the message tells what came of it.
+                    await ctx.answerCallbackQuery({ text: allow ? 'Allowing…' : 'Denying…' })
+                    detached('approval', async () => {
+                        try {
+                            const approval = await sandboxes.decide(data.slice(4), allow)
+                            await edit(ctx, [
+                                text(
+                                    `${allow ? '✅' : '🚫'} <code>${escapeHtml(approval.resource)}</code> ${allow ? (approval.project ? `allowed for ${escapeHtml(approval.project)} (its project file's network: list)` : 'allowed') : 'stays blocked'}.`
+                                )
+                            ])
+                        } catch (error) {
+                            // A blip of sbx must not take the question away: the buttons stay for another try.
+                            await edit(ctx, [
+                                text(`❌ ${escapeHtml(errorText(error))}`),
+                                row(
+                                    { text: '✅ Allow', data: `w|a|${data.slice(4)}`, style: 'success' },
+                                    { text: '🚫 Deny', data: `w|d|${data.slice(4)}` }
+                                )
+                            ])
+                        }
+                    })
                     return
                 }
                 case 'pv': {
                     if (!sandbox) throw new Error('previews are off')
+                    const { previews } = sandbox
                     const project = data.slice('pv|stop|'.length)
-                    const closed = await sandbox.previews.close(project, 'stopped by the owner')
-                    await ctx.answerCallbackQuery({ text: closed ? '⏹ Preview stopped' : 'No preview was open' })
-                    await edit(ctx, [text(`⏹ The preview of <b>${escapeHtml(project)}</b> is stopped.`)]).catch(
-                        () => undefined
-                    )
+                    await ctx.answerCallbackQuery({ text: 'Stopping the preview…' })
+                    detached('preview stop', async () => {
+                        let closed: boolean
+                        try {
+                            closed = await previews.close(project, 'stopped by the owner')
+                        } catch (error) {
+                            await edit(ctx, [text(`❌ ${escapeHtml(errorText(error))}`), row({ text: '⏹ Stop', data })])
+                            return
+                        }
+                        await edit(ctx, [
+                            text(
+                                closed
+                                    ? `⏹ The preview of <b>${escapeHtml(project)}</b> is stopped.`
+                                    : `No preview of <b>${escapeHtml(project)}</b> was open.`
+                            )
+                        ])
+                    })
                     return
                 }
                 case 'u': {
                     await ctx.answerCallbackQuery({ text: 'Asking the CLI…' })
                     const message = ctx.callbackQuery.message
                     if (!message) return
-                    await edit(ctx, usageView(null, true)).catch(() => undefined)
-                    refreshUsage(message.chat.id, message.message_id)
+                    detached('usage refresh', async () => {
+                        await edit(ctx, usageView(null, true)).catch(() => undefined)
+                        refreshUsage(message.chat.id, message.message_id)
+                    })
                     return
                 }
                 case 'v': {
@@ -1185,14 +1324,20 @@ export function createBot(
                                 : a === 'usage'
                                   ? usageView(tasks.limits())
                                   : helpView()
-                    await send(chatId, view)
+                    detached('menu view', async () => void (await send(chatId, view)))
                     return
                 }
                 default:
                     await ctx.answerCallbackQuery()
             }
         } catch (error) {
-            await ctx.answerCallbackQuery({ text: `❌ ${errorText(error)}`, show_alert: true }).catch(() => undefined)
+            await ctx
+                .answerCallbackQuery(
+                    error instanceof StaleTap
+                        ? { text: toast(error.message) }
+                        : { text: toast(`❌ ${errorText(error)}`), show_alert: true }
+                )
+                .catch(() => undefined)
         }
     })
     // The Stop button under a task's draft.
@@ -1201,8 +1346,21 @@ export function createBot(
         draft.stopped(stopped.chat.id, stopped.draft_id)
     })
 
+    /** A message as a task; what goes wrong is said in the chat (a throw here would reach only the log). */
+    const submitOrSay = async (ctx: Context, prompt: string) => {
+        try {
+            await submit(ctx, prompt)
+        } catch (error) {
+            log.error(`message to a task failed: ${errorText(error)}`)
+            await ctx.reply(`❌ ${errorText(error)}`).catch(() => undefined)
+        }
+    }
     bot.on('message:text', async (ctx) => {
-        await submit(ctx, ctx.message.text)
+        const prompt = ctx.message.text
+        // A file or a voice note still on its way goes first: its text, or the files it holds back, belong
+        // to what came before this message.
+        if (receiving.has(ctx.chat.id)) return receiveIn(ctx.chat.id, 'message', () => submitOrSay(ctx, prompt))
+        await submitOrSay(ctx, prompt)
     })
 
     // ---- files and voice -----------------------------------------------------------------------
@@ -1230,6 +1388,28 @@ export function createBot(
         pending.delete(chatId)
         // A file whose conversation was deleted in the web meanwhile is gone from the disk.
         return held && Date.now() - held.at < PENDING_MS ? held.files.filter((f) => fs.existsSync(f.path)) : []
+    }
+    /** Files held back for the chat's next message, after the ones held already. */
+    const holdFiles = (chatId: number, files: Attachment[]): Attachment[] => {
+        const held = pending.get(chatId)
+        const all = [...(held && Date.now() - held.at < PENDING_MS ? held.files : []), ...files].slice(-MAX_ATTACHMENTS)
+        pending.set(chatId, { files: all, at: Date.now() })
+        return all
+    }
+    /**
+     * Files and voice notes take a while (a download, a transcription); a text sent meanwhile must not
+     * overtake them, or the files would go with the next, unrelated message. Per chat, what comes in
+     * is handled in order: each piece of work starts once the one before it has ended.
+     */
+    const receiving = new Map<number, Promise<void>>()
+    const receiveIn = (chatId: number, label: string, work: () => Promise<void>) => {
+        const done = (receiving.get(chatId) ?? Promise.resolve())
+            .then(work)
+            .catch((error) => log.error(`${label} failed`, error))
+        receiving.set(chatId, done)
+        void done.finally(() => {
+            if (receiving.get(chatId) === done) receiving.delete(chatId)
+        })
     }
     type Incoming = {
         ctx: Context
@@ -1262,11 +1442,7 @@ export function createBot(
                 await submit(ctx, caption, saved)
                 return
             }
-            const held = pending.get(chatId)
-            const files = [...(held && Date.now() - held.at < PENDING_MS ? held.files : []), ...saved].slice(
-                -MAX_ATTACHMENTS
-            )
-            pending.set(chatId, { files, at: Date.now() })
+            const files = holdFiles(chatId, saved)
             const what =
                 files.length === 1 ? (files[0].type.startsWith('image/') ? 'Photo' : 'File') : `${files.length} files`
             await ctx.reply(
@@ -1292,16 +1468,18 @@ export function createBot(
             caption: m.caption?.trim() ?? ''
         }
         const group = m.media_group_id
-        if (!group) return void detached('attachment', () => receive([item]))
+        if (!group) return receiveIn(ctx.chat.id, 'attachment', () => receive([item]))
         const key = `${ctx.chat.id}:${group}`
         const list = albums.get(key)
         if (list) return void list.push(item)
         albums.set(key, [item])
-        setTimeout(() => {
+        // Held in the chat's line from the first file on, so a text right after the album waits for all of it.
+        receiveIn(ctx.chat.id, 'album', async () => {
+            await new Promise((resolve) => setTimeout(resolve, ALBUM_MS))
             const items = albums.get(key) ?? []
             albums.delete(key)
-            detached('album', () => receive(items))
-        }, ALBUM_MS)
+            await receive(items)
+        })
     })
 
     // Voice notes and audio files: download from Telegram, transcribe, then
@@ -1315,7 +1493,7 @@ export function createBot(
         const media = ctx.message.voice ?? ctx.message.audio
         const apiKey = config.stt.groqApiKey
         await ctx.replyWithChatAction('typing').catch(() => undefined)
-        detached('voice message', async () => {
+        receiveIn(ctx.chat.id, 'voice message', async () => {
             try {
                 const { data: audio, filePath } = await download(ctx, media.file_id)
                 const text = await transcribe(audio, filePath, {
@@ -1362,6 +1540,12 @@ export function createBot(
             draft.start(task.id, chatId, draftState(task, { waiting: waitingFor(task) }))
             return
         }
+        // Back in the queue until the window resets, maybe for hours: the limit notice says when, and the
+        // draft starts again when the task runs.
+        if (task.status === 'queued' && task.not_before) {
+            void draft.end(task.id)
+            return
+        }
         draft.update(task.id, () => ({ waiting: waitingFor(task) }))
     })
     tasks.on('event', (event: TaskEvent) => draft.event(event))
@@ -1372,11 +1556,26 @@ export function createBot(
     // question, so a poll of the same task never sends a question twice.
     const sentAsks = new Map<
         string,
-        { taskId: string; chatId: number; messageId: number; question: string | null; view: View; settled?: string }
+        {
+            taskId: string
+            tag: string
+            chatId: number
+            messageId: number
+            question: string | null
+            view: View
+            settled?: string
+        }
     >()
+    // What each request of a running task was settled with, by its buttons' tag: a late tap on a button
+    // still in the chat is told the answer it already has.
+    const answeredAsks = new Map<string, string>()
+    const answeredBy = new Map<string, string[]>()
     const settle = async (key: string, note: string) => {
         const sent = sentAsks.get(key)
         if (!sent) return
+        const tags = answeredBy.get(sent.taskId) ?? []
+        answeredBy.set(sent.taskId, [...tags, sent.tag])
+        answeredAsks.set(sent.tag, note)
         // The message is still on its way (a retry, a slow network): settled once it has an id.
         if (!sent.messageId) {
             sent.settled = note
@@ -1391,12 +1590,19 @@ export function createBot(
             ])
         } catch (error) {
             log.warn(`could not settle ask message ${sent.messageId}: ${errorText(error)}`)
+            // A message Telegram will not edit keeps its buttons: say under it that the request is settled.
+            if (sent.view.some((block) => block.kind === 'buttons'))
+                await bot.api
+                    .sendMessage(sent.chatId, note, { reply_parameters: replyParameters(sent.messageId) })
+                    .catch(() => undefined)
         }
     }
     tasks.on('task', (task) => {
         if (task.status !== 'running') {
             for (const [key, sent] of sentAsks)
                 if (sent.taskId === task.id) void settle(key, '— the task ended before an answer')
+            for (const tag of answeredBy.get(task.id) ?? []) answeredAsks.delete(tag)
+            answeredBy.delete(task.id)
             return
         }
         const chatId = chatFor(task)
@@ -1414,7 +1620,14 @@ export function createBot(
         if (!message || sentAsks.has(message.key)) return
         const question = task.ask.kind === 'question' ? (openQuestions(task.ask)[0]?.question ?? null) : null
         const view = [...head, ...message.view]
-        sentAsks.set(message.key, { taskId: task.id, chatId, messageId: 0, question, view })
+        sentAsks.set(message.key, {
+            taskId: task.id,
+            tag: askTag(task.ask.request_id),
+            chatId,
+            messageId: 0,
+            question,
+            view
+        })
         // After the draft's last request, so the question is the newest thing in the chat.
         void draft
             .end(task.id)
@@ -1433,15 +1646,19 @@ export function createBot(
             })
     }
     const askFromWeb = (task: Task) => {
-        const conversation = tasks.conversationOf(task)
-        const chatId = conversation && webChatFor(conversation)
-        if (!conversation || !chatId) return
-        switchTo(chatId, conversation)
-        sendAsk(task, chatId, [
-            text(
-                `💻 <b>${escapeHtml(topicName(conversation))}</b> — from the web. This chat now continues that thread.`
-            )
-        ])
+        try {
+            const conversation = tasks.conversationOf(task)
+            const chatId = conversation && webChatFor(conversation)
+            if (!conversation || !chatId) return
+            switchTo(chatId, conversation)
+            sendAsk(task, chatId, [
+                text(
+                    `💻 <b>${escapeHtml(topicName(conversation))}</b> — from the web. This chat now continues that thread.`
+                )
+            ])
+        } catch (error) {
+            log.error(`web question of task ${task.id} to Telegram failed`, error)
+        }
     }
     tasks.on('event', (event: TaskEvent) => {
         if (event.type !== 'answer') return
@@ -1457,6 +1674,10 @@ export function createBot(
     // say when it continues, once per wait (keyed by the wait's number).
     const toldWaits = new Map<string, number>()
     tasks.on('task', (task) => {
+        if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
+            toldWaits.delete(task.id)
+            return
+        }
         if (task.status !== 'queued' || !task.not_before || toldWaits.get(task.id) === task.limit_waits) return
         toldWaits.set(task.id, task.limit_waits)
         if (task.source !== 'telegram' && task.source !== 'routine' && task.source !== 'cron') return
@@ -1478,9 +1699,16 @@ export function createBot(
 
     // ---- replies -------------------------------------------------------------------------------
 
+    /** A task whose end is told in Telegram (the reply, or "⏹ Stopped."): one of a chat, or a routine run's. */
+    const delivered = (task: Task) =>
+        (task.source === 'telegram' || task.source === 'routine' || task.source === 'cron') && chatFor(task) !== null
+
     /** Buttons inside a reply: the task page, its pull request, and for a routine's report the routine itself. */
     const replyButtons = (task: Task): Button[][] => {
         const first: Button[] = []
+        // A chat's task that failed with its session kept (the turn limit, a timeout) goes on from where it stopped.
+        if (task.status === 'failed' && task.session_id && !task.schedule)
+            first.push({ text: '▶️ Continue', data: `c|${task.id}`, style: 'primary' })
         if (buttonUrl) first.push({ text: '🌐 Open', url: `${buttonUrl}/tasks/${task.id}` })
         if (task.git?.pr) first.push({ text: `PR #${task.git.pr.number}`, url: task.git.pr.url, style: 'success' })
         const second: Button[] = []
@@ -1512,14 +1740,11 @@ export function createBot(
     // Deliver results of Telegram-originated tasks back to their chat, and of
     // routine runs to the owner (unless the routine says notify: none).
     tasks.on('task', (task) => {
-        if (
-            (task.source !== 'telegram' && task.source !== 'routine' && task.source !== 'cron') ||
-            task.status === 'queued' ||
-            task.status === 'running'
-        )
-            return
+        if (task.status === 'queued' || task.status === 'running') return
+        // Whatever its source (a message may answer a web task's question), the task's origin is done with.
         const origin = origins.get(task.id)
         origins.delete(task.id)
+        if (!delivered(task)) return
         const chatId = chatFor(task)
         if (!chatId) return
         const head = task.schedule ? `⏱ **${task.schedule}**\n\n` : ''
@@ -1539,17 +1764,19 @@ export function createBot(
     // A web task's reply nobody opened in the web goes here after a while (WebNotifier),
     // and the chat switches to its thread, so the next message continues it.
     const deliverWeb = async (task: Task) => {
-        const conversation = tasks.conversationOf(task)
-        const chatId = conversation && webChatFor(conversation)
-        if (!conversation || !chatId) return
-        switchTo(chatId, conversation)
+        let chatId: number | null = null
         try {
+            // Called from a timer: a throw here (the store) would be an uncaught exception.
+            const conversation = tasks.conversationOf(task)
+            chatId = conversation ? webChatFor(conversation) : null
+            if (!conversation || !chatId) return
+            switchTo(chatId, conversation)
             const ids = await deliver(chatId, task, `${fromWeb(conversation)}\n\n`)
             remember(chatId, ids, task.conversation_id, task.id)
             tasks.markRead(task.conversation_id)
         } catch (error) {
-            if (error instanceof DeliveryError) remember(chatId, error.ids, task.conversation_id, task.id)
-            log.error(`web reply to chat ${chatId} failed`, error)
+            if (chatId && error instanceof DeliveryError) remember(chatId, error.ids, task.conversation_id, task.id)
+            log.error(`web reply to chat ${chatId ?? '?'} failed`, error)
         }
     }
     tasks.on('task', (task) => notifier.onTask(task))
@@ -1584,20 +1811,22 @@ export function createBot(
     // and a lock, so an attempt to guess the password is never silent.
     auth?.on('notice', (notice) => {
         if (!ownerChat) return
-        const where = `from \`${notice.ip}\` (${describeUserAgent(notice.userAgent)})`
-        const name = notice.username ? ` as \`${notice.username}\`` : ''
-        const text =
-            notice.kind === 'ok'
-                ? `🔓 Signed in to the web UI ${where}. Not you? Settings → Security → Sign out everywhere, and change WEB_AUTH_PASSWORD.`
-                : notice.kind === 'locked'
-                  ? `🔒 Web sign-in locked for ${where} until ${new Date(notice.locked_until ?? Date.now()).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' })} after ${notice.failures} wrong passwords${name}.`
-                  : `⚠️ Wrong web password ${where}${name}. ${auth.policy.max_failures - notice.failures} more and that address is locked for ${auth.policy.lock_minutes} min.`
-        sendMarkdown(bot, ownerChat, text).catch((error) => log.error('sign-in notice failed', error))
+        send(ownerChat, [text(signInNotice(notice, auth.policy, config.timezone))]).catch((error) =>
+            log.error('sign-in notice failed', error)
+        )
     })
 
     // A sandbox's network policy held a request back: the owner allows the host for the project (it goes
     // into the project file's `network:`) or leaves it blocked. Callback data carries sbx's approval id.
     const fits = (data: string) => Buffer.byteLength(data) <= 64
+    sandbox?.sandboxes.on('recreated', (name, reason) => {
+        if (!ownerChat) return
+        send(ownerChat, [
+            text(
+                `♻️ Sandbox <code>${escapeHtml(name)}</code> was made again: ${escapeHtml(reason)}. What was installed inside it is gone; checkouts and data are untouched.`
+            )
+        ]).catch((error) => log.error('sandbox notice failed', error))
+    })
     sandbox?.sandboxes.on('approval', (approval) => {
         if (!ownerChat) return
         const allow = `w|a|${approval.id}`

@@ -1,4 +1,10 @@
+import { createLogger } from '../logger.js'
 import type { Conversation, Task } from '../store/index.js'
+
+const log = createLogger('telegram')
+
+/** How many told notices are remembered: enough for days of tasks, the oldest go first. */
+const TOLD_MAX = 2000
 
 export type WebNotice = 'reply' | 'ask'
 
@@ -68,7 +74,15 @@ export class WebNotifier {
         if (this.timers.has(key) || this.told.has(key)) return
         const timer = setTimeout(() => {
             this.timers.delete(key)
-            if (fire()) this.told.add(key)
+            // A timer's throw (the store) would be an uncaught exception: logged, and the notice is not told.
+            try {
+                if (!fire()) return
+            } catch (error) {
+                log.error(`web notice ${key} failed`, error)
+                return
+            }
+            this.told.add(key)
+            if (this.told.size > TOLD_MAX) this.told.delete(this.told.values().next().value!)
         }, delay)
         timer.unref?.()
         this.timers.set(key, timer)
