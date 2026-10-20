@@ -8,13 +8,26 @@ import { serve } from '@hono/node-server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { createTestApp, type TestApp } from '../test/app.js'
-import { PREVIEW_CSP, previewUpgrade, rewriteLocation, rewriteSetCookie, withoutSession } from './preview.js'
+import {
+    PREVIEW_BODY_MAX,
+    PREVIEW_CSP,
+    previewUpgrade,
+    rewriteLocation,
+    rewriteSetCookie,
+    withoutSession
+} from './preview.js'
 
 /** The app an agent would run: echoes what reached it, redirects, sets a cookie, answers a WebSocket handshake. */
 function startUpstream(): Promise<{ server: http.Server; port: number; seen: http.IncomingMessage[] }> {
     const seen: http.IncomingMessage[] = []
     const server = http.createServer((req, res) => {
         seen.push(req)
+        if (req.url?.endsWith('/upload')) {
+            // Answers only once the whole body arrived, like an app storing a file.
+            req.resume()
+            req.on('end', () => res.end('stored'))
+            return
+        }
         if (req.url?.endsWith('/go')) {
             res.writeHead(302, { location: '/login' })
             return res.end()
@@ -29,8 +42,18 @@ function startUpstream(): Promise<{ server: http.Server; port: number; seen: htt
     })
     server.on('upgrade', (req, socket) => {
         seen.push(req)
-        socket.write('HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\nhello')
-        socket.end()
+        if (req.url?.endsWith('/refuse')) {
+            socket.end('HTTP/1.1 403 Forbidden\r\nset-cookie: pf_session=evil; Path=/\r\ncontent-length: 4\r\n\r\nnope')
+            return
+        }
+        // Half a status line, then nothing.
+        if (req.url?.endsWith('/stall')) return void socket.write('HTTP/1.1 101 Swi')
+        socket.write(
+            'HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n' +
+                'set-cookie: pf_session=evil; Path=/\r\nset-cookie: hmr=1; Path=/\r\n\r\nhello'
+        )
+        if (req.url?.endsWith('/reset')) setTimeout(() => (socket as net.Socket).resetAndDestroy(), 20)
+        else socket.end()
     })
     return new Promise((resolve) =>
         server.listen(0, '127.0.0.1', () => resolve({ server, port: (server.address() as AddressInfo).port, seen }))
@@ -147,11 +170,29 @@ describe('previews', () => {
         expect(t.ctx.previews.get('shop')).toBeNull()
     })
 
+    it('refuses a chunked upload past the limit with 413, not as an app that does not answer', async () => {
+        await t.ctx.previews.open('shop', upstream.port)
+        const chunk = new Uint8Array(1024 * 1024)
+        let sent = 0
+        const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                if (sent++ > PREVIEW_BODY_MAX / chunk.byteLength) controller.close()
+                else controller.enqueue(chunk)
+            }
+        })
+        const res = await t.request(`${t.ctx.previews.base('shop')}upload`, {
+            method: 'POST',
+            body,
+            duplex: 'half'
+        })
+        expect(res.status).toBe(413)
+    })
+
     it('passes a WebSocket handshake under the key to the app, and closes anything else', async () => {
         await t.ctx.previews.open('shop', upstream.port)
         const base = t.ctx.previews.base('shop')
         const server = serve({ fetch: t.app.fetch, hostname: '127.0.0.1', port: 0 })
-        server.on('upgrade', previewUpgrade(t.ctx))
+        server.on('upgrade', previewUpgrade(t.ctx, { timeoutMs: 300 }))
         await new Promise((resolve) => server.once('listening', resolve))
         const port = (server.address() as AddressInfo).port
         const handshake = (url: string) =>
@@ -166,11 +207,25 @@ describe('previews', () => {
                 socket.on('close', () => resolve(data))
             })
         try {
-            expect(await handshake(`${base}hmr`)).toContain('101 Switching Protocols')
+            const answer = await handshake(`${base}hmr`)
+            expect(answer).toContain('101 Switching Protocols')
+            expect(answer).toMatch(/hello$/)
+            // The app's cookies get the prefix as over HTTP; one named like the factory's session never passes.
+            expect(answer).toContain(`set-cookie: hmr=1; Path=${base}\r\n`)
+            expect(answer).not.toContain('pf_session')
             const req = upstream.seen.at(-1)!
             expect(req.url).toBe(`${base}hmr`)
             expect(req.headers.cookie).toBeUndefined()
             expect(await handshake('/preview/shop/wrong/hmr')).toContain('404')
+            // A refused upgrade is its status alone; a reset after the upgrade cuts the socket, no HTTP inside it.
+            const refused = await handshake(`${base}refuse`)
+            expect(refused).toMatch(/^HTTP\/1\.1 403 Forbidden\r\n/)
+            expect(refused).not.toContain('pf_session')
+            expect(refused).not.toContain('nope')
+            const reset = await handshake(`${base}reset`)
+            expect(reset).toMatch(/hello$/)
+            expect(reset).not.toContain('502')
+            expect(await handshake(`${base}stall`)).toMatch(/^HTTP\/1\.1 504 Gateway Timeout\r\n/)
             // A malformed escape must not take the process down; a stranger's name leaves no key behind.
             expect(await handshake('/preview/%E0%A4%A/x/hmr')).toContain('400')
             expect(await handshake('/preview/stranger/x/hmr')).toContain('404')

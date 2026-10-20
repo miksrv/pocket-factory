@@ -6,6 +6,7 @@ import { loadConfig } from './config.js'
 
 const VARS = [
     'TELEGRAM_BOT_TOKEN',
+    'SANDBOX',
     'TELEGRAM_ALLOWED_USER_IDS',
     'DATA_ROOT',
     'CLAUDE_CONFIG_DIR',
@@ -171,6 +172,13 @@ describe('loadConfig', () => {
         expect(() => loadConfig()).toThrow('TELEGRAM_ALLOWED_USER_IDS must contain at least one numeric')
         vi.stubEnv('TELEGRAM_ALLOWED_USER_IDS', 'abc,0')
         expect(() => loadConfig()).toThrow('TELEGRAM_ALLOWED_USER_IDS')
+    })
+
+    it('wants a web password when agents run in sandboxes', () => {
+        vi.stubEnv('SANDBOX', 'sbx')
+        expect(() => loadConfig()).toThrow('WEB_AUTH_PASSWORD must be set with SANDBOX=sbx')
+        vi.stubEnv('WEB_AUTH_PASSWORD', 'secret')
+        expect(loadConfig().sandbox.mode).toBe('sbx')
     })
 
     it.each([

@@ -100,6 +100,17 @@ describe('Previews in sandboxes', () => {
         expect(closed).toEqual(['shop: open for 1 h', 'shop: its sandbox is gone'])
     })
 
+    it('drops the old preview when its replacement cannot be published', async () => {
+        const closed: string[] = []
+        previews.on('closed', (p, reason) => closed.push(`${p.project}: ${reason}`))
+        await previews.open('shop', 5173)
+        busy = new Set([18100, 18101, 18102])
+        await expect(previews.open('shop', 3000)).rejects.toThrow(/could not publish port 3000/)
+        expect(previews.get('shop')).toBeNull()
+        expect(previews.pinned('pf-shop')).toBe(false)
+        expect(closed).toEqual(['shop: its new port could not be published'])
+    })
+
     it('keeps the key until a reset rotates it', () => {
         const key = previews.key('shop')
         expect(previews.key('shop')).toBe(key)

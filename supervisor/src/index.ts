@@ -225,6 +225,9 @@ async function main(): Promise<void> {
         void bot?.stop()
         void tasks.shutdown().then(() => process.exit(0))
     }
+    // A promise nobody awaited that fails (a timer's store call, a detached send) is a bug to log,
+    // never a reason to take the queue, the bot and the web UI down with it.
+    process.on('unhandledRejection', (reason) => log.error('unhandled rejection', reason))
     process.once('SIGINT', () => shutdown('SIGINT'))
     process.once('SIGTERM', () => shutdown('SIGTERM'))
 

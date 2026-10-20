@@ -129,6 +129,11 @@ export function loadConfig(): Config {
     }
 
     const dataRoot = optional('DATA_ROOT') ?? path.resolve(process.cwd(), 'data')
+    // Every sandbox reaches the supervisor's port (the gateway, the factory MCP), and a Host header is
+    // the agent's to write: without a password the whole API would be open to every agent.
+    if (sandboxMode(optional('SANDBOX')) === 'sbx' && !optional('WEB_AUTH_PASSWORD')) {
+        throw new Error('WEB_AUTH_PASSWORD must be set with SANDBOX=sbx: every sandbox can reach the web port')
+    }
 
     return {
         telegram: {
