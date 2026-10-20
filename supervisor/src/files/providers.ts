@@ -248,8 +248,25 @@ export class Providers {
         tls.setDefaultCACertificates([...BASE_CAS, ...extra])
     }
 
+    /**
+     * The file as last parsed, by its mtime and size: the gateway reads it on every model call, and
+     * YAML parsing on each one held the event loop. A copy goes out, so no caller edits the cache.
+     */
+    private parsed: { stamp: string; value: { providers: Provider[]; error: string | null } } | null = null
+
     private read(): { providers: Provider[]; error: string | null } {
-        if (!fs.existsSync(this.file)) return { providers: [], error: null }
+        let stamp: string
+        try {
+            const stat = fs.statSync(this.file)
+            stamp = `${stat.mtimeMs}:${stat.size}:${stat.ino}`
+        } catch {
+            return { providers: [], error: null }
+        }
+        if (this.parsed?.stamp !== stamp) this.parsed = { stamp, value: this.parse() }
+        return structuredClone(this.parsed.value)
+    }
+
+    private parse(): { providers: Provider[]; error: string | null } {
         try {
             const doc = YAML.parse(fs.readFileSync(this.file, 'utf8')) as { providers?: unknown } | null
             const raw = Array.isArray(doc?.providers) ? doc.providers : []
@@ -267,6 +284,7 @@ export class Providers {
         fs.mkdirSync(path.dirname(this.file), { recursive: true })
         const sorted = [...providers].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
         fs.writeFileSync(this.file, HEADER + YAML.stringify({ providers: sorted.map(clean) }, { lineWidth: 0 }))
+        this.parsed = null
     }
 
     /** Every provider, as written (invalid file = none). */

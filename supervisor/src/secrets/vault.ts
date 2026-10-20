@@ -150,6 +150,7 @@ export const MASK = '••••'
 
 export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
     private cache: { mtime: number; data: Record<string, Stored> } | null = null
+    private masks: { data: Record<string, Stored>; values: string[] } | null = null
 
     /** `extraReserved`: names a run's entry must not take (the ones providers name as their keys). */
     constructor(
@@ -277,14 +278,23 @@ export class Vault extends EventEmitter<{ change: [change: VaultChange] }> {
 
     /** Every secret value long enough to mask, longest first (a value inside another is masked by the longer one). */
     private maskValues(): string[] {
-        return Object.values(this.read())
-            .filter((s) => s.secret && s.value.length >= MASK_MIN)
+        const data = this.read()
+        // Built once per version of the file: the store masks every string of every event.
+        if (this.masks?.data === data) return this.masks.values
+        const values = Object.values(data)
+            .filter((s) => s.secret && s.value.trim().length >= MASK_MIN)
             .flatMap((s) => {
-                // A multi-line value (a key file) is also masked line by line: a script may print one line of it.
-                const lines = s.value.split('\n').filter((l) => l.trim().length >= MASK_MIN)
-                return [s.value, ...(lines.length > 1 ? lines : [])]
+                // A value pasted with a trailing newline (or CRLF) is printed without it: mask the bare value
+                // too. A multi-line value (a key file) is also masked line by line: a script may print one line.
+                const lines = s.value
+                    .split('\n')
+                    .map((l) => l.replace(/\r$/, ''))
+                    .filter((l) => l.trim().length >= MASK_MIN)
+                return [s.value, s.value.trim(), ...(lines.length > 1 ? lines : [])]
             })
-            .sort((a, b) => b.length - a.length)
+        const unique = [...new Set(values)].sort((a, b) => b.length - a.length)
+        this.masks = { data, values: unique }
+        return unique
     }
 
     /** The text with every secret value replaced by the mask, as CI logs do. */

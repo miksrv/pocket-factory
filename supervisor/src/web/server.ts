@@ -6,6 +6,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { getCookie } from 'hono/cookie'
+import { HTTPException } from 'hono/http-exception'
 import { secureHeaders } from 'hono/secure-headers'
 
 import { BadName, Conflict, NotFound } from '../files/catalog.js'
@@ -138,6 +139,8 @@ export function createApp(app: AppContext): Hono<Env> {
         if (error instanceof BadName) return c.json({ error: error.message }, 400)
         if (error instanceof NotFound) return c.json({ error: error.message }, 404)
         if (error instanceof Conflict) return c.json({ error: error.message, changed: true }, 409)
+        // bodyLimit and the other middleware say what went wrong with a status of their own (413 …).
+        if (error instanceof HTTPException) return c.json({ error: error.message }, error.status)
         log.error(`${c.req.method} ${c.req.path} failed`, error)
         return c.json({ error: error instanceof Error ? error.message : String(error) }, 500)
     })

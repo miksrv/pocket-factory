@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 
 import type { AuditQuery } from '../../store/index.js'
 import type { Env } from '../context.js'
+import { limitOf } from '../request.js'
 
 const PERIODS: Record<string, number> = {
     '1h': 3_600_000,
@@ -31,16 +32,21 @@ export function auditRoutes(): Hono<Env> {
             agent: c.req.query('agent') || undefined,
             project: c.req.query('project') || undefined,
             before: Number(c.req.query('before')) || undefined,
-            limit: Math.min(Number(c.req.query('limit')) || 200, 1000)
+            limit: limitOf(c, 200, 1000)
         }
         // One row past the page says whether there is another page; the count
         // alone cannot, since events keep arriving while the client scrolls.
         const page = store.listAudit({ ...query, limit: query.limit! + 1 })
+        // Totals and filter lists scan the whole period: only the first page carries them.
         return c.json({
             events: page.slice(0, query.limit),
             has_more: page.length > query.limit!,
-            stats: store.auditStats({ since, kind: query.kind, agent: query.agent, project: query.project }),
-            facets: store.auditFacets(since)
+            ...(query.before
+                ? {}
+                : {
+                      stats: store.auditStats({ since, kind: query.kind, agent: query.agent, project: query.project }),
+                      facets: store.auditFacets(since)
+                  })
         })
     })
 

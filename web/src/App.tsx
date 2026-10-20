@@ -38,7 +38,7 @@ export function App() {
                         />
                         <Route
                             path='tasks/:id'
-                            element={<TaskPage />}
+                            element={<Keyed element={<TaskPage />} />}
                         />
                         <Route
                             path='chat'

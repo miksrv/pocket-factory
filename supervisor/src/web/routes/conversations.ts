@@ -7,6 +7,7 @@ import { type Attachment, isPreviewable, MAX_ATTACHMENTS } from '../../files/inb
 import { routineOf } from '../../routines/spec.js'
 import type { Conversation, Task, TaskEvent } from '../../store/index.js'
 import type { Env } from '../context.js'
+import { limitOf } from '../request.js'
 import { cursorOf } from './cursor.js'
 
 /** Absent, null or a string: what an optional text field of a request body may be. */
@@ -19,7 +20,7 @@ export function conversationRoutes(): Hono<Env> {
     /** Newest activity first; `before` + `before_id` = the last row shown, for the next page. */
     app.get('/', (c) => {
         const { store } = c.get('app')
-        return c.json(store.listConversations(Math.min(Number(c.req.query('limit')) || 50, 200), cursorOf(c)))
+        return c.json(store.listConversations(limitOf(c, 50, 200), cursorOf(c)))
     })
 
     /** A conversation the Chat page may show; a deleted one is gone for the API too, not only for the list. */
@@ -237,9 +238,15 @@ export function conversationRoutes(): Hono<Env> {
                 if (replaying) buffered.push(['task', task])
                 else void send('task', task)
             }
+            // Whether a task is this conversation's, read once per task: events stream by the hundred.
+            const ours = new Map<string, boolean>()
             const onEvent = (event: TaskEvent) => {
-                const task = store.getTask(event.task_id)
-                if (task?.conversation_id !== conversation.id) return
+                let mine = ours.get(event.task_id)
+                if (mine === undefined) {
+                    mine = store.getTask(event.task_id)?.conversation_id === conversation.id
+                    ours.set(event.task_id, mine)
+                }
+                if (!mine) return
                 if (replaying) buffered.push(['event', event])
                 else if (event.id > lastSent) {
                     lastSent = event.id

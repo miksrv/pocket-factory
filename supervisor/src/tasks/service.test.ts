@@ -11,6 +11,7 @@ import {
     mcpKey,
     mcpLabel,
     openQuestions,
+    stopReason,
     titleFrom,
     titleOf
 } from './service.js'
@@ -108,6 +109,15 @@ const ask = (over: Partial<Ask> = {}): Ask => ({
     agent: null,
     asked_at: '2026-10-06T08:00:00.000Z',
     ...over
+})
+
+describe('stopReason', () => {
+    it('names the turn limit and how to go on', () => {
+        expect(stopReason({ subtype: 'error_max_turns', numTurns: 51 })).toMatch(/turn limit \(51 turns.*"continue"/)
+        expect(stopReason({ subtype: 'error_during_execution', numTurns: 3 })).toBe(
+            'claude stopped: error_during_execution'
+        )
+    })
 })
 
 describe('cutOffNote', () => {

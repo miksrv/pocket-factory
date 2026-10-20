@@ -220,6 +220,67 @@ describe('StreamTranslator', () => {
         expect(events.filter((e) => e.event === 'content_block_stop')).toHaveLength(2)
     })
 
+    it('keeps interleaved parallel calls apart, the second told whole when the first closes', () => {
+        const t = new StreamTranslator('m')
+        const call = (index: number, fn: { name?: string; arguments?: string }, id?: string) =>
+            t.push({ choices: [{ delta: { tool_calls: [{ index, ...(id ? { id } : {}), function: fn }] } }] })
+        const events = [
+            ...call(0, { name: 'Read', arguments: '{"p"' }, 'a'),
+            ...call(1, { name: 'Grep', arguments: '{"q"' }, 'b'),
+            ...call(0, { arguments: ':1}' }),
+            ...call(1, { arguments: ':2}' }),
+            ...t.end()
+        ]
+        expect(events.map((e) => e.event)).toEqual([
+            'message_start',
+            'content_block_start',
+            'content_block_delta',
+            'content_block_delta',
+            'content_block_stop',
+            'content_block_start',
+            'content_block_delta',
+            'content_block_stop',
+            'message_delta',
+            'message_stop'
+        ])
+        expect(events[1].data).toMatchObject({ index: 0, content_block: { id: 'a', name: 'Read' } })
+        expect(events[5].data).toMatchObject({ index: 1, content_block: { id: 'b', name: 'Grep' } })
+        expect(events[6].data).toMatchObject({ index: 1, delta: { partial_json: '{"q":2}' } })
+        const json = (i: number) =>
+            events
+                .filter((e) => e.event === 'content_block_delta' && e.data.index === i)
+                .map((e) => (e.data.delta as { partial_json: string }).partial_json)
+                .join('')
+        expect(JSON.parse(json(0))).toEqual({ p: 1 })
+        expect(JSON.parse(json(1))).toEqual({ q: 2 })
+    })
+
+    it('starts a new call for a named fragment without index or id, and continues an anonymous one', () => {
+        const t = new StreamTranslator('m')
+        const whole = (fn: { name?: string; arguments?: string }) =>
+            t.push({ choices: [{ delta: { tool_calls: [{ function: fn }] } }] })
+        const events = [...whole({ name: 'A', arguments: '{"a"' }), ...whole({ arguments: ':1}' })]
+        events.push(...whole({ name: 'B', arguments: '{"b":2}' }), ...t.end())
+        const starts = events.filter((e) => e.event === 'content_block_start')
+        expect(starts.map((e) => (e.data.content_block as { name: string }).name)).toEqual(['A', 'B'])
+        const deltas = events.filter((e) => e.event === 'content_block_delta')
+        expect(deltas.map((e) => [e.data.index, (e.data.delta as { partial_json: string }).partial_json])).toEqual([
+            [0, '{"a"'],
+            [0, ':1}'],
+            [1, '{"b":2}']
+        ])
+        expect(events.at(-2)?.data).toMatchObject({ delta: { stop_reason: 'tool_use' } })
+    })
+
+    it('says nothing after an error, end() included', () => {
+        const t = new StreamTranslator('m')
+        t.push({ choices: [{ delta: { content: 'Hi' } }] })
+        expect(t.push({ error: { message: 'boom' } } as never).map((e) => e.event)).toEqual(['error'])
+        expect(t.push({ choices: [{ delta: { content: 'more' } }] })).toEqual([])
+        expect(t.end()).toEqual([])
+        expect(t.fail('again')).toEqual([])
+    })
+
     it('tells an upstream error as a Messages error event', () => {
         const t = new StreamTranslator('m')
         const events = t.push({ error: { message: 'quota', type: 'rate_limit_error' } } as never)
@@ -244,6 +305,13 @@ describe('SseParser', () => {
         const p = new SseParser()
         expect(p.push('data: {"a":1}\n\ndata: {"b"')).toEqual([{ a: 1 }])
         expect(p.push(':2}\r\n: keep-alive\ndata: [DONE]\n')).toEqual([{ b: 2 }, 'DONE'])
+    })
+
+    it('hands over a last line without its newline at the end', () => {
+        const p = new SseParser()
+        expect(p.push('data: {"a":1}\ndata: {"b":2}')).toEqual([{ a: 1 }])
+        expect(p.end()).toEqual([{ b: 2 }])
+        expect(p.end()).toEqual([])
     })
 })
 

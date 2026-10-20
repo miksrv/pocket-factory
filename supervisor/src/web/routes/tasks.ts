@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 
 import type { TaskStatus } from '../../store/index.js'
 import type { Env } from '../context.js'
+import { limitOf } from '../request.js'
 import { cursorOf } from './cursor.js'
 
 export function taskRoutes(): Hono<Env> {
@@ -11,7 +12,7 @@ export function taskRoutes(): Hono<Env> {
     app.get('/', (c) => {
         const { store } = c.get('app')
         const status = c.req.query('status') as TaskStatus | undefined
-        const limit = Math.min(Number(c.req.query('limit')) || 50, 200)
+        const limit = limitOf(c, 50, 200)
         return c.json(
             store.listTasks({ status, project: c.req.query('project') || undefined, before: cursorOf(c), limit })
         )

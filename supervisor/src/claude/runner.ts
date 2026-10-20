@@ -114,7 +114,7 @@ export interface RunOptions {
     permissionMode: string
     /** The CLI's whole environment; defaults to the supervisor's own. */
     env?: NodeJS.ProcessEnv
-    /** Wall-clock limit for the run; 0 = none. A hung tool otherwise holds a session slot forever. Paused while an `ask` waits for the owner, then restarted. */
+    /** Wall-clock limit for the run; 0 = none. A hung tool otherwise holds a session slot forever. Paused while an `ask` waits for the owner, then resumed with what was left. */
     timeoutMs?: number
     /** Extra MCP servers for this run (`--mcp-config`): paths to JSON files or JSON strings. */
     mcpConfig?: string[]
@@ -173,7 +173,7 @@ export interface RunHandle {
     result: Promise<RunResult>
     /** Ask the CLI to stop; SIGKILL follows if it has not exited after `KILL_GRACE_MS`. */
     kill: () => void
-    /** Answer a pending `ask`; false when no such request is waiting (answered, cancelled, or the run ended). */
+    /** Answer a pending `ask`; false when no such request is waiting or the answer cannot reach the CLI (answered, cancelled, stdin closed, or the run ended). */
     answer: (requestId: string, response: AskResponse) => boolean
 }
 
@@ -187,6 +187,8 @@ const KILL_GRACE_MS = 10_000
  */
 const HANDSHAKE_MS = 10_000
 const INIT_REQUEST_ID = 'supervisor-init'
+/** How much of the CLI's stderr a run keeps for its error message: the end says what went wrong. */
+const STDERR_KEEP = 16 * 1024
 
 export class RunTimeout extends Error {
     constructor(ms: number) {
@@ -348,10 +350,13 @@ export function runClaude(options: RunOptions): RunHandle {
     })
     let launched: Launched | null = null
     let stdinOpen = true
-    const write = (message: unknown) => {
+    let exited = false
+    /** False when nothing can reach the CLI any more: not started, stdin closed, or gone. */
+    const write = (message: unknown): boolean => {
         const child = launched?.child
-        if (!child || !stdinOpen || child.exitCode !== null) return
+        if (!child || !stdinOpen || exited || child.exitCode !== null) return false
         child.stdin!.write(`${JSON.stringify(message)}\n`)
+        return true
     }
     const closeStdin = () => {
         if (!stdinOpen) return
@@ -384,26 +389,38 @@ export function runClaude(options: RunOptions): RunHandle {
     }
 
     // The wall-clock limit measures the agent's work, not the owner's
-    // thinking time: it is disarmed while a request waits and re-armed in
-    // full once the last one is answered.
+    // thinking time: it is paused while a request waits and goes on with
+    // what was left once the last one is answered.
     const pending = new Set<string>()
     let timeout: NodeJS.Timeout | undefined
+    let remainingMs = options.timeoutMs ?? 0
+    let deadline = 0
     const armTimeout = () => {
-        if (!options.timeoutMs || options.timeoutMs <= 0) return
-        clearTimeout(timeout)
+        if (!options.timeoutMs || options.timeoutMs <= 0 || timeout) return
+        deadline = Date.now() + remainingMs
         timeout = setTimeout(() => {
             timedOut = true
             log.warn(`claude exceeded ${options.timeoutMs} ms, stopping`)
             kill()
-        }, options.timeoutMs)
+        }, remainingMs)
         timers.push(timeout)
+    }
+    const pauseTimeout = () => {
+        if (!timeout) return
+        clearTimeout(timeout)
+        timeout = undefined
+        remainingMs = Math.max(0, deadline - Date.now())
     }
 
     const answer = (requestId: string, response: AskResponse): boolean => {
-        if (!pending.delete(requestId)) return false
-        write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
+        if (!pending.has(requestId)) return false
+        pending.delete(requestId)
+        const sent = write({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: requestId, response }
+        })
         if (pending.size === 0) armTimeout()
-        return true
+        return sent
     }
 
     let resolveSession: (id: string) => void
@@ -449,7 +466,7 @@ export function runClaude(options: RunOptions): RunHandle {
          */
         let promptTaken = false
         const seenMessages = new Set<string>()
-        const stderr: string[] = []
+        let stderr = ''
 
         const rl = readline.createInterface({ input: child.stdout! })
         rl.on('line', (line) => {
@@ -468,9 +485,12 @@ export function runClaude(options: RunOptions): RunHandle {
             }
             if (event.type === 'control_request' && event.request_id) {
                 const request = event.request ?? {}
-                if (request.subtype === 'can_use_tool' && request.tool_name) {
+                if (request.subtype === 'can_use_tool' && request.tool_name && !stdinOpen) {
+                    // After the result (a background sub-agent): no answer could reach the CLI, so nobody is asked.
+                    log.warn(`${request.tool_name} asked after the result; it cannot be answered`)
+                } else if (request.subtype === 'can_use_tool' && request.tool_name) {
                     pending.add(event.request_id)
-                    clearTimeout(timeout)
+                    pauseTimeout()
                     emit({
                         type: 'ask',
                         agent: null,
@@ -578,6 +598,11 @@ export function runClaude(options: RunOptions): RunHandle {
                 finalEvent = event
                 openAgentsAtResult = openAgents.size
                 stoppedAgentsAtResult = stoppedAgents.size
+                // A background sub-agent's request still open would wait forever once stdin ends: refuse it now.
+                for (const requestId of [...pending]) {
+                    answer(requestId, { behavior: 'deny', message: 'The run has ended; nobody can answer any more.' })
+                    emit({ type: 'ask_cancelled', agent: null, parentToolUseId: null, requestId })
+                }
                 closeStdin() // one prompt per run: the CLI exits once stdin ends
                 return
             }
@@ -646,54 +671,60 @@ export function runClaude(options: RunOptions): RunHandle {
         })
 
         child.stderr!.on('data', (chunk: Buffer) => {
-            stderr.push(chunk.toString())
+            stderr = (stderr + chunk.toString()).slice(-STDERR_KEEP)
         })
 
         child.on('error', (error) => {
             // spawn failed (no `claude` on PATH): `close` never comes, so the
             // timeout timer would otherwise fire against nothing.
+            exited = true
+            pending.clear()
             for (const timer of timers) clearTimeout(timer)
             reject(error)
         })
         child.on('close', (code, signal) => {
+            exited = true
+            // Nothing can answer a request any more: a message typed now is a new task, not an answer.
+            pending.clear()
             for (const timer of timers) clearTimeout(timer)
-            const errText = stderr.join('').trim()
+            const errText = stderr.trim()
             if (errText) log.debug(`stderr: ${errText}`)
 
+            // The reply arrived: whatever ended the process afterwards (the limit, a stop, background
+            // sub-agents that never finished), the reply stands.
+            if (finalEvent) {
+                const id = finalEvent.session_id ?? sessionFromInit ?? ''
+                resolveSession(id)
+                resolve({
+                    sessionId: id,
+                    text: finalEvent.result ?? '',
+                    isError: finalEvent.is_error ?? (code !== 0 && !timedOut && !stopping),
+                    subtype: finalEvent.subtype ?? (finalEvent.is_error ? 'error' : 'success'),
+                    numTurns: finalEvent.num_turns ?? 0,
+                    costUsd: finalEvent.total_cost_usd ?? 0,
+                    durationMs: finalEvent.duration_ms ?? 0,
+                    inputTokens: finalEvent.usage?.input_tokens ?? 0,
+                    outputTokens: finalEvent.usage?.output_tokens ?? 0,
+                    cacheReadTokens: finalEvent.usage?.cache_read_input_tokens ?? 0,
+                    cacheCreationTokens: finalEvent.usage?.cache_creation_input_tokens ?? 0,
+                    rateLimits,
+                    openAgentsAtResult,
+                    stoppedAgentsAtResult
+                })
+                return
+            }
             if (timedOut) {
                 reject(new RunTimeout(options.timeoutMs ?? 0))
                 return
             }
             // The CLI handles SIGTERM itself and exits with 143, so `signal` is
             // usually null after a stop: report the stop, not a bare exit code.
-            if (signal || (stopping && !finalEvent)) {
+            if (signal || stopping) {
                 reject(new Error(`claude was stopped${signal ? ` by ${signal}` : ''}`))
                 return
             }
-            if (!finalEvent) {
-                const why = promptSent && !promptTaken ? ' before it took the prompt' : ' without a result'
-                reject(new Error(`claude exited with code ${code}${why}${errText ? `: ${errText}` : ''}`))
-                return
-            }
-
-            const id = finalEvent.session_id ?? sessionFromInit ?? ''
-            resolveSession(id)
-            resolve({
-                sessionId: id,
-                text: finalEvent.result ?? '',
-                isError: finalEvent.is_error ?? code !== 0,
-                subtype: finalEvent.subtype ?? (finalEvent.is_error ? 'error' : 'success'),
-                numTurns: finalEvent.num_turns ?? 0,
-                costUsd: finalEvent.total_cost_usd ?? 0,
-                durationMs: finalEvent.duration_ms ?? 0,
-                inputTokens: finalEvent.usage?.input_tokens ?? 0,
-                outputTokens: finalEvent.usage?.output_tokens ?? 0,
-                cacheReadTokens: finalEvent.usage?.cache_read_input_tokens ?? 0,
-                cacheCreationTokens: finalEvent.usage?.cache_creation_input_tokens ?? 0,
-                rateLimits,
-                openAgentsAtResult,
-                stoppedAgentsAtResult
-            })
+            const why = promptSent && !promptTaken ? ' before it took the prompt' : ' without a result'
+            reject(new Error(`claude exited with code ${code}${why}${errText ? `: ${errText}` : ''}`))
         })
     }
 

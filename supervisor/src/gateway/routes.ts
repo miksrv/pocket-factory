@@ -91,7 +91,9 @@ export function gatewayRoutes(): Hono<Env> {
         if (!body) return anthropicError(400, 'invalid JSON', 'invalid_request_error')
 
         const controller = new AbortController()
+        // The timer bounds the headers and a whole non-streaming body; the CLI going away ends it all.
         const timer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS)
+        const signal = AbortSignal.any([controller.signal, c.req.raw.signal])
         try {
             const upstream =
                 provider.kind === 'openai'
@@ -103,7 +105,7 @@ export function gatewayRoutes(): Hono<Env> {
                               ...(key ? { authorization: `Bearer ${key}` } : {})
                           },
                           body: JSON.stringify(toOpenAiRequest(body)),
-                          signal: controller.signal
+                          signal
                       })
                     : await fetch(`${provider.url}/v1/messages`, {
                           method: 'POST',
@@ -118,9 +120,8 @@ export function gatewayRoutes(): Hono<Env> {
                               ...(key ? { 'x-api-key': key, authorization: `Bearer ${key}` } : {})
                           },
                           body: JSON.stringify(body),
-                          signal: controller.signal
+                          signal
                       })
-            clearTimeout(timer)
             if (!upstream.ok) {
                 const text = (await upstream.text().catch(() => '')).slice(0, 2000)
                 tasks.noteProvider(name, false, `${upstream.status}: ${text || upstream.statusText}`)
@@ -152,11 +153,13 @@ export function gatewayRoutes(): Hono<Env> {
                 headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }
             })
         } catch (error) {
-            clearTimeout(timer)
             const message = fetchError(error)
             tasks.noteProvider(name, false, message)
             log.warn(`${name}: ${message}`)
             return anthropicError(502, `provider ${name} unreachable: ${message}`)
+        } finally {
+            // A stream returned above outlives the timer; only the CLI's going away ends it then.
+            clearTimeout(timer)
         }
     })
 
@@ -218,7 +221,10 @@ export function gatewayRoutes(): Hono<Env> {
 }
 
 /** The upstream chat-completions SSE, re-told as Messages SSE frames. */
-function translateStream(upstream: ReadableStream<Uint8Array> | null, model: string): ReadableStream<Uint8Array> {
+export function translateStream(
+    upstream: ReadableStream<Uint8Array> | null,
+    model: string
+): ReadableStream<Uint8Array> {
     const encoder = new TextEncoder()
     const decoder = new TextDecoder()
     const parser = new SseParser()
@@ -229,24 +235,26 @@ function translateStream(upstream: ReadableStream<Uint8Array> | null, model: str
             const push = (events: ReturnType<StreamTranslator['push']>) => {
                 for (const event of events) controller.enqueue(encoder.encode(sseFrame(event)))
             }
-            if (!reader) {
+            const take = (items: ReturnType<SseParser['push']>) => {
+                for (const item of items) push(item === 'DONE' ? translator.end() : translator.push(item))
+            }
+            let chunk: Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>['read']>> | undefined
+            try {
+                chunk = await reader?.read()
+            } catch (error) {
+                // The provider dropped the stream mid-answer: the CLI gets a Messages error, not a cut.
+                push(translator.fail(`upstream stream failed: ${fetchError(error)}`))
+                controller.close()
+                return
+            }
+            if (!chunk || chunk.done) {
+                take(parser.push(decoder.decode()))
+                take(parser.end())
                 push(translator.end())
                 controller.close()
                 return
             }
-            const { done, value } = await reader.read()
-            if (done) {
-                push(translator.end())
-                controller.close()
-                return
-            }
-            for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-                if (item === 'DONE') {
-                    push(translator.end())
-                    continue
-                }
-                push(translator.push(item))
-            }
+            take(parser.push(decoder.decode(chunk.value, { stream: true })))
         },
         cancel() {
             void reader?.cancel()

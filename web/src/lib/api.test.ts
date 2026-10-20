@@ -172,8 +172,7 @@ describe('fmt', () => {
         expect(fmt.tokens(3_640_000)).toBe('3.6M')
     })
 
-    // Bug: 999 500 and up round to "1000k" instead of switching to millions.
-    it.fails('tokens never shows a thousand thousands', () => {
+    it('tokens never shows a thousand thousands', () => {
         expect(fmt.tokens(999_600)).toBe('1.0M')
     })
 

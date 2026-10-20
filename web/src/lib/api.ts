@@ -159,8 +159,9 @@ export interface AgentActivity {
 export interface Audit {
     events: AuditEvent[]
     has_more: boolean
-    stats: { events: number; agents: number; tasks: number; tokens: number }
-    facets: { agents: string[]; projects: string[] }
+    /** With the first page only (no `before`). */
+    stats?: { events: number; agents: number; tasks: number; tokens: number }
+    facets?: { agents: string[]; projects: string[] }
 }
 
 /** Keyset cursor of a list: the timestamp the list is sorted by plus the row's id, to break ties. */
@@ -1415,7 +1416,8 @@ export const fmt = {
     /** "1 run", "3 runs". */
     plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`,
     tokens: (n: number) =>
-        n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n),
+        // From 999 500 on, thousands would round to "1000k": millions take over there.
+        n >= 999_500 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n),
     pct: (share: number) => `${Math.round(share * 100)}%`,
     /** A task's share of the 5-hour window: "+3% of 5h", "<1% of 5h" or null. */
     windowDelta: (share: number | null) =>

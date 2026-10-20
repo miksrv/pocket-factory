@@ -269,8 +269,12 @@ function Form({
         Object.fromEntries(Object.entries(record).filter(([, v]) => v !== '' && v !== undefined && v !== null))
     const same = (a: Record<string, unknown>, b: Record<string, unknown>) =>
         JSON.stringify(clean(a)) === JSON.stringify(clean(b))
-    const dirty = entry
-        ? body !== entry.body || !same(fm, entry.frontmatter)
+    // What was last saved from this form, until the list's reload brings the same (or a newer) file:
+    // a second save right after the first must not send the stale `updated_at` (409) or read as dirty.
+    const [saved, setSaved] = useState<CatalogEntry | null>(null)
+    const base = entry && saved && saved.updated_at > entry.updated_at ? saved : entry
+    const dirty = base
+        ? body !== base.body || !same(fm, base.frontmatter)
         : Boolean(name.trim()) || body !== template || !same(fm, defaults)
     const trimmed = name.trim()
     const nameTaken = !entry && taken.has(trimmed)
@@ -314,12 +318,13 @@ function Form({
             const saved = await api.save(
                 kind,
                 trimmed,
-                { frontmatter: clean(fm), body, ...(entry ? { updated_at: entry.updated_at } : {}) },
+                { frontmatter: clean(fm), body, ...(base ? { updated_at: base.updated_at } : {}) },
                 !entry
             )
             // The form stays mounted for the same name: adopt the saved state so it reads as clean.
             setFm(saved.frontmatter)
             setBody(saved.body)
+            setSaved(saved)
             onSaved(saved)
         } catch (e) {
             setError((e as Error).message)

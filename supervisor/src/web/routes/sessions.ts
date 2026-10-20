@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 
 import type { Task } from '../../store/index.js'
 import type { Env } from '../context.js'
+import { limitOf } from '../request.js'
 import { cursorOf } from './cursor.js'
 
 export function sessionRoutes(): Hono<Env> {
@@ -12,7 +13,7 @@ export function sessionRoutes(): Hono<Env> {
     /** Most recently updated first; `before` + `before_id` = the last row shown, for the next page. */
     app.get('/', async (c) => {
         const { transcripts, store, config } = c.get('app')
-        const list = transcripts.list(Math.min(Number(c.req.query('limit')) || 50, 200), cursorOf(c))
+        const list = transcripts.list(limitOf(c, 50, 200), cursorOf(c))
         // Resumed tasks share a session: keep the newest one (the list is newest first).
         const tasksBySession = new Map<string, Task>()
         for (const task of store.listTasks({ limit: 1000 })) {
@@ -46,10 +47,12 @@ export function sessionRoutes(): Hono<Env> {
         const summary = transcripts.find(c.req.param('id'))
         if (!summary) return c.json({ error: 'session not found' }, 404)
         const before = Number(c.req.query('before')) || undefined
-        const limit = Math.min(Number(c.req.query('limit')) || 200, 1000)
+        const limit = limitOf(c, 200, 1000)
         const window = await transcripts.read(summary.session_id, { before, limit })
         if (!window) return c.json({ error: 'session not found' }, 404)
-        return c.json({ ...summary, ...window })
+        // The CLI's own record holds what a tool printed as it was: masked here as everywhere else.
+        const { store } = c.get('app')
+        return c.json(store.redactDeep({ ...summary, ...window }))
     })
 
     return app

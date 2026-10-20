@@ -255,19 +255,29 @@ export interface SseEvent {
     data: Record<string, unknown>
 }
 
+/** A tool call of a streamed completion: emitted live while its block is open, buffered while another is. */
+interface StreamCall {
+    index: number | undefined
+    id: string
+    name: string
+    args: string
+    state: 'pending' | 'open' | 'closed'
+}
+
 /**
  * One streamed chat completion, re-told as Messages SSE events. Chunks come
  * in any provider's rhythm (text and tool-call fragments by index, the usage
  * alone at the end); the events come out in the Messages order: one
  * `message_start`, blocks opened and closed as the kind changes, then
- * `message_delta` with the stop reason and usage, `message_stop`.
+ * `message_delta` with the stop reason and usage, `message_stop`. Messages
+ * blocks cannot interleave, so the first tool call streams live and the calls
+ * that arrive while it is open are buffered and told whole when it closes.
  */
 export class StreamTranslator {
     private started = false
     private index = -1
-    private open: { kind: 'text' | 'tool'; call: number; id: string } | null = null
-    private toolBlocks = new Map<number, number>()
-    private sawTool = false
+    private open: 'text' | StreamCall | null = null
+    private calls: StreamCall[] = []
     private finish: string | null = null
     private usage: OpenAiUsage | null = null
     private done = false
@@ -276,46 +286,23 @@ export class StreamTranslator {
 
     push(chunk: OpenAiChunk): SseEvent[] {
         const out: SseEvent[] = []
-        if (!this.started) {
-            this.started = true
-            out.push({
-                event: 'message_start',
-                data: {
-                    type: 'message_start',
-                    message: {
-                        id: chunk.id ?? newId('msg'),
-                        type: 'message',
-                        role: 'assistant',
-                        model: chunk.model ?? this.model,
-                        content: [],
-                        stop_reason: null,
-                        stop_sequence: null,
-                        usage: { input_tokens: 0, output_tokens: 0 }
-                    }
-                }
-            })
-        }
+        if (this.done) return out
+        this.start(out, chunk)
         if (chunk.usage) this.usage = chunk.usage
         // An upstream error in the stream (a provider's rate limit mid-answer): told as the Messages API tells it.
         const failure = (chunk as { error?: { message?: string; type?: string } }).error
         if (failure) {
-            out.push({
-                event: 'error',
-                data: {
-                    type: 'error',
-                    error: { type: failure.type ?? 'api_error', message: failure.message ?? 'upstream error' }
-                }
-            })
+            out.push(...this.fail(failure.message ?? 'upstream error', failure.type))
             return out
         }
         const choice = chunk.choices?.[0]
         if (!choice) return out
         const delta = choice.delta ?? {}
         if (typeof delta.content === 'string' && delta.content) {
-            if (this.open?.kind !== 'text') {
+            if (this.open !== 'text') {
                 this.close(out)
                 this.index++
-                this.open = { kind: 'text', call: -1, id: '' }
+                this.open = 'text'
                 out.push({
                     event: 'content_block_start',
                     data: { type: 'content_block_start', index: this.index, content_block: { type: 'text', text: '' } }
@@ -330,39 +317,29 @@ export class StreamTranslator {
                 }
             })
         }
-        for (const call of delta.tool_calls ?? []) {
-            const n = call.index ?? 0
-            // A fragment continues the open call when it carries the same index and no other id; a
-            // provider that omits `index` and sends whole calls still gets one block per call id.
-            const continues =
-                this.open?.kind === 'tool' && this.open.call === n && (!call.id || call.id === this.open.id)
-            if (!continues) {
-                this.close(out)
-                this.index++
-                const id = call.id || newId('toolu')
-                this.open = { kind: 'tool', call: n, id }
-                this.toolBlocks.set(n, this.index)
-                this.sawTool = true
-                out.push({
-                    event: 'content_block_start',
-                    data: {
-                        type: 'content_block_start',
-                        index: this.index,
-                        content_block: { type: 'tool_use', id, name: call.function?.name ?? '', input: {} }
-                    }
-                })
+        for (const fragment of delta.tool_calls ?? []) {
+            let call = this.callOf(fragment)
+            if (!call) {
+                call = {
+                    index: fragment.index,
+                    id: fragment.id || newId('toolu'),
+                    name: fragment.function?.name ?? '',
+                    args: '',
+                    state: 'pending'
+                }
+                this.calls.push(call)
+                if (this.open === 'text' || !this.open) {
+                    this.close(out)
+                    this.openCall(out, call)
+                }
             }
-            const args = call.function?.arguments
-            if (args) {
-                out.push({
-                    event: 'content_block_delta',
-                    data: {
-                        type: 'content_block_delta',
-                        index: this.index,
-                        delta: { type: 'input_json_delta', partial_json: args }
-                    }
-                })
+            const args = fragment.function?.arguments ?? ''
+            if (call.state === 'open') this.argsDelta(out, args)
+            else if (call.state === 'pending') {
+                call.args += args
+                if (!call.name) call.name = fragment.function?.name ?? ''
             }
+            // A fragment for a call whose block is already closed has nowhere to go.
         }
         if (choice.finish_reason) this.finish = choice.finish_reason
         return out
@@ -372,14 +349,14 @@ export class StreamTranslator {
     end(): SseEvent[] {
         const out: SseEvent[] = []
         if (this.done) return out
-        this.done = true
-        if (!this.started) this.push({ choices: [] }).forEach((e) => out.push(e))
+        this.start(out, {})
         this.close(out)
+        this.done = true
         out.push({
             event: 'message_delta',
             data: {
                 type: 'message_delta',
-                delta: { stop_reason: stopReason(this.finish, this.sawTool), stop_sequence: null },
+                delta: { stop_reason: stopReason(this.finish, this.calls.length > 0), stop_sequence: null },
                 usage: usageOf(this.usage)
             }
         })
@@ -387,10 +364,94 @@ export class StreamTranslator {
         return out
     }
 
+    /** A Messages `error` event; nothing follows it, `end()` included. */
+    fail(message: string, type = 'api_error'): SseEvent[] {
+        if (this.done) return []
+        this.done = true
+        return [{ event: 'error', data: { type: 'error', error: { type, message } } }]
+    }
+
+    private start(out: SseEvent[], chunk: OpenAiChunk): void {
+        if (this.started) return
+        this.started = true
+        out.push({
+            event: 'message_start',
+            data: {
+                type: 'message_start',
+                message: {
+                    id: chunk.id ?? newId('msg'),
+                    type: 'message',
+                    role: 'assistant',
+                    model: chunk.model ?? this.model,
+                    content: [],
+                    stop_reason: null,
+                    stop_sequence: null,
+                    usage: { input_tokens: 0, output_tokens: 0 }
+                }
+            }
+        })
+    }
+
+    /**
+     * The call a fragment belongs to: by id, else by index (the latest with it, unless the fragment
+     * names another id); a fragment with neither continues the last call unless it names a function.
+     */
+    private callOf(fragment: OpenAiToolCall): StreamCall | undefined {
+        if (fragment.id) {
+            const byId = this.calls.find((c) => c.id === fragment.id)
+            if (byId) return byId
+        }
+        if (fragment.index !== undefined) {
+            const byIndex = this.calls.filter((c) => c.index === fragment.index).at(-1)
+            return byIndex && !fragment.id ? byIndex : undefined
+        }
+        if (fragment.id || fragment.function?.name) return undefined
+        return this.calls.at(-1)
+    }
+
+    private openCall(out: SseEvent[], call: StreamCall): void {
+        this.index++
+        call.state = 'open'
+        this.open = call
+        out.push({
+            event: 'content_block_start',
+            data: {
+                type: 'content_block_start',
+                index: this.index,
+                content_block: { type: 'tool_use', id: call.id, name: call.name, input: {} }
+            }
+        })
+        this.argsDelta(out, call.args)
+        call.args = ''
+    }
+
+    private argsDelta(out: SseEvent[], args: string): void {
+        if (!args) return
+        out.push({
+            event: 'content_block_delta',
+            data: {
+                type: 'content_block_delta',
+                index: this.index,
+                delta: { type: 'input_json_delta', partial_json: args }
+            }
+        })
+    }
+
+    /** Closes the open block; a closed tool call lets the buffered ones out, each told whole. */
     private close(out: SseEvent[]): void {
         if (!this.open) return
+        const wasTool = this.open !== 'text'
+        if (this.open !== 'text') this.open.state = 'closed'
         out.push({ event: 'content_block_stop', data: { type: 'content_block_stop', index: this.index } })
         this.open = null
+        if (!wasTool) return
+        for (const call of this.calls) {
+            if (call.state !== 'pending') continue
+            this.openCall(out, call)
+            call.state = 'closed'
+            out.push({ event: 'content_block_stop', data: { type: 'content_block_stop', index: this.index } })
+            this.open = null
+        }
     }
 }
 
@@ -424,6 +485,11 @@ export class SseParser {
             }
         }
         return out
+    }
+
+    /** What is left in the buffer once the stream ends: a last line without its newline. */
+    end(): Array<Record<string, unknown> | 'DONE'> {
+        return this.buffer ? this.push('\n') : []
     }
 }
 

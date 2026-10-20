@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { localTime, startOfDay } from '../../routines/cron.js'
 import type { TokensByDayRow } from '../../store/index.js'
 import type { Env } from '../context.js'
+import { limitOf } from '../request.js'
 
 /** The ranges the Overview's chart offers. */
 const RANGES = [7, 30, 90]
@@ -111,7 +112,7 @@ export function usageRoutes(): Hono<Env> {
         const { store, tasks } = c.get('app')
         return c.json({
             latest: tasks.limits() ?? null,
-            history: store.listRateLimits(Math.min(Number(c.req.query('limit')) || 100, 1000)),
+            history: store.listRateLimits(limitOf(c, 100, 1000)),
             probing: tasks.probing()
         })
     })

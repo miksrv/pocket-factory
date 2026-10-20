@@ -395,11 +395,15 @@ function Thread({
     const routine = routineOf(conversation)
     const last = ordered.at(-1)
     // A run's steps come before its task: the thread says how far they are until the task lands here.
+    // Every three seconds while a run's steps go; a slow look otherwise, only to notice a run starting.
+    const [routinePoll, setRoutinePoll] = useState(3000)
     const routineView = useAsync(
         () => (routine ? api.schedule(routine) : Promise.resolve(null)),
         [routine],
-        routine ? 3000 : undefined
+        routine ? routinePoll : undefined
     )
+    const routineRunning = routineView.data?.last_run?.status === 'running'
+    useEffect(() => setRoutinePoll(routineRunning ? 3000 : 30_000), [routineRunning])
     const progress = runProgress(
         routineView.data?.last_run,
         routineView.data?.steps.filter((s) => s.kind !== 'agent').length ?? 0
@@ -470,7 +474,9 @@ function Thread({
         try {
             const task = await api.sendMessage(id, text, files.names)
             mergeTask(task)
-            setPrompt('') // only once it is queued: a failed send keeps the draft and the files
+            // Only once it is queued: a failed send keeps the draft and the files. What was typed
+            // while it went out stays too.
+            setPrompt((current) => (current.trim() === text ? '' : current))
             files.clear()
             setError(null)
             onSent()

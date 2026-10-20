@@ -208,7 +208,8 @@ describe('web sign-in', () => {
         it.each([
             [{ 'x-forwarded-for': '9.9.9.9, 10.0.0.1' }, '10.0.0.1'],
             [{ 'x-forwarded-for': '9.9.9.9' }, '9.9.9.9'],
-            [{ 'x-real-ip': '8.8.8.8', 'x-forwarded-for': '9.9.9.9, 10.0.0.1' }, '8.8.8.8'],
+            // A proxy that only appends X-Forwarded-For (Caddy) passes the client's own X-Real-IP through.
+            [{ 'x-real-ip': '8.8.8.8', 'x-forwarded-for': '9.9.9.9, 10.0.0.1' }, '10.0.0.1'],
             [{ 'x-real-ip': '::ffff:7.7.7.7' }, '7.7.7.7'],
             [{}, '172.16.0.1']
         ])('behind a trusted proxy takes the address from %j', async (headers, ip) => {

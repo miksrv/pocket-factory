@@ -5,27 +5,31 @@ import type { Env } from './context.js'
 
 /**
  * The client's address. The socket's by default; behind a reverse proxy
- * (`WEB_TRUST_PROXY=1`) the one the proxy wrote: `X-Real-IP`, else the last
- * entry of `X-Forwarded-For` (the one the trusted proxy appended; earlier
- * entries are whatever the client sent). Without the flag those headers are
- * ignored, since anyone can send them and a spoofed address would dodge the
- * per-address lockout.
+ * (`WEB_TRUST_PROXY=1`) the one the proxy wrote: the last entry of
+ * `X-Forwarded-For` (the one the trusted proxy appended; earlier entries are
+ * whatever the client sent), else `X-Real-IP`. The forwarded list wins because
+ * a proxy that only appends to it (Caddy) passes a client's own `X-Real-IP`
+ * through untouched. Without the flag those headers are ignored, since anyone
+ * can send them and a spoofed address would dodge the per-address lockout.
  */
 export function clientIp(c: Context<Env>): string {
     if (c.get('app').config.web.trustProxy) {
+        const last = c.req.header('x-forwarded-for')?.split(',').pop()?.trim()
+        if (last) return normalize(last)
         const real = c.req.header('x-real-ip')?.trim()
         if (real) return normalize(real)
-        const forwarded = c.req.header('x-forwarded-for')
-        if (forwarded) {
-            const last = forwarded.split(',').pop()?.trim()
-            if (last) return normalize(last)
-        }
     }
     try {
         return normalize(getConnInfo(c).remote.address ?? 'unknown')
     } catch {
         return 'unknown'
     }
+}
+
+/** `?limit=` as a page size: a whole number from 1 to `max`, `fallback` when absent (SQLite reads a negative LIMIT as none). */
+export function limitOf(c: Context<Env>, fallback: number, max: number): number {
+    const n = Math.floor(Number(c.req.query('limit')))
+    return Number.isFinite(n) && n >= 1 ? Math.min(n, max) : fallback
 }
 
 /** The user agent, cut to a sane length for the store. */
