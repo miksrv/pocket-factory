@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.2
+
+### Patch Changes
+
+- Telegram: Continue on a chat that stopped at the turn limit; a question's buttons answer only their own question, a late tap says the answer it already has
+- Sandboxes: the factory's config is read-only inside a sandbox (only routines stay writable), older sandboxes are made again; look-alike project names get their own sandbox
+- Sandboxes: the factory refuses to start without a web password
+- Fixed: a chat keeps its session after an early failure, unless the CLI says the session is gone
+- Fixed: routines around DST and missed minutes, previews over WebSocket, provider tool calls in streams, lists that skipped rows while polling
+
 ## 1.7.1
 
 ### Patch Changes

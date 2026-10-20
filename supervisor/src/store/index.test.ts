@@ -577,9 +577,12 @@ describe('Store', () => {
             const insert = db.prepare(
                 'INSERT INTO schedule_runs (schedule, fired_at, trigger, status, items, task_id, duration_ms) VALUES (?, ?, ?, ?, 0, ?, 0)'
             )
+            // One transaction: ten thousand autocommits take seconds on a slow CI disk.
+            db.exec('BEGIN')
             for (let r = 0; r < 10; r++)
                 for (let i = 0; i < 1000; i++)
                     insert.run(`r${r}`, T0.toISOString(), 'cron', 'empty', i % 50 ? null : `t${i}`)
+            db.exec('COMMIT')
             const started = performance.now()
             const last = store.lastRoutineRuns(true)
             expect(performance.now() - started).toBeLessThan(200)

@@ -270,7 +270,7 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
 
    `light: true` is the point for models under ~30B: Claude Code's own system prompt
    (~15k tokens, coding-oriented) made every 9–12B model we tried lose the task, a short prompt
-   (`data/claude/light-system.md`, or the agent file's body when a schedule names an agent)
+   (`data/claude/light-system.md`, or the agent file's body when a routine names an agent)
    with Read / Write / Edit / Bash / Glob / Grep worked on the first try. A frontier model can
    take `light: false` and the full tool set.
 
@@ -308,6 +308,6 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
   `https://…/v1`); the factory translates both ways, streaming included. Put the same Caddy
   bearer in front.
 - **A DNS name and a public port 443**: drop `default_sni` and `tls internal`, Caddy gets a
-  Let's Encrypt certificate itself, and step 6.2 is not needed.
+  Let's Encrypt certificate itself, and the TLS certificate field stays empty.
 - **Several models at once**: raise `OLLAMA_MAX_LOADED_MODELS` and `concurrency` only if the
   VRAM holds both; otherwise a second task waits in the factory's queue, which is the design.

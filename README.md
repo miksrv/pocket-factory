@@ -28,13 +28,13 @@ leave alone and still trust:
 Single-owner by design. You log in to Claude Code with **your own subscription**, create **your own**
 Telegram bot, use **your own** GitHub token, point it at **your own** repositories. Nothing is shared,
 proxied or stored by anyone else: the transcripts stay on your server. See
-[docs/SPEC.md](docs/SPEC.md) for the concept and roadmap.
+[docs/SPEC.md](docs/SPEC.md) for the concept and the security model.
 
 ## How it compares
 
 Think of it as **Routines on your own box, for Pro and Max**: your checkouts and their MCP servers,
-a cron from one minute, zero tokens on an empty poll, every tool call in the audit log, transcripts
-that never leave your server, and it works behind an `ANTHROPIC_BASE_URL` proxy.
+a cron from one minute, zero tokens on an empty poll, every tool call in the audit log, and
+transcripts that never leave your server.
 
 | | Pocket Factory | Remote Control | Agent View | Projects (cloud threads) | Routines |
 |---|---|---|---|---|---|
@@ -46,7 +46,6 @@ that never leave your server, and it works behind an `ANTHROPIC_BASE_URL` proxy.
 | Routines | files, a pipeline of steps + the agent, 1-minute cron, zero tokens when idle | no | no | a Routines tab | from one hour, every run costs |
 | Audit per model call, tool call and sub-agent | yes | no | no | no | a run transcript |
 | Where the transcript lives | your server | Anthropic | your machine | Anthropic | Anthropic |
-| Behind an `ANTHROPIC_BASE_URL` proxy | yes | no | yes | no | no |
 | Plans | any claude.ai login | Pro / Max / Team / Enterprise | Pro / Max | Pro / Max beta | Pro / Max / Team / Enterprise |
 
 What it does not do yet: a worktree per task, merging from the UI, other agent runtimes (Codex,
@@ -84,13 +83,13 @@ lists what is taken from each.
   from the browser with live output (unread and waiting badges, desktop notifications, drafts),
   Sessions (rendered Claude Code transcripts), editors for **Agents**, **Skills**, **Projects**
   and **Routines**, **Presets**, an **Audit log** (every model call, tool call and sub-agent, per
-  agent and project), Settings (Claude Code model, MCP servers with browser-driven sign-in, SSH
-  hosts with host-key trust, Security). Installs as a PWA from the phone.
+  agent and project), Settings (Claude Code, Secrets and variables, MCP servers with browser-driven
+  sign-in, Sandboxes, Providers, SSH hosts with host-key trust, Security, …). Installs as a PWA from the phone.
 - **Factory files** — sub-agents `developer` / `reviewer`, skills `feature-to-pr` /
   `onboard-project` (a skill is a directory: SKILL.md plus the scripts and references next to it,
   listed and edited in the UI; the `engineering` preset brings eight skills from
   [mattpocock/skills](https://github.com/mattpocock/skills)), one Markdown file per project (repo, branches, hosts, MCP allowlist, notes
-  with the checks and the tracker), one per routine (agent, triggers, instructions and the agent's own notes). The UI,
+  with the checks and the tracker), a folder per routine (`ROUTINE.md`: steps, schedule, instructions and the agent's own notes; `scripts/`, `data/`). The UI,
   the owner and the agent edit the same files; what the agent changes shows up in the Audit log
   as file events.
 - **Sandboxes** — every project's agent runs in its own [Docker Sandbox](https://docs.docker.com/ai/sandboxes/)
@@ -109,7 +108,7 @@ lists what is taken from each.
   role runs on Claude instead. Settings → Providers adds, tests
   and lists them; [docs/SELF_HOSTED_LLM.md](docs/SELF_HOSTED_LLM.md) sets up a GPU box.
 - **Presets** — shareable bundles under `presets/`: `fullstack-ts-go`, `fullstack-ts-php`,
-  `pr-review`, `email-assistant` (Gmail drafts through the claude.ai connector, nothing ever
+  `pr-review`, `engineering`, `email-assistant` (Gmail drafts through the claude.ai connector, nothing ever
   sent). A colleague installs one with a click
   into their own factory.
 - **Security** — the bot answers only allow-listed user ids; the web UI has a sign-in with lockout,
@@ -141,17 +140,16 @@ docker compose logs -f supervisor
 
 The Claude login stays with sbx on the host and its proxy hands it to every sandbox, connectors of
 your claude.ai account (Gmail, ClickUp, Google Drive, …) included; no sandbox holds the real token.
-Keep `CLAUDE_CODE_OAUTH_TOKEN` in `.env` empty. On Linux run the sbx daemon as a systemd user unit
-(`sbx daemon start`, `loginctl enable-linger <you>`) so it survives a reboot, and set
-`SBX_NO_TELEMETRY=1` there if you want no telemetry.
+Keep `CLAUDE_CODE_OAUTH_TOKEN` in `.env` empty.
 
 The whole host setup (the sbx daemon as a user service, the ufw rule for previews, `.env`) and
 upgrading a running factory: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Then:
 
-1. Open the web UI: `http://<server>:8080` (bound to localhost by default — use an SSH tunnel or
-   Tailscale, or set `WEB_BIND=0.0.0.0` together with `WEB_AUTH_PASSWORD` behind an https proxy).
+1. Open the web UI at `http://<server>:<WEB_PORT>` and sign in with `WEB_AUTH_PASSWORD` (required:
+   every sandbox reaches that port). It is bound to localhost by default: use an SSH tunnel,
+   Tailscale, or `WEB_BIND=0.0.0.0` behind an https proxy.
 2. **Projects → New**, or tell the bot *"connect project X"* and let the `onboard-project` skill
    write the file after inspecting the checkout.
 3. Send the bot a task: *"In shop change product URLs from ids to SEO slugs"*.
@@ -164,8 +162,9 @@ Then:
 ```
 data/                    runtime state — everything the factory owns, all bind-mounted, gitignored
 ├── claude/              Claude Code home: CLAUDE.md, agents/, skills/, transcripts, MCP credentials
-├── config/              projects/*.md, routines/*.md, hosts.yaml (shared SSH hosts), known_hosts, mcp.json
-├── workspaces/          repositories (or WORKSPACES_DIR → a folder you already have)
+├── config/              projects/*.md, routines/<name>/, hosts.yaml (shared SSH hosts), known_hosts, mcp.json,
+│                        providers.yaml, certs/ (read-only in the sandboxes but for routines/)
+├── vault/               Secrets and variables set in the UI (0600)
 ├── inbox/               photos and files sent with messages, per conversation (kept 30 days)
 ├── secrets/ssh/         keys for project hosts, linked to ~/.ssh in every sandbox (mounted read-only)
 ├── db/                  SQLite: conversations, tasks, task events, routine runs, seen items, web sessions
@@ -174,9 +173,9 @@ supervisor/              Telegram bot, task queue / session manager, scheduler, 
 web/                     admin UI (Vite + React), built into the image and served by the supervisor
 templates/claude/        seeded into data/claude on every start (never overwrites your edits)
 presets/                 shareable agent + skill bundles, installable from the UI
-docs/SPEC.md             requirements & roadmap · docs/LANDSCAPE.md  the neighbours and what is taken from them
+docs/SPEC.md             concept, use cases, security model · docs/LANDSCAPE.md  the neighbours
 docs/SELF_HOSTED_LLM.md  your own GPU box as a model provider (Ollama + Caddy + search MCP)
-docs/DEPLOY.md           the host's sandbox setup, a release on the server, the 1.7.0 upgrade
+docs/DEPLOY.md           the host's sandbox setup and a release on the server
 ```
 
 Moving to another host is `rsync data/` + `docker compose up`; the sandboxes are made again by the
@@ -204,18 +203,17 @@ data/secrets/ssh/id_ed25519 -C pocket-factory`), add the `.pub` to a dedicated u
 `chmod 700 data/secrets`. The directory is mounted read-only; the UI lists the key names, never
 their contents. Everything else happens in Settings → Hosts: "Test connection" checks the login,
 and when the server is not known yet (or its key changed) "Trust host key" shows its fingerprints
-and writes them to `data/config/known_hosts`, the file every ssh in the container consults. Inside
-the container the CLI runs as uid 1000 (`node`): on a Linux server make the keys readable by that
-uid and keep private keys at mode 0600, or ssh refuses them ("UNPROTECTED PRIVATE KEY FILE"); the
-read-only mount means the entrypoint cannot fix this for you.
+and writes them to `data/config/known_hosts`, the file every ssh in the sandboxes consults. Keep
+private keys at mode 0600, owned by the host user that runs sbx, or ssh refuses them ("UNPROTECTED
+PRIVATE KEY FILE"); the mount is read-only, so nothing can fix the mode for you.
 
 ## MCP servers
 
-Three layers, all optional, plus the connectors of your claude.ai account, which the container-side
-login brings into every session. A repository's own `.mcp.json` applies when a conversation is
+Three layers, all optional, plus the connectors of your claude.ai account, which the sandboxes'
+login (sbx's proxy) brings into every session. A repository's own `.mcp.json` applies when a conversation is
 bound to that project (`/new <project>`, the selector in Chat, or the first task naming it). Your
 own servers go into `data/config/mcp.json` (same format as `.mcp.json`, passed to every session);
-secrets only as `${VAR}` with the value in `.env`:
+secrets only as `${VAR}` with the value in Settings → Secrets and variables:
 
 ```json
 { "mcpServers": { "trac": { "type": "http", "url": "https://trac.example.com/mcp", "headers": { "Authorization": "Bearer ${TRAC_MCP_TOKEN}" } } } }
@@ -227,8 +225,7 @@ servers that still need a sign-in, and **Authorize** runs `claude mcp login <nam
 there and shows you the link (a connector is done on claude.ai; a project's OAuth server wants the
 redirect URL pasted back). The console flow is the fallback:
 `sbx exec -it -w <checkout> pf-<project> claude mcp login <name> --no-browser` on the host.
-Tokens land in `data/claude/.credentials.json` and the CLI refreshes them. Logging in from a macOS
-laptop does not help: there the CLI keeps tokens in the Keychain, which the container cannot read.
+Tokens land in `data/claude/.credentials.json` and the CLI refreshes them.
 A project file's `mcp:` list limits which of the repository's servers a session loads; an agent's
 tool picker offers the servers' tools, so "a ClickUp agent" is a role with that server ticked.
 
@@ -267,16 +264,16 @@ presets from the UI. See [presets/README.md](presets/README.md).
 ```bash
 corepack enable
 yarn install
-cp .env.example .env          # the supervisor reads it itself
+cp .env.example .env          # the supervisor reads it itself; set SANDBOX=local in it
 yarn dev                      # supervisor + API on :8080, uses the claude CLI from your PATH
 yarn dev:web                  # Vite dev server on :5173, proxies /api to :8080
 ```
 
 `CLAUDE_CONFIG_DIR` defaults to `data/claude`, so the host CLI uses the same agents, skills and
-transcripts as the container. Keep `CLAUDE_PERMISSION_MODE=acceptEdits` outside the container.
+transcripts as the sandboxes. Keep `CLAUDE_PERMISSION_MODE=acceptEdits` with `SANDBOX=local`.
 Telegram allows one poller per bot token, so while the container is running start the host copy
 web-only: `TELEGRAM_BOT_TOKEN= yarn dev`. On macOS the host CLI keeps its login in the Keychain,
-so connectors and MCP sign-ins are tested against the container, not `yarn dev`.
+so connectors and MCP sign-ins are tested against the factory's sandboxes, not `yarn dev`.
 
 ## Versioning
 

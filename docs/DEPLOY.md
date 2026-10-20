@@ -1,6 +1,6 @@
 # Deploying the factory
 
-How a release reaches a server, and the one-time move to Docker Sandboxes (1.7.0). The factory is
+How a release reaches a server and what the host needs. The factory is
 two parts on one host: the **control plane** (this repository's container: web UI, Telegram, the
 queue) and the **agents**, which run in Docker Sandboxes (`sbx`, one microVM per project) that the
 control plane drives through the host's sbx daemon.
@@ -66,6 +66,7 @@ Besides the usual (Telegram, GitHub tokens, web sign-in):
 | Name | Value |
 |---|---|
 | `SANDBOX` | `sbx` (the image's default) |
+| `WEB_AUTH_PASSWORD` | required: the supervisor refuses to start without it, since every sandbox reaches the web port |
 | `DATA_DIR` | the absolute host path of this checkout's `data/` (e.g. `/srv/pocket-factory/data`) |
 | `WORKSPACES_DIR` | the absolute host path of the repositories |
 | `SBX_HOME` | the home of the host user that runs sbx (uid 1000) |
@@ -80,48 +81,8 @@ Compose refuses to start without `DATA_DIR`, `WORKSPACES_DIR` and `SBX_HOME`, an
 store the client needs). Every path the agents see is the host's own: the container mounts `data/`
 at `DATA_DIR` and the repositories at `WORKSPACES_DIR`, and each sandbox mounts the same paths.
 
-Remove what 1.7.0 dropped: `COMPOSE_PROFILES=docker`, `DOCKER_MEMORY`. `CLAUDE_CODE_OAUTH_TOKEN`
-stays empty.
-
-## Upgrading a 1.6 factory to 1.7.0
-
-1. No task running. Back up: `tar czf ~/backups/pocket-factory-<date>.tar.gz .env
-   docker-compose.override.yml data/config data/claude data/db` and a `VACUUM INTO` copy of the
-   database through the container's node; `cp .env .env.bak-1.6.1`.
-2. Host requirements above: sbx installed, `sbx login`, `sbx policy init balanced`, the daemon unit
-   with linger, the Claude login in `pf-factory`, the ufw rule.
-3. `.env`: the table above; remove `COMPOSE_PROFILES` and `DOCKER_MEMORY`.
-4. A local `docker-compose.override.yml` that still names the `docker:` service (the dind volume)
-   must lose that block, or compose refuses the file.
-5. `git pull --ff-only && docker compose up -d --build --remove-orphans` (removes the dind
-   container).
-6. Re-merge the server's `data/claude/CLAUDE.md`: the template's toolchain lines are replaced by
-   the sandbox, network and preview rules.
-7. Smoke test: Settings → Sandboxes (daemon, both logins); a chat in a project of each kind (Go,
-   PHP, Node) asks for its tests; a routine's Run now; a Telegram message; a provider task and a
-   delegation; a preview opened from another machine; a blocked host allowed from Telegram.
-   On the host: `sbx exec pf-factory claude -p "Reply with exactly: OK" --model haiku --max-turns 1`.
-8. **Provider keys out of `.env`** (they live in the vault since 1.7.0). The first start moves
-   every key a provider names (`token:` in `data/config/providers.yaml`, the provider's and its MCP
-   servers') from `.env` into `data/vault/secrets.json` as a provider key, and logs
-   `provider key <NAME> moved from .env into the vault: remove it from .env`. For an agent doing
-   the upgrade:
-   - `docker compose logs supervisor | grep 'moved from .env'` lists the names moved;
-   - check them: Settings → Secrets marks each as *provider key*, Settings → Providers shows the
-     key picked with no "missing" badge, and the provider's **Test** passes;
-   - then delete those lines from `.env` (`cp .env .env.bak-keys` first), `docker compose up -d`,
-     and run **Test** once more. A key the log does not name was in the vault already, or its
-     name is taken by a run's secret there (the provider then shows the key missing): give the
-     provider a new key with **New secret** beside its API key.
-   No value is printed or copied anywhere else; the rollback keeps working, because 1.6 still
-   reads the lines from `.env.bak-keys`.
-9. After a week without a rollback: delete `data/tools`, `data/docker` and the `docker-certs` volume.
-
-Project files that still say `path: /data/workspaces/<x>` keep working (read as
-`WORKSPACES_DIR/<x>`). The real login in `data/claude/.credentials.json` from 1.6 is harmless: the
-proxy replaces its tokens. Rollback to 1.6: `git checkout v1.6.1`, restore `.env.bak-1.6.1`,
-`docker compose up -d --build` (dind and `data/tools` are on disk until step 9); the sandboxes
-stay and do no harm.
+`CLAUDE_CODE_OAUTH_TOKEN` stays empty. Upgrading a 1.6 factory (dind, provider keys in `.env`):
+`docs/DEPLOY.md` at tag `v1.7.0`.
 
 ## How the factory uses sbx (for debugging)
 
@@ -132,7 +93,14 @@ stay and do no harm.
   that mark.
 - A sandbox's mounts are fixed when it is made: a moved or deleted checkout keeps it from starting
   ("cannot restore mount"). Reset it in Settings → Sandboxes; the next task makes a new one.
+- `data/config` is mounted read-only (the supervisor trusts it: a project's `path:` and `network:`,
+  a provider's `url`, the CAs) with `data/config/routines` read-write on top, so an agent still keeps
+  its routine's notes, scripts and data; agents and skills live in `data/claude`, read-write. A
+  sandbox made before that (config read-write) is removed and made again by the next task that finds
+  it free, told in Telegram. A project's checkout must lie under `WORKSPACES_DIR`.
 - From a VM the supervisor is `http://host.docker.internal:<WEB_PORT>`; the policy rule for it is
   `localhost:<WEB_PORT>` (the factory adds it).
 - Open checks: the Claude login refreshing over several days, a host reboot with the user unit,
-  several sandboxes at once under load, sbx on macOS.
+  several sandboxes at once under load, sbx on macOS, the nested mount (`data/config:ro` with
+  `data/config/routines` read-write inside it: a write to `data/config/x` must fail in the VM, one
+  to `data/config/routines/x` must succeed; check with a throwaway `sbx create` before the release).
