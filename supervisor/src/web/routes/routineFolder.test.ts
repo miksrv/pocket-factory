@@ -41,6 +41,14 @@ describe('routine folders and secrets', () => {
         expect((await put('/api/routines/geo/files/..%2Fescape.sh', { text: 'x' })).status).toBe(400)
     })
 
+    it('answers 400, not 500, when a file route names a directory', async () => {
+        flat('geo', '  - run: echo hi')
+        expect((await put('/api/routines/geo/files/scripts/a.sh', { text: 'echo a\n' })).status).toBe(200)
+        expect((await put('/api/routines/geo/files/scripts', { text: 'x' })).status).toBe(400)
+        expect((await t.request('/api/routines/geo/files/scripts', { method: 'DELETE' })).status).toBe(400)
+        expect(fs.existsSync(path.join(routines, 'geo', 'scripts', 'a.sh'))).toBe(true)
+    })
+
     it('keeps the path of a routine named files, and refuses a broken escape as a bad name', async () => {
         flat('files', '  - run: echo hi')
         expect((await put('/api/routines/files/files/scripts/a.sh', { text: 'echo a\n' })).status).toBe(200)

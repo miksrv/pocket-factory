@@ -4,8 +4,8 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import type { RunStep } from './spec.js'
-import { cap, runPipeline } from './steps.js'
+import type { RunStep, Step } from './spec.js'
+import { cap, runPipeline, StepError } from './steps.js'
 
 const ctx = {
     cwd: process.cwd(),
@@ -116,6 +116,55 @@ describe('runPipeline', () => {
         )
         expect(Date.now() - started).toBeLessThan(9000)
     }, 15_000)
+
+    it('kills a child that ignores SIGTERM once bash has gone with it', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'steps-'))
+        const pidFile = path.join(root, 'pid')
+        const stubborn = `(trap '' TERM; exec sleep 60) & echo $! > ${pidFile}; wait`
+        await expect(runPipeline([script(stubborn, { name: 'stubborn', timeout_s: 1 })], ctx)).rejects.toThrow(
+            /timed out after 1 s/
+        )
+        const pid = Number(fs.readFileSync(pidFile, 'utf8'))
+        const alive = () => {
+            try {
+                process.kill(pid, 0)
+                return true
+            } catch {
+                return false
+            }
+        }
+        const until = Date.now() + 2000
+        while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+        if (alive()) process.kill(pid, 'SIGKILL')
+        expect(alive()).toBe(false)
+    }, 10_000)
+
+    it('records a source that throws something unexpected as a failed step, with the steps so far', async () => {
+        // A `gh` that answers JSON of another shape: the source's code throws a TypeError, not a SourceError.
+        const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'steps-gh-'))
+        fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho "{}"\n', { mode: 0o755 })
+        const prs: Step = {
+            kind: 'github-prs',
+            name: 'prs',
+            repos: ['a/b'],
+            filter: 'open',
+            mine: false,
+            drafts: false,
+            new_only: true,
+            continue_on_error: false,
+            enabled: true
+        }
+        const env = { ...ctx.env, PATH: `${bin}:${process.env.PATH}` }
+        const error = await runPipeline([script('echo first', { name: 'first' }), prs], { ...ctx, env }).catch(
+            (e: unknown) => e
+        )
+        expect(error).toBeInstanceOf(StepError)
+        expect((error as StepError).message).toMatch(/^step "prs": /)
+        expect((error as StepError).steps.map((s) => [s.name, s.ok])).toEqual([
+            ['first', true],
+            ['prs', false]
+        ])
+    })
 
     it('names the step whose items do not parse', async () => {
         await expect(

@@ -9,7 +9,7 @@ import { createLogger } from '../logger.js'
 import { referencedNames, type ScopeContext, type Vault } from '../secrets/vault.js'
 import type { Conversation, RoutineRun, Store, Task } from '../store/index.js'
 import type { TaskService } from '../tasks/service.js'
-import { cronMatches, inWindow, localTime, nextRun } from './cron.js'
+import { localTime, nextRun } from './cron.js'
 import { folderNeeds, type ScriptInfo, scriptInfo, scriptOf } from './scripts.js'
 import type { Item } from './sources.js'
 import {
@@ -165,8 +165,10 @@ export interface RoutineRefs extends Refs {
  */
 export class Routines extends EventEmitter<RoutinesEvents> {
     private timer: ReturnType<typeof setInterval> | null = null
-    /** The minute (in the trigger's zone) each routine last fired at, so a tick never fires twice and a restart does not repeat the minute. */
+    /** The real minute (UTC, so a repeated hour of a DST change counts twice) each routine last fired at: a tick never fires it twice, a restart does not repeat it. */
     private readonly fired = new Map<string, string>()
+    /** The wall-clock minute (in its trigger's zone) each routine last fired at: the repeated hour of a fall-back night is not a second 02:30. */
+    private readonly firedLocal = new Map<string, string>()
     private readonly firing = new Set<string>()
     /** When the ticker last looked at the clock: the minutes since then are the ones to consider. */
     private lastTick: Date | null = null
@@ -186,18 +188,13 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         // A run whose steps a restart cut off would read `running` for ever.
         const interrupted = this.store.endInterruptedRoutineRuns()
         if (interrupted) log.info(`${interrupted} routine run(s) interrupted by the restart`)
-        // Runs and seen items of a file that is gone (renamed by hand, deleted outside the UI) would never be looked at again.
-        const files = new Set(this.catalog.list('routines').map((e) => e.name))
-        for (const name of this.store.routineNames()) {
-            if (files.has(name)) continue
-            this.store.dropRoutine(name)
-            log.info(`forgot runs and seen items of "${name}": no such routine file`)
-        }
+        this.pruneGone()
         // The minute a previous supervisor fired at must not fire again after a quick restart.
         for (const [name, run] of this.store.lastRoutineRuns()) {
             if (run.trigger === 'manual') continue
-            const tz = this.parse(name)?.spec?.triggers[0]?.tz
-            if (tz) this.fired.set(name, localTime(new Date(run.fired_at), tz).key)
+            this.fired.set(name, minuteOf(new Date(run.fired_at).getTime()))
+            const tz = this.all().find((p) => p.name === name)?.spec?.triggers[0]?.tz
+            if (tz) this.firedLocal.set(name, localTime(new Date(run.fired_at), tz).key)
         }
         // What the factory slept through since the previous supervisor's last tick: recent firings run late, older ones are recorded as missed.
         const since = this.store.getMeta<string>(LAST_TICK)
@@ -212,6 +209,26 @@ export class Routines extends EventEmitter<RoutinesEvents> {
     stop(): void {
         if (this.timer) clearInterval(this.timer)
         this.timer = null
+    }
+
+    /**
+     * Runs and seen items of a file that is gone (renamed by hand, deleted outside the UI) would never be
+     * looked at again. Only when the routines directory is there (an unmounted one is not "every file
+     * deleted"), and never for a name whose file or folder is still there, readable or not.
+     */
+    private pruneGone(): void {
+        const dir = this.catalog.dirFor('routines')
+        if (!fs.existsSync(dir)) {
+            log.warn(`${dir} is missing: the history of routines is kept until it is back`)
+            return
+        }
+        const files = new Set(this.catalog.list('routines').map((e) => e.name))
+        for (const name of this.store.routineNames()) {
+            if (files.has(name) || this.catalog.exists('routines', name) || fs.existsSync(path.join(dir, name)))
+                continue
+            this.store.dropRoutine(name)
+            log.info(`forgot runs and seen items of "${name}": no such routine file`)
+        }
     }
 
     // ---- files ------------------------------------------------------------
@@ -400,6 +417,7 @@ export class Routines extends EventEmitter<RoutinesEvents> {
     forget(name: string): void {
         this.store.dropRoutine(name)
         this.fired.delete(name)
+        this.firedLocal.delete(name)
     }
 
     /** Forget what the sources handed over: the next run treats it all as new (the first-run seeding is not repeated). */
@@ -414,8 +432,11 @@ export class Routines extends EventEmitter<RoutinesEvents> {
      * Every minute since the last look at the clock is considered once: the
      * current one fires, one the factory slept through (laptop closed, Docker
      * down) fires late within `ROUTINES_LATE_MIN`, and an older one is
-     * recorded as missed — nobody wants the 08:00 inbox check at 14:00. Two
-     * triggers that allow the same minute fire the routine once.
+     * recorded as missed — nobody wants the 08:00 inbox check at 14:00. Of
+     * several minutes due in one sweep only the latest fires (the others would
+     * only be skipped as overlapping). Two triggers that allow the same minute
+     * fire the routine once. The minutes come from `nextRun` per trigger, so a
+     * week of downtime costs a daily routine seven steps, not 10,080.
      */
     private tick(): void {
         const now = new Date()
@@ -429,29 +450,29 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         for (const p of this.all()) {
             const s = p.spec
             if (!s?.enabled || !s.triggers.length) continue
-            const missed: Array<{ at: Date; trigger: Trigger }> = []
-            for (let t = start; t <= current; t += MINUTE) {
-                const at = new Date(t)
-                const trigger = s.triggers.find((tr) => {
-                    const local = localTime(at, tr.tz)
-                    return cronMatches(tr.cron, local) && inWindow(tr.window, local)
-                })
-                if (!trigger) continue
-                const local = localTime(at, trigger.tz)
-                if (this.fired.get(p.name) === local.key) continue
-                this.fired.set(p.name, local.key)
-                const late = now.getTime() - t
-                if (t === current || late <= lateMs) {
-                    void this.fire(
-                        p.name,
-                        trigger,
-                        late >= MINUTE
-                            ? `late by ${Math.round(late / MINUTE)} min: the factory was off at ${local.key.slice(11)}`
-                            : null
-                    ).catch((error) => log.error(`routine ${p.name} failed to fire`, error))
-                } else missed.push({ at, trigger })
-            }
+            const due = dueMinutes(s.triggers, start, current).filter(
+                ({ at, trigger }) =>
+                    this.fired.get(p.name) !== minuteOf(at.getTime()) &&
+                    // A cron with fixed hours means a wall-clock time: once a night, even when the clocks go
+                    // back and 02:30 comes twice (classic cron does the same). An hourly one keeps every real hour.
+                    !(trigger.cron.hour.size < 24 && this.firedLocal.get(p.name) === localTime(at, trigger.tz).key)
+            )
+            if (!due.length) continue
+            const missed = due.filter(({ at }) => at.getTime() !== current && now.getTime() - at.getTime() > lateMs)
+            const latest = due[due.length - 1]
             if (missed.length) this.recordMissed(p, missed, from.getTime() <= now.getTime() - SWEEP_LIMIT_MS)
+            this.fired.set(p.name, minuteOf(latest.at.getTime()))
+            this.firedLocal.set(p.name, localTime(latest.at, latest.trigger.tz).key)
+            if (missed.includes(latest)) continue
+            const late = now.getTime() - latest.at.getTime()
+            const key = localTime(latest.at, latest.trigger.tz).key
+            void this.fire(
+                p.name,
+                latest.trigger,
+                late >= MINUTE
+                    ? `late by ${Math.round(late / MINUTE)} min: the factory was off at ${key.slice(11)}`
+                    : null
+            ).catch((error) => log.error(`routine ${p.name} failed to fire`, error))
         }
     }
 
@@ -548,8 +569,10 @@ export class Routines extends EventEmitter<RoutinesEvents> {
             running = row.id
             this.emit('progress', row)
             options.onStarted?.(row)
+            let progressed: StepResult[] = []
             try {
                 pipeline = await runPipeline(spec.steps, this.stepContext(spec, parsed.entry.path), (progress) => {
+                    progressed = progress
                     const now = this.store.updateRoutineRun(row.id, {
                         steps: progress,
                         duration_ms: Date.now() - started
@@ -557,9 +580,13 @@ export class Routines extends EventEmitter<RoutinesEvents> {
                     if (now) this.emit('progress', now)
                 })
             } catch (error) {
+                // Not a step's own failure (the store, a callback): the steps so far stay, the one going marked failed.
                 return record('error', error instanceof Error ? error.message : String(error), {
                     duration_ms: Date.now() - started,
-                    steps: error instanceof StepError ? error.steps : null
+                    steps:
+                        error instanceof StepError
+                            ? error.steps
+                            : progressed.map(({ running: going, ...step }) => (going ? { ...step, ok: false } : step))
                 })
             }
             const ms = pipeline.ms
@@ -567,7 +594,10 @@ export class Routines extends EventEmitter<RoutinesEvents> {
             let fresh: Item[] = []
             let held = 0
             let handed: Item[] = []
-            if (pipeline.sources.length) {
+            // The gate is the pipeline's switched-on sources, whether or not they got through: a source
+            // that failed (`continue_on_error`) does not turn a gated routine into one that runs every firing.
+            const gated = spec.steps.some((step) => step.kind !== 'agent' && isSource(step) && step.enabled)
+            if (gated) {
                 const everything = firing === 'manual' && options.everything && items.length > 0
                 const seen = this.store.seenKeys(
                     name,
@@ -580,6 +610,22 @@ export class Routines extends EventEmitter<RoutinesEvents> {
                 const newOnly = pipeline.sources.some((s) => s.step.new_only)
                 const seeding = newOnly && firing !== 'manual' && spec.first_run === 'skip' && !this.seeded(name)
                 // `found`: what the sources see in all, for a "Run with all" offer; not stored.
+                // Nothing to hand over and a source failed: not "nothing new" (hidden from the run list) but
+                // the failure, so a source that broke for good is seen; the agent does not run.
+                const broken = pipeline.steps.filter((r) => r.continued && isSource(spec.steps[r.index]))
+                if (candidates.length === 0 && broken.length) {
+                    // The failure as the agent would have read it (the step's own log is its output, maybe empty).
+                    const why = broken
+                        .map((r) => {
+                            const out = pipeline.outputs.find((o) => o.name === r.name)?.output ?? r.log
+                            return out.replace(/^failed, the run went on without it:\n/, '').split('\n')[0]
+                        })
+                        .join('; ')
+                    return record('error', `no source got through: ${why}`, {
+                        duration_ms: ms,
+                        steps: pipeline.steps
+                    })
+                }
                 if (candidates.length === 0) {
                     // An empty first firing seeds too: what appears after it is new, not "existing".
                     if (seeding) this.store.setMeta(seededKey(name), fired_at)
@@ -608,7 +654,7 @@ export class Routines extends EventEmitter<RoutinesEvents> {
                     ? [...candidates.filter((i) => !seen.has(i.key)), ...candidates.filter((i) => seen.has(i.key))]
                     : candidates
                 handed = ordered.slice(0, spec.max_items)
-                fresh = this.markChanged(name, handed)
+                fresh = this.markChanged(name, handed, versioned(pipeline))
                 held = ordered.length - handed.length
             }
 
@@ -635,7 +681,7 @@ export class Routines extends EventEmitter<RoutinesEvents> {
                 this.store.setMeta(seededKey(name), fired_at)
             }
             const notes = [
-                pipeline.sources.length
+                gated
                     ? `${fresh.length} ${options.everything ? 'item(s), seen or not,' : 'new item(s)'}${held ? `, ${held} more wait for the next run` : ''}`
                     : pipeline.outputs.length
                       ? `${pipeline.outputs.length} step(s), task queued`
@@ -665,9 +711,14 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         return this.store.getMeta<string>(seededKey(name)) !== undefined || this.store.seenCount(name) > 0
     }
 
-    /** An item whose key changed since an earlier run handed it over (`<id>@<time>`, `<pr>@<sha>`) is back because it changed, not because it is new: say so. */
-    private markChanged(name: string, items: Item[]): Item[] {
+    /**
+     * An item whose key changed since an earlier run handed it over (`<id>@<time>`, `<pr>@<sha>`) is back
+     * because it changed, not because it is new: say so. Only the built-in sources' keys read that way
+     * (`versioned`); a script's `@` is its own (an e-mail address).
+     */
+    private markChanged(name: string, items: Item[], versioned: Set<string>): Item[] {
         return items.map((item) => {
+            if (!versioned.has(item.key)) return item
             const at = item.key.lastIndexOf('@')
             if (at <= 0) return item
             const earlier = this.store.seenVariants(name, item.key.slice(0, at)).find((v) => v.key !== item.key)
@@ -702,7 +753,8 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         )
         const fresh = this.markChanged(
             name,
-            pipeline.sources.flatMap((s) => (s.step.new_only ? s.items.filter((i) => !seen.has(i.key)) : s.items))
+            pipeline.sources.flatMap((s) => (s.step.new_only ? s.items.filter((i) => !seen.has(i.key)) : s.items)),
+            versioned(pipeline)
         )
         return {
             items: items.map((i) => fresh.find((f) => f.key === i.key) ?? i),
@@ -889,6 +941,31 @@ export class Routines extends EventEmitter<RoutinesEvents> {
 }
 
 export { StepError }
+
+/** A real minute as the fired map's key: its UTC instant, so 02:30 before and after a fall-back are two. */
+const minuteOf = (ms: number) => new Date(Math.floor(ms / MINUTE) * MINUTE).toISOString()
+
+/** The keys of the built-in sources' items (GitHub, Trac): `<id>@<version>`, unlike a script's keys. */
+function versioned(pipeline: PipelineResult): Set<string> {
+    return new Set(pipeline.sources.filter((s) => s.step.kind !== 'run').flatMap((s) => s.items.map((i) => i.key)))
+}
+
+/**
+ * The minutes in [start, end] (ms, on minute boundaries) that any trigger allows, in order, each
+ * with the first trigger that allows it.
+ */
+export function dueMinutes(triggers: Trigger[], start: number, end: number): Array<{ at: Date; trigger: Trigger }> {
+    const due = new Map<number, Trigger>()
+    for (const trigger of triggers) {
+        const until = new Date(end)
+        let at = nextRun(trigger.cron, trigger.window, trigger.tz, new Date(start - MINUTE), until)
+        while (at && at.getTime() <= end) {
+            if (!due.has(at.getTime())) due.set(at.getTime(), trigger)
+            at = nextRun(trigger.cron, trigger.window, trigger.tz, at, until)
+        }
+    }
+    return [...due.entries()].sort(([a], [b]) => a - b).map(([ms, trigger]) => ({ at: new Date(ms), trigger }))
+}
 
 /** The report of a scripts-only run: what each step printed and what the sources found, cut to what a run row keeps. */
 export function doneNote(pipeline: PipelineResult, handed: Item[]): string {

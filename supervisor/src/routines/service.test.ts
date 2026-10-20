@@ -591,6 +591,186 @@ describe('steps', () => {
     })
 })
 
+describe('the ticker', () => {
+    let t: TestApp
+    let fired: Array<{ name: string; remark: string | null }>
+    afterEach(async () => {
+        vi.useRealTimers()
+        await t.cleanup()
+    })
+
+    function setup(frontmatter: Record<string, unknown>) {
+        t = createTestApp()
+        t.ctx.catalog.save('routines', 'watch', { frontmatter: { steps: [{ run: 'true' }], ...frontmatter }, body: '' })
+        fired = []
+        vi.spyOn(t.ctx.routines, 'fire').mockImplementation((name, _firing, remark) => {
+            fired.push({ name, remark: remark ?? null })
+            return Promise.resolve({} as never)
+        })
+    }
+    /** The ticker's first look after the factory last looked at `last`; `now` is the clock. */
+    const startAt = (last: string, now: string) => {
+        t.ctx.store.setMeta('schedules:last_tick', new Date(last).toISOString())
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(now))
+        t.ctx.routines.start()
+        t.ctx.routines.stop()
+    }
+    const tickAt = (now: string) => {
+        vi.setSystemTime(new Date(now))
+        ;(t.ctx.routines as unknown as { tick(): void }).tick()
+    }
+    const missed = () => t.ctx.store.listRoutineRuns('watch', 10, true).filter((r) => r.status === 'missed')
+
+    it.each([
+        // Warsaw falls back at 03:00 CEST: 02:30 comes twice (00:30Z and 01:30Z), both are real minutes.
+        ['fall back', '2026-10-25'],
+        // Warsaw springs forward at 02:00 CET: 01:30 is 00:30Z, then 03:30 is 01:30Z.
+        ['spring forward', '2026-03-29']
+    ])('fires every real minute on a DST change day (%s)', (_, day) => {
+        setup({ triggers: [{ schedule: '30 * * * *', tz: 'Europe/Warsaw' }] })
+        startAt(`${day}T00:29:30Z`, `${day}T00:30:10Z`)
+        tickAt(`${day}T01:30:10Z`)
+        expect(fired).toEqual([
+            { name: 'watch', remark: null },
+            { name: 'watch', remark: null }
+        ])
+    })
+
+    it('fires a daily wall-clock time once on the night the clocks go back', () => {
+        // 02:30 in Warsaw comes twice on 2026-10-25: 00:30Z (CEST) and 01:30Z (CET).
+        setup({ triggers: [{ schedule: '30 2 * * *', tz: 'Europe/Warsaw' }] })
+        startAt('2026-10-25T00:29:30Z', '2026-10-25T00:30:10Z')
+        tickAt('2026-10-25T01:30:10Z')
+        expect(fired).toEqual([{ name: 'watch', remark: null }])
+    })
+
+    it('fires only the latest of several late minutes, and records the older ones as missed in one row', () => {
+        setup({ triggers: [{ schedule: '* * * * *', tz: 'UTC' }] })
+        startAt('2026-10-06T09:00:30Z', '2026-10-06T10:04:10Z')
+        expect(fired).toEqual([{ name: 'watch', remark: null }])
+        const rows = missed()
+        expect(rows).toHaveLength(1)
+        expect(rows[0].note).toContain('59 firings between 2026-10-06 09:01 and 2026-10-06 09:59')
+    })
+
+    it('fires a late minute once, late, and records nothing missed', () => {
+        setup({ triggers: [{ schedule: '1,2 10 * * *', tz: 'UTC' }] })
+        startAt('2026-10-06T10:00:30Z', '2026-10-06T10:04:10Z')
+        expect(fired).toEqual([{ name: 'watch', remark: 'late by 2 min: the factory was off at 10:02' }])
+        expect(missed()).toEqual([])
+    })
+
+    it('after a long downtime counts a daily routine by its firings: a week of them, missed', () => {
+        setup({ triggers: [{ schedule: '0 8 * * *', tz: 'UTC' }] })
+        startAt('2026-09-20T12:00:00Z', '2026-10-06T12:00:10Z')
+        expect(fired).toEqual([])
+        expect(missed()[0].note).toBe(
+            'missed 7 firings between 2026-09-30 08:00 and 2026-10-06 08:00 (and anything older than a week): the factory was off, nothing was run'
+        )
+    })
+})
+
+describe('start', () => {
+    let t: TestApp
+    afterEach(() => t.cleanup())
+
+    const remember = (name: string) =>
+        t.ctx.store.addRoutineRun({
+            schedule: name,
+            fired_at: new Date().toISOString(),
+            trigger: 'manual',
+            status: 'done',
+            note: null,
+            items: 0,
+            task_id: null,
+            duration_ms: 0,
+            steps: null
+        })
+
+    it("forgets a deleted routine's history, but keeps a file that does not read and everything when the folder is missing", () => {
+        t = createTestApp()
+        t.ctx.catalog.save('routines', 'kept', { frontmatter: { steps: [{ run: 'true' }] }, body: '' })
+        const dir = t.ctx.catalog.dirFor('routines')
+        fs.mkdirSync(path.join(dir, 'broken'))
+        fs.writeFileSync(path.join(dir, 'broken', 'ROUTINE.md'), '---\nsteps: [\n---\n')
+        for (const name of ['kept', 'broken', 'gone']) remember(name)
+        t.ctx.routines.start()
+        t.ctx.routines.stop()
+        expect(t.ctx.store.routineNames().sort()).toEqual(['broken', 'kept'])
+
+        fs.rmSync(dir, { recursive: true })
+        remember('gone')
+        t.ctx.routines.start()
+        t.ctx.routines.stop()
+        expect(t.ctx.store.routineNames().sort()).toEqual(['broken', 'gone', 'kept'])
+    })
+})
+
+describe('sources that fail or are switched off', () => {
+    let t: TestApp
+    afterEach(() => t.cleanup())
+
+    const save = (steps: unknown[]) =>
+        t.ctx.catalog.save('routines', 'watch', {
+            frontmatter: { steps: [...steps, { agent: 'orchestrator' }] },
+            body: ''
+        })
+
+    it('records a run whose only source failed on as an error, and starts no agent', async () => {
+        t = createTestApp()
+        save([{ name: 'list', run: 'echo "403 forbidden" >&2; exit 1', items: true, continue_on_error: true }])
+        const run = await t.ctx.routines.fire('watch', 'manual')
+        expect(run).toMatchObject({ status: 'error', task_id: null })
+        expect(run.note).toBe('no source got through: step "list" exited with 1: 403 forbidden')
+        expect(t.ctx.store.listTasks({ limit: 5 })).toEqual([])
+    })
+
+    it('goes on with what another source found when one failed on', async () => {
+        t = createTestApp()
+        save([
+            { name: 'broken', run: 'exit 1', items: true, continue_on_error: true },
+            { name: 'list', run: "printf 'a\\tAlpha\\n'", items: true }
+        ])
+        expect(await t.ctx.routines.fire('watch', 'manual')).toMatchObject({ status: 'queued', items: 1 })
+    })
+
+    it('runs the agent without a gate when the only source is switched off', async () => {
+        t = createTestApp()
+        save([{ name: 'list', run: 'echo a', items: true, enabled: false }])
+        expect(await t.ctx.routines.fire('watch', 'manual')).toMatchObject({ status: 'queued', items: 0 })
+    })
+
+    it("keeps the steps so far when the run breaks outside a step's own failure", async () => {
+        t = createTestApp()
+        save([
+            { name: 'one', run: 'true' },
+            { name: 'two', run: 'true' }
+        ])
+        const update = t.ctx.store.updateRoutineRun.bind(t.ctx.store)
+        let calls = 0
+        vi.spyOn(t.ctx.store, 'updateRoutineRun').mockImplementation((id, fields) => {
+            if (++calls === 2) throw new Error('disk full')
+            return update(id, fields)
+        })
+        const run = await t.ctx.routines.fire('watch', 'manual')
+        expect(run).toMatchObject({ status: 'error', note: 'disk full' })
+        expect(run.steps?.map((s) => [s.name, s.ok, s.running])).toEqual([
+            ['one', true, undefined],
+            ['two', false, undefined]
+        ])
+    })
+
+    it("reads only a built-in source's key as <id>@<version>: a script's e-mail address is its own", async () => {
+        t = createTestApp()
+        t.ctx.store.markSeen('watch', [{ key: 'ann@old.example', title: 'Ann' }], null)
+        save([{ name: 'mail', run: "printf 'ann@example.com\\tAnn\\n'", items: true }])
+        const run = await t.ctx.routines.fire('watch', 'manual')
+        expect(run).toMatchObject({ status: 'queued', items: 1 })
+        expect(t.ctx.store.getTask(run.task_id!)!.prompt).not.toContain('seen before')
+    })
+})
+
 describe('underHeading', () => {
     it('puts headings two levels down, never past six, and leaves code fences alone', () => {
         expect(underHeading('# A\ntext\n#### B\n##### C\n```\n# not a heading\n```\n#tag')).toBe(

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { type Executor, type Launched, LocalExecutor } from '../sandbox/executor.js'
-import { type Item, parseItems, runSource, type SourceContext, SourceError } from './sources.js'
+import { type Item, parseItems, runSource, type SourceContext } from './sources.js'
 import type { RunStep, SourceStep, Step } from './spec.js'
 
 /** What one script printed; `output` is capped so a chatty script cannot fill the prompt. */
@@ -152,6 +152,8 @@ export async function runScript(step: RunStep, ctx: StepContext): Promise<Script
         child.on('exit', (code, signal) => {
             setTimeout(() => {
                 if (settled) return
+                // Timed out: bash went with the TERM, what is left of its group goes now, not after the grace.
+                if (killed) killGroup('SIGKILL')
                 child.stdout!.destroy()
                 child.stderr!.destroy()
                 child.emit('close', code, signal)
@@ -266,10 +268,10 @@ export async function runPipeline(
                 items: items.length
             })
         } catch (error) {
-            if (!(error instanceof SourceError)) throw error
-            const message = `step "${step.name}": ${error.message}`
+            // A source's own error, or anything unexpected (a gh answer of another shape): the step failed, the run says which.
+            const message = `step "${step.name}": ${error instanceof Error ? error.message : String(error)}`
             const ms = Date.now() - at
-            result.steps.push({ index, name: step.name, kind: step.kind, ok: false, ms, log: message })
+            result.steps.push({ index, name: step.name, kind: step.kind, ok: false, ms, log: head(message) })
             failed(step, message, ms)
         }
     }
@@ -331,7 +333,6 @@ export async function runOneStep(step: Exclude<Step, { kind: 'agent' }>, ctx: St
             items
         }
     } catch (error) {
-        if (!(error instanceof SourceError)) throw error
         return {
             kind: step.kind,
             ok: false,
@@ -340,7 +341,7 @@ export async function runOneStep(step: Exclude<Step, { kind: 'agent' }>, ctx: St
             stderr: '',
             code: null,
             timed_out: false,
-            error: error.message
+            error: error instanceof Error ? error.message : String(error)
         }
     }
 }
