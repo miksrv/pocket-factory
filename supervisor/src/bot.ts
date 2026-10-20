@@ -30,6 +30,7 @@ import {
 import { DeliveryError, EFFECT, sendMarkdown, sendReply } from './telegram/send.js'
 import {
     type Button,
+    buttonBaseUrl,
     editView,
     errorText,
     escapeHtml,
@@ -355,13 +356,17 @@ export function createBot(
     if (!config.telegram.botToken) throw new Error('TELEGRAM_BOT_TOKEN is not set')
     const bot = new Bot(config.telegram.botToken)
     const publicUrl = config.web.publicUrl
+    // Links in buttons only to an address Telegram accepts there; text links still use publicUrl.
+    const buttonUrl = buttonBaseUrl(publicUrl)
 
     // A chat talks to one conversation at a time — its topic: its own by
     // default, or the one the owner switched to by replying to a message of
     // the bot (a routine's report, a question). `/new` switches back.
     const topicFor = (chatId: number): Conversation =>
         store.telegramTopic(chatId) ?? tasks.conversationFor('telegram', String(chatId))
-    const isTopic = (chatId: number, conversationId: string) => topicFor(chatId).id === conversationId
+    // A question, not a use: it never creates the chat's own conversation (an empty chat in the list).
+    const isTopic = (chatId: number, conversationId: string) =>
+        (store.telegramTopic(chatId) ?? store.findConversation('telegram', String(chatId)))?.id === conversationId
     /** The bot sent a message about a conversation: a reply to it later continues that conversation. */
     const remember = (
         chatId: number,
@@ -456,13 +461,16 @@ export function createBot(
         if (task) remember(chatId, id, task.conversation_id, task.id)
         return id
     }
+    /** A message the bot sent, replaced by the view. */
+    const editSent = async (chatId: number, messageId: number, view: View, taskId?: string | null) => {
+        await editView(bot, chatId, messageId, view)
+        const task = taskId ? tasks.task(taskId) : undefined
+        if (task) remember(chatId, messageId, task.conversation_id, task.id)
+    }
     /** The message under a tapped button, replaced by the view. */
     const edit = async (ctx: Context, view: View, taskId?: string | null) => {
         const message = ctx.callbackQuery?.message
-        if (!message) return
-        await editView(bot, message.chat.id, message.message_id, view)
-        const task = taskId ? tasks.task(taskId) : undefined
-        if (task) remember(message.chat.id, message.message_id, task.conversation_id, task.id)
+        if (message) await editSent(message.chat.id, message.message_id, view, taskId)
     }
 
     // ---- the owner's message: a reaction per state, a draft while it runs -----------------
@@ -551,12 +559,14 @@ export function createBot(
 
     // ---- routines: a list with buttons per routine, a card per routine ----------------------
 
-    const listView = (note?: string): View => routinesList(routines?.list() ?? [], publicUrl, Date.now(), note)
+    const listView = (note?: string): View => routinesList(routines?.list() ?? [], buttonUrl, Date.now(), note)
     const cardView = (name: string, options: { note?: string; emptyRun?: number } = {}): View | null => {
         const view = routines?.get(name)
         if (!view) return null
-        return routineCard(view, config.timezone, { ...options, webUrl: publicUrl })
+        return routineCard(view, config.timezone, { ...options, webUrl: buttonUrl })
     }
+    /** Said at once when a run is asked for: the steps before the agent may take a while. */
+    const STARTING = '▶️ Started: running the steps…'
     /** Fire a routine by hand; the card's note says what came of it, and offers everything the poll sees when nothing was new. */
     const fireRoutine = async (
         name: string,
@@ -566,7 +576,7 @@ export function createBot(
         if (run.status === 'queued')
             return {
                 run,
-                note: `▶️ Queued${run.note ? ` (${run.note})` : ''}. The report comes here when it is done; reply to it to follow up.`
+                note: `🤖 Steps done, the agent's task is queued${run.note ? ` (${run.note})` : ''}. Its report comes here; reply to it to follow up.`
             }
         if (run.status === 'empty')
             return {
@@ -596,14 +606,16 @@ export function createBot(
                 text(`No routine named "${escapeHtml(name)}".`),
                 row({ text: '📋 Routines', data: routineData('list') })
             ]))
-        // The steps may take minutes: the bot keeps answering meanwhile.
+        // The steps may take minutes: the bot keeps answering meanwhile, and the card says at once
+        // that the run started; it is edited with what came of it.
         const chatId = ctx.chat.id
         detached('routine run', async () => {
+            const messageId = await send(chatId, cardView(name, { note: STARTING }) ?? listView(STARTING))
             try {
                 const { note, run, emptyRun } = await fireRoutine(name)
-                await send(chatId, cardView(name, { note, emptyRun }) ?? listView(), { taskId: run.task_id })
+                await editSent(chatId, messageId, cardView(name, { note, emptyRun }) ?? listView(), run.task_id)
             } catch (error) {
-                await send(chatId, [
+                await editSent(chatId, messageId, [
                     text(`<b>${escapeHtml(name)}</b>: ❌ ${escapeHtml(errorText(error))}`),
                     backRow(name)
                 ])
@@ -641,26 +653,33 @@ export function createBot(
                 await ctx.answerCallbackQuery({ text: `▶️ ${name}…` })
                 // The query is answered already: what goes wrong from here is said in the message itself.
                 // Detached, as the steps may take minutes and grammY handles one update at a time.
+                // The message says at once that the run started (a new one for `fire`, the list or the
+                // card otherwise) and is edited with what came of it.
                 detached('routine run', async () => {
+                    const line = (note: string) => [
+                        text(`<b>${escapeHtml(name)}</b>: ${escapeHtml(note)}`),
+                        backRow(name)
+                    ]
+                    const fired = parsed.action === 'fire' ? await send(chatId, line(STARTING)) : null
+                    const show = (view: View, taskId?: string | null) =>
+                        fired === null ? edit(ctx, view, taskId) : editSent(chatId, fired, view, taskId)
+                    if (fired === null)
+                        await edit(
+                            ctx,
+                            parsed.from === 'list'
+                                ? listView(`${name}: ${STARTING}`)
+                                : cardView(name, { note: STARTING })!
+                        )
                     try {
                         const { note, run, emptyRun } = await fireRoutine(name, parsed.action === 'all')
-                        if (parsed.action === 'fire')
-                            await send(
-                                chatId,
-                                [text(`<b>${escapeHtml(name)}</b>: ${escapeHtml(note)}`), backRow(name)],
-                                {
-                                    taskId: run.task_id
-                                }
-                            )
-                        else if (parsed.from === 'list') await edit(ctx, listView(`${name}: ${note}`), run.task_id)
-                        else await edit(ctx, cardView(name, { note, emptyRun })!, run.task_id)
+                        if (parsed.action === 'fire') await show(line(note), run.task_id)
+                        else if (parsed.from === 'list') await show(listView(`${name}: ${note}`), run.task_id)
+                        else await show(cardView(name, { note, emptyRun })!, run.task_id)
                     } catch (error) {
-                        const failed = [
+                        await show([
                             text(`<b>${escapeHtml(name)}</b>: ❌ ${escapeHtml(errorText(error))}`),
                             backRow(name)
-                        ]
-                        if (parsed.action === 'fire') await send(chatId, failed)
-                        else await edit(ctx, failed)
+                        ])
                     }
                 })
                 return
@@ -1462,7 +1481,7 @@ export function createBot(
     /** Buttons inside a reply: the task page, its pull request, and for a routine's report the routine itself. */
     const replyButtons = (task: Task): Button[][] => {
         const first: Button[] = []
-        if (publicUrl) first.push({ text: '🌐 Open', url: `${publicUrl}/tasks/${task.id}` })
+        if (buttonUrl) first.push({ text: '🌐 Open', url: `${buttonUrl}/tasks/${task.id}` })
         if (task.git?.pr) first.push({ text: `PR #${task.git.pr.number}`, url: task.git.pr.url, style: 'success' })
         const second: Button[] = []
         if (task.schedule && routines?.get(task.schedule))
@@ -1612,7 +1631,9 @@ export function createBot(
                     `👀 Preview of <b>${escapeHtml(preview.project)}</b>: ${escapeHtml(preview.url)}${preview.expires_at ? `\nOpen until ${new Date(preview.expires_at).toLocaleString('en-GB', { timeZone: config.timezone, dateStyle: 'short', timeStyle: 'short' })}.` : ''}`
                 ),
                 row(
-                    /^https?:\/\//.test(preview.url) ? { text: '🔗 Open', url: preview.url } : null,
+                    /^https?:\/\//.test(preview.url) && buttonBaseUrl(preview.url)
+                        ? { text: '🔗 Open', url: preview.url }
+                        : null,
                     fits(stop) ? { text: '⏹ Stop', data: stop } : null
                 )
             ],

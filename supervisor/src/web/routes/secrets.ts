@@ -26,7 +26,12 @@ export function secretRoutes(): Hono<Env> {
     app.get('/', (c) => {
         const { vault, routines, catalog, config, providers } = c.get('app')
         const uses = new Map<string, Use[]>()
-        const add = (name: string, use: Use) => uses.set(name, [...(uses.get(name) ?? []), use])
+        // Once per reader: a provider's MCP servers often share one token.
+        const add = (name: string, use: Use) => {
+            const list = uses.get(name) ?? []
+            if (!list.some((u) => u.kind === use.kind && u.name === use.name && u.step === use.step))
+                uses.set(name, [...list, use])
+        }
         for (const routine of routines.list())
             for (const step of routine.steps)
                 for (const need of step.needs) add(need.name, { kind: 'routine', name: routine.name, step: step.name })

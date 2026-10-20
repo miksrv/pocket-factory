@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.7.1
+
+### Patch Changes
+
+- Fixed: Settings → Sandboxes showed the Docker login as unknown on a server, though it was signed in
+- Fixed: a web reply sent to Telegram was lost when the factory's address has no dot (`https://mikserver`): such links stay out of the buttons
+- Fixed: a web reply forwarded to Telegram no longer leaves an empty Telegram chat in the list
+- Fixed: Settings → Secrets named a provider twice when two of its MCP servers share one token
+- Fixed: the code editor's search and replace panel (Ctrl+F) is styled in both themes
+- Routines: a step may continue if it fails (Continue if it fails on its card): the run goes on and the agent gets its error
+- Routines: a step can be switched off (Step on on its card): runs pass it by, Run on the card still tries it
+- Routines: a run shows from the moment it starts: its steps live on the routine's page and in its chat thread, then the agent step with its task's status
+- Telegram: Run on a routine says at once that it started, then what came of it once the steps are done
+- Fixed: the Claude Code version is back in the sidebar, the Overview and Settings with sandboxes (as the last session reported it)
+
 ## 1.7.0
 
 ### Minor Changes

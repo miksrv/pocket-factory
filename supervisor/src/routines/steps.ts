@@ -32,6 +32,12 @@ export interface StepResult {
     log: string
     /** A source's item count. */
     items?: number
+    /** It failed and the run went on (`continue_on_error`). */
+    continued?: boolean
+    /** Switched off (`enabled: false`): the run passed it by. */
+    skipped?: boolean
+    /** Running now: only in the progress of a run that goes on (`onStep`), never in its final result. */
+    running?: boolean
 }
 
 /** The pipeline up to the agent: the scripts' text and the sources' items, in the order the steps ran. */
@@ -175,9 +181,17 @@ const head = (text: string) => (text.length > STEP_LOG_MAX ? `${text.slice(0, ST
  * A script's output goes to the agent as text; a source's (a script with
  * `items`, GitHub, Trac) as items. A step that fails (non-zero exit, timeout,
  * a source that cannot reach its server) stops the run with its last lines,
- * before a single token is spent. The agent step is where the pipeline ends.
+ * before a single token is spent, unless it says `continue_on_error`: then
+ * the run goes on and the agent gets the error as that step's output. The
+ * agent step is where the pipeline ends. A step with `enabled: false` is
+ * passed by.
  */
-export async function runPipeline(steps: Step[], ctx: StepContext): Promise<PipelineResult> {
+export async function runPipeline(
+    steps: Step[],
+    ctx: StepContext,
+    /** Before each step: the steps done so far and the one starting (marked `running`), for a run's live progress. */
+    onStep?: (progress: StepResult[]) => void
+): Promise<PipelineResult> {
     const started = Date.now()
     const result: PipelineResult = { outputs: [], sources: [], steps: [], ms: 0 }
     const fail = (message: string): never => {
@@ -185,8 +199,31 @@ export async function runPipeline(steps: Step[], ctx: StepContext): Promise<Pipe
         error.steps = result.steps
         throw error
     }
+    // A step that may fail: marked in its result, its error handed to the agent like a script's output.
+    const failed = (step: Exclude<Step, { kind: 'agent' }>, message: string, ms: number): void => {
+        if (!step.continue_on_error) fail(message)
+        result.steps[result.steps.length - 1].continued = true
+        const { text, truncated } = cap(`failed, the run went on without it:\n${message}`)
+        result.outputs.push({ name: step.name, output: text, ms, truncated })
+    }
     for (const [index, step] of steps.entries()) {
         if (step.kind === 'agent') break
+        onStep?.([
+            ...result.steps,
+            { index, name: step.name, kind: step.kind, ok: true, ms: 0, log: '', running: true }
+        ])
+        if (!step.enabled) {
+            result.steps.push({
+                index,
+                name: step.name,
+                kind: step.kind,
+                ok: true,
+                ms: 0,
+                log: 'switched off',
+                skipped: true
+            })
+            continue
+        }
         const at = Date.now()
         if (step.kind === 'run') {
             const run = await runScript(step, ctx)
@@ -195,7 +232,8 @@ export async function runPipeline(steps: Step[], ctx: StepContext): Promise<Pipe
                 result.steps.push({ index, name: step.name, kind: step.kind, ok, ms: run.ms, log: head(log), items })
             if (failure) {
                 done(false, [run.stdout.trim(), run.stderr.trim()].filter(Boolean).join('\n') || failure)
-                fail(failure)
+                failed(step, failure, run.ms)
+                continue
             }
             if (step.items) {
                 try {
@@ -205,7 +243,7 @@ export async function runPipeline(steps: Step[], ctx: StepContext): Promise<Pipe
                 } catch (error) {
                     const message = `step "${step.name}": ${error instanceof Error ? error.message : String(error)}`
                     done(false, message)
-                    fail(message)
+                    failed(step, message, run.ms)
                 }
             } else {
                 const { text, truncated } = cap(run.stdout)
@@ -230,8 +268,9 @@ export async function runPipeline(steps: Step[], ctx: StepContext): Promise<Pipe
         } catch (error) {
             if (!(error instanceof SourceError)) throw error
             const message = `step "${step.name}": ${error.message}`
-            result.steps.push({ index, name: step.name, kind: step.kind, ok: false, ms: Date.now() - at, log: message })
-            fail(message)
+            const ms = Date.now() - at
+            result.steps.push({ index, name: step.name, kind: step.kind, ok: false, ms, log: message })
+            failed(step, message, ms)
         }
     }
     result.ms = Date.now() - started

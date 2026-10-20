@@ -22,7 +22,7 @@ process.stdin.on('data', (chunk) => {
         if (m.type === 'control_request')
             out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } })
         if (m.type === 'user') {
-            out({ type: 'system', subtype: 'init', session_id: S, model: 'fake', tools: [], mcp_servers: [] })
+            out({ type: 'system', subtype: 'init', session_id: S, model: 'fake', tools: ['Read'], mcp_servers: [], claude_code_version: '9.9.9' })
             out({ ...m, session_id: S, parent_tool_use_id: null, isReplay: true })
             out({ type: 'assistant', session_id: S, parent_tool_use_id: null, message: { id: 'msg_1', model: 'fake', role: 'assistant', content: [{ type: 'text', text: 'Working…' }], usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 } } })
             setTimeout(() => {
@@ -58,6 +58,8 @@ describe('a running task reports its progress', () => {
             )
         })
         const running = store.getTask(task.id)!
+        // The CLI's version comes from the session's init: in sandbox mode there is no CLI to ask.
+        expect(tasks.cliVersion()).toBe('9.9.9')
         expect(running.status).toBe('running')
         expect(running.num_turns).toBe(1)
         expect(running.cache_read_tokens).toBe(1000)

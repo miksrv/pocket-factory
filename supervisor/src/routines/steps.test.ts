@@ -19,6 +19,8 @@ const script = (run: string, over: Partial<RunStep> = {}): RunStep => ({
     timeout_s: 10,
     items: false,
     new_only: false,
+    continue_on_error: false,
+    enabled: true,
     ...over
 })
 
@@ -73,6 +75,37 @@ describe('runPipeline', () => {
                 ctx
             )
         ).rejects.toThrow('step "stats" exited with 3: nope')
+    })
+
+    it('passes a switched-off step by without running it', async () => {
+        const result = await runPipeline(
+            [script('exit 9', { name: 'webmaster', enabled: false }), script('echo after', { name: 'next' })],
+            ctx
+        )
+        expect(result.steps.map((s) => [s.name, s.ok, s.skipped])).toEqual([
+            ['webmaster', true, true],
+            ['next', true, undefined]
+        ])
+        expect(result.outputs.map((o) => o.name)).toEqual(['next'])
+    })
+
+    it('goes on past a failing step that says continue_on_error and hands its error to the agent', async () => {
+        const result = await runPipeline(
+            [
+                script('echo nope >&2; exit 3', { name: 'metrika', continue_on_error: true }),
+                script("echo '[not json'", { name: 'list', items: true, new_only: true, continue_on_error: true }),
+                script('echo after', { name: 'next' })
+            ],
+            ctx
+        )
+        expect(result.steps.map((s) => [s.name, s.ok, s.continued])).toEqual([
+            ['metrika', false, true],
+            ['list', false, true],
+            ['next', true, undefined]
+        ])
+        expect(result.outputs.map((o) => o.name)).toEqual(['metrika', 'list', 'next'])
+        expect(result.outputs[0].output).toBe('failed, the run went on without it:\nstep "metrika" exited with 3: nope')
+        expect(result.sources).toEqual([])
     })
 
     it('ends a timed-out step even when a child left its process group and holds the pipes', async () => {

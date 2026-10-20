@@ -119,7 +119,7 @@ export function OverviewPage() {
                         shown. The subscription meters windows, not money.
                     </span>
                     <span title='Pocket Factory · Claude Code'>
-                        {d ? `v${d.version} · ${d.claude.version ?? ''}` : ''}
+                        {d ? `v${d.version}${d.claude.version ? ` · ${d.claude.version}` : ''}` : ''}
                     </span>
                 </div>
             </div>
@@ -156,10 +156,18 @@ export function OverviewPage() {
                 <div>
                     <h2>Health</h2>
                     <div className='card pad0'>
+                        {/* In sandbox mode the version is what the last session reported: amber until one ran. */}
                         <Check
                             ok={Boolean(d?.claude.version)}
                             label='Claude Code CLI'
-                            detail={d?.claude.version ?? 'not on PATH'}
+                            detail={
+                                d?.sandboxes.mode === 'sbx'
+                                    ? d.claude.version
+                                        ? `${d.claude.version} in the sandboxes`
+                                        : 'in the sandboxes, version after the first task'
+                                    : (d?.claude.version ?? 'not on PATH')
+                            }
+                            warn={d?.sandboxes.mode === 'sbx'}
                         />
                         <Check
                             ok={Boolean(d?.claude.logged_in)}

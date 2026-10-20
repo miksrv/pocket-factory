@@ -1152,6 +1152,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             onEvent: (event) => {
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
+                    this.rememberVersion(event.version)
                     this.rememberAgents(event.agents)
                     this.rememberMcp('.', event.mcpServers)
                 }
@@ -1712,6 +1713,15 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         return settings
     }
 
+    /** The CLI's version as the last session reported it: in sandbox mode the supervisor has no CLI to ask. */
+    cliVersion(): string | null {
+        return this.store.getMeta<string>('claude.version') ?? null
+    }
+
+    private rememberVersion(version: string | null): void {
+        if (version && version !== this.cliVersion()) this.store.setMeta('claude.version', version)
+    }
+
     private rememberTools(reported: string[]): void {
         const known = this.tools()
         // The init event may come before the claude.ai connectors have connected, listing none of
@@ -1719,7 +1729,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const tools = [...reported, ...known.filter((t) => t.startsWith('mcp__') && !reported.includes(t))]
         if (known.length === tools.length && known.every((t, i) => t === tools[i])) return
         this.store.setMeta('claude.tools', tools)
-        log.info(`claude tools: ${tools.length} (${tools.slice(0, 6).join(', ')}…)`)
+        // The session's own count first: the registry also keeps what other sessions had (a role sees far less).
+        log.info(
+            `claude tools: ${reported.length} in this session (${reported.slice(0, 6).join(', ')}…), ${tools.length} known`
+        )
     }
 
     /**
@@ -2000,6 +2013,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 const origin = { agent: event.agent, parent_tool_use_id: event.parentToolUseId }
                 if (event.type === 'init') {
                     this.rememberTools(event.tools)
+                    this.rememberVersion(event.version)
                     this.rememberAgents(event.agents)
                     // A provider's servers are its own in the registry, not the factory's mcp.json.
                     const own = new Set(provider?.mcp?.map((s) => s.name))

@@ -113,6 +113,19 @@ export function richButtonRows(buttonRows: Button[][]): string {
         .join('\n')
 }
 
+/**
+ * The factory's address as Telegram takes it in a button, or null: Telegram refuses a URL whose host
+ * has no dot (`https://mikserver`, `http://localhost:8080`) and with it the whole message.
+ */
+export function buttonBaseUrl(url: string | null): string | null {
+    if (!url) return null
+    try {
+        return new URL(url).hostname.includes('.') ? url : null
+    } catch {
+        return null
+    }
+}
+
 function inlineButton(b: Button): InlineKeyboardButton {
     const style = b.style && b.style !== 'link' ? { style: b.style } : {}
     const label = b.plain ?? b.text

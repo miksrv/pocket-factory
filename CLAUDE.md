@@ -409,7 +409,12 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   values in its scope); `routines/sources.ts` has
   the built-in sources and `parseItems`. A script's stdout (16k cap) lands in the prompt under
   "Step outputs"; a source's items under "New since the last run" after dedup. A failing step is an
-  `error` run with its last lines, no task. Every source empty → `empty`, no agent. No agent step →
+  `error` run with its last lines, no task, unless it says `continue_on_error: true` (Continue if it
+  fails on its card, like GitHub Actions): then it is marked failed, its error goes to the agent as its
+  output and the run goes on. `enabled: false` on a step (Step on, unticked) passes it by in a run;
+  Run on its card still tries it. A run's row is written when its steps start (`running`, the steps so
+  far with the current one marked, a `progress` event, no Telegram notice) and its end updates the same
+  row; the routine's thread is made then too, so the page and the thread show the steps before the task. Every source empty → `empty`, no agent. No agent step →
   the run is `done` and its note is the steps' output (told in Telegram). A step's scripts belong in
   the routine's folder (`"${ROUTINE_DIR}/scripts/x.sh"`); a skill keeps only the tools its agent
   calls. A script says what it is in the comment under the shebang and names what it reads

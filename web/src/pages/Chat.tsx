@@ -27,6 +27,7 @@ import {
     type TaskEvent
 } from '../lib/api'
 import { readDraft, writeDraft } from '../lib/drafts'
+import { runProgress } from '../lib/routines'
 import { useAsync } from '../lib/useAsync'
 import { usePaged } from '../lib/usePaged'
 
@@ -393,6 +394,16 @@ function Thread({
     // picked), and the only message the owner sends here is the answer to an open question.
     const routine = routineOf(conversation)
     const last = ordered.at(-1)
+    // A run's steps come before its task: the thread says how far they are until the task lands here.
+    const routineView = useAsync(
+        () => (routine ? api.schedule(routine) : Promise.resolve(null)),
+        [routine],
+        routine ? 3000 : undefined
+    )
+    const progress = runProgress(
+        routineView.data?.last_run,
+        routineView.data?.steps.filter((s) => s.kind !== 'agent').length ?? 0
+    )
 
     const loadEarlier = async () => {
         const oldest = ordered[0]
@@ -583,7 +594,7 @@ function Thread({
                             label='Load earlier messages'
                         />
                     )}
-                    {ordered.length === 0 && conversation && (
+                    {ordered.length === 0 && conversation && !progress && (
                         <Empty>
                             {routine
                                 ? "No runs yet. Run now on the routine's page starts one."
@@ -616,6 +627,11 @@ function Thread({
                             />
                         </div>
                     ))}
+                    {progress && (
+                        <div className='routine-progress dim small'>
+                            Preparing the data for the agent: {progress}. Its task appears here when the steps are done.
+                        </div>
+                    )}
                     {error && <div className='tool error'>{error}</div>}
                 </div>
                 {unseen && (

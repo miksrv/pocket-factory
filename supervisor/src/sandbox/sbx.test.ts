@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { cleanError, parseApprovals, Sbx, type SbxRunner } from './sbx.js'
+import { cleanError, parseApprovals, Sbx, SbxError, type SbxRunner } from './sbx.js'
 
 /** What `sbx policy approval ls` printed on mikserver (sbx 0.48.0), trimmed to two rows. */
 const APPROVALS = `APPROVAL                                              SANDBOX   TITLE                                    DETAIL                                                                      OPTIONS
@@ -101,5 +101,14 @@ describe('sbx', () => {
         const sbx = new Sbx({ runner })
         expect(await sbx.claudeLogin()).toBe(true)
         expect(await sbx.diagnose()).toEqual([{ name: 'Authentication', status: 'pass', message: 'authenticated' }])
+    })
+
+    it('reads the diagnose report of a failed run (no KVM inside the container)', async () => {
+        const failed = new SbxError('sbx diagnose: exit status 1')
+        failed.stdout =
+            '{"checks":[{"name":"Virtualization","status":"fail","message":"no hypervisor present"},{"name":"Authentication","status":"pass","message":"authenticated"}]}'
+        const { runner } = fake({ diagnose: failed })
+        const sbx = new Sbx({ runner })
+        expect((await sbx.diagnose()).find((c) => c.name === 'Authentication')?.status).toBe('pass')
     })
 })

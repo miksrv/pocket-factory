@@ -293,11 +293,13 @@ export function Layout() {
                         style={{ marginTop: 4 }}
                         title={
                             status.data
-                                ? `Pocket Factory ${status.data.version} · Claude Code ${status.data.claude.version ?? '?'}`
+                                ? `Pocket Factory ${status.data.version}${status.data.claude.version ? ` · Claude Code ${status.data.claude.version}` : ''}`
                                 : undefined
                         }
                     >
-                        {status.data ? `v${status.data.version} · ${status.data.claude.version ?? ''}` : ''}
+                        {status.data
+                            ? `v${status.data.version}${status.data.claude.version ? ` · ${status.data.claude.version}` : ''}`
+                            : ''}
                     </div>
                     <div className='label'>{status.data ? `model: ${status.data.claude.model ?? 'default'}` : ''}</div>
                     <NavLink

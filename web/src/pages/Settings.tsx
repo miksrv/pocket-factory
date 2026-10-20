@@ -58,7 +58,7 @@ export function SettingsPage() {
                             k='CLI'
                             v={
                                 s.sandboxes.mode === 'sbx'
-                                    ? 'inside each sandbox (Docker’s agent image)'
+                                    ? `inside each sandbox (Docker’s agent image)${s.claude.version ? ` · ${s.claude.version}` : ''}`
                                     : (s.claude.version ?? 'not found')
                             }
                         />

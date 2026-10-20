@@ -20,6 +20,7 @@ import {
     type RoutineTrigger,
     type RoutineView
 } from '../lib/api'
+import { runProgress } from '../lib/routines'
 import { useAsync } from '../lib/useAsync'
 
 const TEMPLATE = `What to do on every run, in plain words: what counts, what to skip, when to ask.
@@ -50,15 +51,17 @@ function dayList(days: number[]): string {
 /** Show runs lists this many, newest first; older firings are not shown anywhere. */
 const RUNS_SHOWN = 20
 const runTone = (status: RoutineRun['status']) =>
-    status === 'queued' || status === 'done'
-        ? 'done'
-        : status === 'error'
-          ? 'failed'
-          : status === 'skipped'
-            ? 'queued'
-            : status === 'missed'
-              ? 'amber'
-              : 'cancelled'
+    status === 'running'
+        ? 'running'
+        : status === 'queued' || status === 'done'
+          ? 'done'
+          : status === 'error'
+            ? 'failed'
+            : status === 'skipped'
+              ? 'queued'
+              : status === 'missed'
+                ? 'amber'
+                : 'cancelled'
 
 /** A run's outcome: the task's status when it queued one (that is what the owner wants to know), else what the scheduler decided. */
 function RunBadge({ run }: { run: RoutineRun }) {
@@ -595,6 +598,20 @@ function Status({
     )
     const [toast, showToast] = useToast()
     const confirm = useConfirm()
+    // While a run's steps go (this Run now, or a timed firing): their progress every second and a half;
+    // then, while its agent's task waits or works, every three seconds.
+    const task = view?.last_run?.task_id ? view.last_run.task_status : null
+    const pollMs =
+        busy === 'run' || view?.last_run?.status === 'running'
+            ? 1500
+            : task === 'queued' || task === 'running'
+              ? 3000
+              : 0
+    useEffect(() => {
+        if (!pollMs) return
+        const timer = setInterval(onChanged, pollMs)
+        return () => clearInterval(timer)
+    }, [pollMs, onChanged])
     if (!view) return null
 
     const act = async (what: 'run' | 'preview' | 'forget' | 'toggle', work: () => Promise<string | null>) => {
@@ -647,6 +664,7 @@ function Status({
         })
 
     const last = view.last_run
+    const progress = runProgress(last, view.steps.filter((s) => s.kind !== 'agent').length)
     const lastTask = view.last_task
     const model = view.provider ? `${view.provider}${view.model ? `:${view.model}` : ''}` : view.model
     const hasSources = view.steps.some((s) => s.source)
@@ -707,8 +725,9 @@ function Status({
                         )
                     }
                     sub={
-                        last?.note || taskLine || lastTask?.task_id || view.conversation_id ? (
+                        progress || last?.note || taskLine || lastTask?.task_id || view.conversation_id ? (
                             <span className='stack routine-stat-sub'>
+                                {progress && <span className='routine-note running'>{progress}</span>}
                                 {last?.note && (
                                     <span className={`routine-note ${last.status}`}>
                                         {last.note.length > 300 ? `${last.note.slice(0, 300)}…` : last.note}

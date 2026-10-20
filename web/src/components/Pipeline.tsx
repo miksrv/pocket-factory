@@ -8,7 +8,8 @@ import {
     type RoutineStepResult,
     type RoutineStepView,
     type RoutineView,
-    type StepRun
+    type StepRun,
+    type TaskStatus
 } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { CodeEditor } from './CodeEditor'
@@ -244,6 +245,7 @@ export function StepsField({
             facts={factsOf(view, saved, i, step)}
             edited={JSON.stringify(saved[i]) !== JSON.stringify(step)}
             last={lastSteps.find((r) => r.index === i && r.name === (view?.steps[i]?.name ?? str(step.name)))}
+            agentStatus={kindOf(step) === 'agent' && view?.last_run?.task_id ? view.last_run.task_status : null}
             onOpen={() => setEditing({ index: i, fresh: false })}
         />
     ))
@@ -360,6 +362,7 @@ function StepNode({
     facts,
     edited,
     last,
+    agentStatus,
     onOpen
 }: {
     index: number
@@ -367,6 +370,8 @@ function StepNode({
     facts?: RoutineStepView
     edited: boolean
     last?: RoutineStepResult
+    /** The agent step: how the last run's task is doing (it has no step result of its own). */
+    agentStatus?: TaskStatus | null
     onOpen: () => void
 }) {
     const kind = kindOf(step)
@@ -388,13 +393,28 @@ function StepNode({
                   ? `skill ${str(step.skill)}`
                   : 'reads the instructions and what the steps found'
     const missing = (facts?.needs ?? []).filter((n) => n.from === null && !n.optional)
-    const state = edited ? 'edited' : last ? (last.ok ? 'ok' : 'failed') : 'idle'
+    const off = kind !== 'agent' && step.enabled === false
+    const state = edited
+        ? 'edited'
+        : agentStatus
+          ? agentStatus === 'queued' || agentStatus === 'running'
+              ? 'running'
+              : agentStatus === 'done'
+                ? 'ok'
+                : 'failed'
+          : last?.running
+            ? 'running'
+            : last && !last.skipped && !off
+              ? last.ok
+                  ? 'ok'
+                  : 'failed'
+              : 'idle'
     return (
         <button
             type='button'
-            className={`step-node ${kind} ${state}`}
+            className={`step-node ${kind} ${state}${off ? ' off' : ''}`}
             onClick={onOpen}
-            title={`${KIND_LABEL[kind]}: ${name}${about ? `\n${about}` : ''}`}
+            title={`${KIND_LABEL[kind]}: ${name}${about ? `\n${about}` : ''}${step.continue_on_error === true ? '\nthe run goes on if it fails' : ''}`}
         >
             <span className='step-node-head'>
                 <span
@@ -411,7 +431,7 @@ function StepNode({
                             name='failed'
                             size={12}
                         />
-                    ) : state === 'edited' ? (
+                    ) : state === 'edited' || state === 'running' ? (
                         <span className='step-node-dot' />
                     ) : null}
                 </span>
@@ -426,11 +446,16 @@ function StepNode({
                 <span className='grow' />
                 {edited ? (
                     <span className='step-node-time'>unsaved</span>
+                ) : off ? (
+                    <span className='step-node-time'>off</span>
+                ) : agentStatus ? (
+                    <span className='step-node-time'>{agentStatus}</span>
                 ) : (
                     last && (
                         <span className='step-node-time'>
                             {fmt.duration(last.ms)}
                             {last.items !== undefined ? ` · ${last.items}` : ''}
+                            {last.continued ? ' · went on' : ''}
                         </span>
                     )
                 )}
@@ -758,6 +783,24 @@ function StepCard({
     const kind = kindOf(step)
     const options = (kind === 'github-prs' || kind === 'trac' ? step[kind] : {}) as RawStep
     const setOptions = (patch: RawStep) => onChange({ ...step, [kind]: { ...options, ...patch } })
+    // On every step but the agent: a failure lets the run go on, its error goes to the agent.
+    // And a switch: a step that is off is passed by in a run; Run on its card still tries it.
+    const goesOn = (
+        <>
+            <Check
+                checked={step.continue_on_error === true}
+                onChange={(on) => onChange({ ...step, continue_on_error: on || undefined })}
+                label='Continue if it fails'
+                title='The next steps and the agent still run; the error reaches the agent as this step’s output'
+            />
+            <Check
+                checked={step.enabled !== false}
+                onChange={(on) => onChange({ ...step, enabled: on ? undefined : false })}
+                label='Step on'
+                title='Off: a run passes it by; Run on this card still tries it'
+            />
+        </>
+    )
     const [run, setRun] = useState<StepRun | null>(null)
     const [running, setRunning] = useState(false)
     const [runError, setRunError] = useState<string | null>(null)
@@ -784,7 +827,7 @@ function StepCard({
             {last ? (
                 <span
                     className={`badge ${last.ok ? 'done' : 'failed'}`}
-                    title={`last run ${lastRun ? fmt.ago(lastRun.fired_at) : ''}: ${last.ok ? 'ok' : 'failed'} in ${fmt.duration(last.ms)}${last.items !== undefined ? `, ${last.items} item(s)` : ''}`}
+                    title={`last run ${lastRun ? fmt.ago(lastRun.fired_at) : ''}: ${last.ok ? 'ok' : last.continued ? 'failed, the run went on' : 'failed'} in ${fmt.duration(last.ms)}${last.items !== undefined ? `, ${last.items} item(s)` : ''}`}
                 >
                     last run{' '}
                     <Icon
@@ -951,6 +994,7 @@ function StepCard({
                                 label='New items only'
                             />
                         )}
+                        {goesOn}
                     </div>
                 </Field>
             </>
@@ -1060,6 +1104,7 @@ function StepCard({
                             onChange={(on) => setOptions({ new_only: on ? undefined : false })}
                             label='New items only'
                         />
+                        {goesOn}
                     </div>
                 </Field>
                 {output}
@@ -1095,6 +1140,7 @@ function StepCard({
                         onChange={(on) => setOptions({ new_only: on ? undefined : false })}
                         label='New items only'
                     />
+                    {goesOn}
                 </div>
             </Field>
             {output}

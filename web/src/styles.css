@@ -1538,6 +1538,15 @@ label.row > input[type='radio'],
 .routine-note.error {
     color: var(--red);
 }
+.routine-note.running {
+    color: var(--blue);
+}
+.routine-progress {
+    padding: 10px 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--blue);
+}
 .routine-links {
     gap: 10px;
 }
@@ -3416,6 +3425,84 @@ details.more > summary {
 .code-editor textarea {
     width: 100%;
 }
+/* CodeMirror's search panel (Ctrl+F): a compact toolbar in the page's colours. Prefixed with
+   .code-editor so these win over the page's input / button rules and CodeMirror's own light theme. */
+.code-editor .cm-panel.cm-search {
+    position: relative;
+    padding: 6px 32px 6px 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 30px;
+}
+.code-editor .cm-panel.cm-search input.cm-textfield {
+    width: 200px;
+    max-width: 100%;
+    height: 26px;
+    padding: 0 8px;
+    margin: 0 4px 0 0;
+    font: inherit;
+    line-height: 24px;
+    vertical-align: middle;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-sm);
+}
+.code-editor .cm-panel.cm-search input.cm-textfield:focus {
+    border-color: var(--blue);
+    outline: 1px solid var(--blue);
+}
+.code-editor .cm-panel.cm-search button.cm-button {
+    height: 26px;
+    padding: 0 8px;
+    margin: 0 4px 0 0;
+    font: inherit;
+    line-height: 24px;
+    vertical-align: middle;
+    background: var(--surface);
+    background-image: none;
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: none;
+}
+.code-editor .cm-panel.cm-search button.cm-button:hover {
+    background: var(--surface-3);
+}
+.code-editor .cm-panel.cm-search label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 8px 0 4px;
+    font-size: 12px;
+    color: var(--text-2);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.code-editor .cm-panel.cm-search input[type='checkbox'] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+}
+.code-editor .cm-panel.cm-search button[name='close'] {
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-dim);
+    font-size: 16px;
+    line-height: 22px;
+}
+.code-editor .cm-panel.cm-search button[name='close']:hover {
+    color: var(--text);
+    background: var(--surface-3);
+}
 
 /* A folder's files: one row per file under its directory; a click opens it in a window. */
 .file-list {
@@ -3854,6 +3941,9 @@ textarea[data-secret] {
 .step-node.edited {
     border-style: dashed;
 }
+.step-node.off {
+    opacity: 0.55;
+}
 .step-node-head {
     display: flex;
     align-items: center;
@@ -3887,6 +3977,11 @@ textarea[data-secret] {
     height: 6px;
     border-radius: 50%;
     background: currentColor;
+}
+.step-node-state.running {
+    border-color: var(--blue);
+    color: var(--blue);
+    animation: pulse 1.2s infinite;
 }
 .step-node-state.edited {
     border-color: var(--amber);

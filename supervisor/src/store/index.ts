@@ -237,8 +237,8 @@ export interface RoutineRun {
     fired_at: string
     /** Which trigger fired: a schedule, or the owner's Run now; `poll` in rows of 1.5.0, `cron` before. */
     trigger: 'schedule' | 'poll' | 'manual' | 'cron'
-    /** `done`: a pipeline without an agent ran its steps to the end (1.6.0). */
-    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed' | 'done'
+    /** `done`: a pipeline without an agent ran its steps to the end (1.6.0). `running`: its steps are running now. */
+    status: 'running' | 'queued' | 'empty' | 'skipped' | 'error' | 'missed' | 'done'
     note: string | null
     items: number
     task_id: string | null
@@ -258,6 +258,10 @@ export interface RoutineStepResult {
     ms: number
     log: string
     items?: number
+    /** It failed and the run went on; switched off; running now (only while the run goes on). */
+    continued?: boolean
+    skipped?: boolean
+    running?: boolean
 }
 
 /** Runs kept per routine; older firings are pruned on insert. */
@@ -884,6 +888,37 @@ export class Store {
             .run(run.schedule, run.schedule, ROUTINE_RUNS_KEPT)
 
         return { ...run, task_status: null, id: Number(result.lastInsertRowid) }
+    }
+
+    /** A run as it goes: its steps so far, then how it ended (the same row, so the list shows it from the start). */
+    updateRoutineRun(
+        id: number,
+        patch: Partial<Pick<RoutineRun, 'status' | 'note' | 'items' | 'task_id' | 'duration_ms' | 'steps'>>
+    ): RoutineRun | undefined {
+        const fields = Object.entries({
+            ...patch,
+            ...(patch.note !== undefined ? { note: patch.note && this.redact(patch.note) } : {}),
+            ...(patch.steps !== undefined
+                ? { steps: patch.steps ? JSON.stringify(this.redactDeep(patch.steps)) : null }
+                : {})
+        })
+        if (fields.length)
+            this.db
+                .prepare(`UPDATE schedule_runs SET ${fields.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`)
+                .run(...fields.map(([, v]) => v as string | number | null), id)
+        const row = this.db.prepare(`SELECT ${ROUTINE_RUN} WHERE r.id = ?`).get(id)
+        return row ? routineRunOf(row as unknown as RoutineRunRow) : undefined
+    }
+
+    /** Runs a supervisor restart left `running`: their steps were cut off, so they end as errors. */
+    endInterruptedRoutineRuns(): number {
+        return Number(
+            this.db
+                .prepare(
+                    "UPDATE schedule_runs SET status = 'error', note = 'interrupted by a restart' WHERE status = 'running'"
+                )
+                .run().changes
+        )
     }
 
     /** Newest first. By default only the firings that mattered (a task, an error, a missed minute); `all` adds the empty polls and skips. */

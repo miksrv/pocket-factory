@@ -699,7 +699,7 @@ export interface RoutineRun {
     fired_at: string
     trigger: 'schedule' | 'poll' | 'manual' | 'cron'
     /** `queued`: a task was created; `done`: the steps ran and there is no agent; `empty`: nothing new; `skipped`: not attempted (run in progress, soft-stop); `error`: a step failed; `missed`: the factory was off at the minute. */
-    status: 'queued' | 'empty' | 'skipped' | 'error' | 'missed' | 'done'
+    status: 'running' | 'queued' | 'empty' | 'skipped' | 'error' | 'missed' | 'done'
     note: string | null
     items: number
     task_id: string | null
@@ -719,6 +719,12 @@ export interface RoutineStepResult {
     ms: number
     log: string
     items?: number
+    /** It failed and the run went on (`continue_on_error`). */
+    continued?: boolean
+    /** Switched off (`enabled: false`): the run passed it by. */
+    skipped?: boolean
+    /** Running now (a run whose steps are going). */
+    running?: boolean
 }
 
 /** A variable a step reads, and whether a run of the routine gets it. */
