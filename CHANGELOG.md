@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.4
+
+### Patch Changes
+
+- Fixed: an agent working only through claude.ai connectors (Gmail) no longer starts before they connect and reports its tool call as text
+
 ## 1.7.3
 
 ### Patch Changes
