@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- Routines: a run can hand one piece of work to a new chat of a project and wait for it (`hand_off`); the chat stays in the Chat list to go on with the same agent, its questions reach Telegram at once, stopping the run stops it
+- Routines: a run can hand one piece of work to a new chat of a project its file lists under `hand_off:` and wait for it; the chat stays in the Chat list to go on with the same agent, its questions reach Telegram at once, stopping the run stops it
 - Routines: scripts after the agent step, run when its task has ended (if it succeeded, failed, or always) with its status, report and PR in the environment; their results go into the run and to Telegram
 - Fixed: a Trac step's "comes up again when it changes" works on a Trac that heads its CSV with labels (Modified)
 - Secrets: a routine shows once in a secret's list however many of its steps read it

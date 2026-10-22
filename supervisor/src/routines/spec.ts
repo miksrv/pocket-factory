@@ -145,6 +145,14 @@ export interface RoutineSpec {
     max_items: number
     /** One-shot: the routine switches itself off once it has queued a task. */
     once: boolean
+    /** The projects a run may hand work to (`hand_off:`); none = the run has no `hand_off` tool. */
+    hand_off: string[]
+}
+
+/** `hand_off:` of a routine file: the projects its runs may open a chat in (a name or a list). */
+export function handOffProjects(fm: Record<string, unknown>): string[] {
+    const raw = Array.isArray(fm.hand_off) ? fm.hand_off : [fm.hand_off]
+    return [...new Set(raw.map(str).filter((p): p is string => p !== undefined))]
 }
 
 export interface Refs {
@@ -507,6 +515,9 @@ export function parseRoutine(entry: CatalogEntry, defaults: { tz: string }, refs
     const project = str(fm.project) ?? null
     if (project && !refs.projectExists(project))
         errors.push(`project "${project}" has no file or its checkout is missing`)
+    const handOff = handOffProjects(fm)
+    for (const p of handOff)
+        if (!refs.projectExists(p)) errors.push(`hand_off: project "${p}" has no file or its checkout is missing`)
     const hosts = hostList(fm.hosts)
     for (const h of hosts) if (!refs.hostExists(h.host)) warnings.push(`host "${h.host}" is not in hosts.yaml`)
     const skill = agentStep?.skill ?? null
@@ -561,7 +572,8 @@ export function parseRoutine(entry: CatalogEntry, defaults: { tz: string }, refs
             session: session as RoutineSpec['session'],
             first_run: firstRun as RoutineSpec['first_run'],
             max_items: int(fm.max_items, 10, 1, 100),
-            once: bool(fm.once, false)
+            once: bool(fm.once, false),
+            hand_off: handOff
         }
     }
 }

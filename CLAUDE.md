@@ -476,8 +476,10 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   `tz:` / `window:` are honoured but not offered. The file routes refuse a save older than the file
   (409 "changed on disk") since the agent edits routines every run. `/api/routines/*` and
   `/routines` only: no aliases or redirects for the old paths (single owner, no outside scripts).
-- **Hand-off** (1.8.0): a routine's run on the subscription has the factory MCP's `hand_off({project,
-  agent, prompt, title})`: a new visible `web` chat bound to the project, its task (`source:
+- **Hand-off** (1.8.0): a routine's run on the subscription whose file lists `hand_off: [projects]`
+  (kept in the file, not in the form; none = no tool) has the factory MCP's `hand_off({project,
+  agent, prompt, title})`, to those projects only (an injected ticket must not open a chat in
+  another project's sandbox with its secrets): a new visible `web` chat bound to the project, its task (`source:
   handoff`, `tasks.handed_by` = the run) runs as the agent in that checkout and sandbox, and the
   call waits for it (SSE progress, the factory server's 12 h call limit). Owner's rules: one chat
   per piece of work, the chat outlives the run (the owner goes on there, as the same agent: a

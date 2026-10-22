@@ -14,6 +14,7 @@ import { KnownHosts } from '../files/knownHosts.js'
 import { Providers } from '../files/providers.js'
 import { Presets } from '../presets/index.js'
 import { Routines } from '../routines/service.js'
+import { handOffProjects } from '../routines/spec.js'
 import { SandboxManager } from '../sandbox/manager.js'
 import { Previews } from '../sandbox/previews.js'
 import { Sbx } from '../sandbox/sbx.js'
@@ -158,7 +159,9 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
         sessionWorkspace: (sessionId) => transcripts.find(sessionId)?.workspace ?? null,
         agentFile: (name) => agentFile(catalog, name),
         delegates: () => delegateAgents(catalog),
-        projectProviders: (slug) => projectProviders(catalog, slug)
+        projectProviders: (slug) => projectProviders(catalog, slug),
+        handOffProjects: (routine) =>
+            catalog.exists('routines', routine) ? handOffProjects(catalog.get('routines', routine).frontmatter) : []
     }
     const providers = new Providers(path.join(config.paths.configRoot, 'providers.yaml'))
     const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())

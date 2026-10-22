@@ -70,6 +70,8 @@ export interface Workspace {
     delegates: () => DelegateAgent[]
     /** The providers a project's file allows its tasks to delegate to (`providers:`); null = none named. */
     projectProviders: (slug: string) => string[] | null
+    /** The projects a routine's runs may hand work to (`hand_off:` in its file); empty = none. */
+    handOffProjects: (routine: string) => string[]
 }
 
 /** A role that runs on another provider, as its agent file describes it. */
@@ -1623,9 +1625,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         if (!parent.schedule || parent.provider || parent.parent_id || parent.handed_by)
             throw new Error("only a routine's run on the subscription hands work to a project's chat")
         const project = request.project.trim()
-        if (!this.workspace.projects().includes(project) || !this.workspace.projectPath(project))
+        const allowed = this.handOffTargets(parentId)
+        if (!allowed.includes(project) || !this.workspace.projectPath(project))
             throw new Error(
-                `no project "${project}" with a checkout; the projects are: ${this.workspace.projects().join(', ') || 'none'}`
+                `project "${project}" takes no hand-off from this routine; its \`hand_off:\` lists: ${allowed.join(', ') || 'none'}`
             )
         const agent = request.agent?.trim() || null
         if (agent) {
@@ -1682,6 +1685,16 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
         const done = await this.settled(task.id, progress)
         return this.handOffOutcome(done)
+    }
+
+    /** The projects a running routine's task may hand work to: its file's `hand_off:` that still have a file and a checkout. */
+    handOffTargets(taskId: string): string[] {
+        const schedule = this.store.getTask(taskId)?.schedule
+        if (!schedule) return []
+        const known = this.workspace.projects()
+        return this.workspace
+            .handOffProjects(schedule)
+            .filter((p) => known.includes(p) && this.workspace.projectPath(p) !== null)
     }
 
     /** What the `hand_off` tool answers: how the chat's task ended, its pull request, and its report. */
@@ -2154,12 +2167,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             this.previews !== null &&
             (!asAgentFile?.tools ||
                 asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
-        // A routine's run on the subscription may hand work to a chat of a project (`hand_off`) and wait for it.
+        // A routine's run on the subscription may hand work to a chat of a project (`hand_off`) and wait for it,
+        // only to the projects its file lists: an injected ticket must not open a chat elsewhere.
         const offersHandoff =
             !provider &&
             !task.parent_id &&
             !task.handed_by &&
             Boolean(task.schedule) &&
+            this.workspace.handOffProjects(task.schedule!).length > 0 &&
             (!asAgentFile?.tools ||
                 asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
         const offersFactory = offersDelegate || offersPreview || offersHandoff

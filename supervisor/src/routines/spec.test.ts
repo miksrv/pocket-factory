@@ -185,6 +185,7 @@ describe('parseRoutine', () => {
             [{ steps: [{ agent: 'a' }, { run: 'x', items: true }] }, /cannot be a source/],
             [{ steps: [{ run: 'x', if: 'always' }, { agent: 'a' }] }, /`if:` is for steps after the agent/],
             [{ steps: [{ agent: 'a' }, { run: 'x', if: 'sometimes' }] }, /\.if must be success, failure or always/],
+            [{ hand_off: ['nowhere'] }, /hand_off: project "nowhere" has no file/],
             [{ steps: [{ agent: 'a' }, { agent: 'b' }] }, /at most one/],
             [{ steps: [] }, /nothing to run/]
         ])('reports an error for %j', (frontmatter, message) => {

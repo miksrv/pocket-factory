@@ -129,7 +129,7 @@ export function factoryRoutes(): Hono<Env> {
                                           properties: {
                                               project: {
                                                   type: 'string',
-                                                  enum: tasks.projects(),
+                                                  enum: tasks.handOffTargets(taskId),
                                                   description: 'The project whose chat takes the work'
                                               },
                                               agent: {

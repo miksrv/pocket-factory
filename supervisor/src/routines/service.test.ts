@@ -55,6 +55,7 @@ const spec = (over: Partial<RoutineSpec> = {}, steps: Step[] = []): RoutineSpec 
         steps: [...steps, last],
         agentStep: last,
         after: [],
+        hand_off: [],
         ...over
     }
 }

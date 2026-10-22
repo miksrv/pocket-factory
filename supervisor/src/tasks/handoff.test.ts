@@ -63,7 +63,7 @@ describe('hand_off', () => {
     afterEach(() => t.cleanup())
 
     /** An app with the project `users` and the agent `fixer`, and a routine's run that holds. */
-    async function setup(options: { maxSessions?: number; routine?: boolean } = {}) {
+    async function setup(options: { maxSessions?: number; routine?: boolean; handOff?: string[] } = {}) {
         t = createTestApp({
             claude: HANDOFF_CLAUDE,
             config: (c) => (c.maxConcurrentSessions = options.maxSessions ?? 2)
@@ -76,6 +76,18 @@ describe('hand_off', () => {
         catalog.save('projects', 'users', { frontmatter: {}, body: '' })
         catalog.save('agents', 'fixer', { frontmatter: { description: 'Fixes bugs', model: 'opus' }, body: 'You fix.' })
         catalog.save('agents', 'writer', { frontmatter: { description: 'Writes', provider: 'gpu' }, body: 'x' })
+        // Another project with a checkout, which the routine does not list: no hand-off goes there.
+        fs.mkdirSync(path.join(t.ctx.config.paths.workspacesRoot, 'billing'), { recursive: true })
+        catalog.save('projects', 'billing', { frontmatter: {}, body: '' })
+        catalog.save('routines', 'bugs', {
+            frontmatter: {
+                enabled: false,
+                triggers: [],
+                hand_off: options.handOff ?? ['users'],
+                steps: [{ agent: 'orchestrator' }]
+            },
+            body: 'One bug per run.'
+        })
         const conversation = tasks.newConversation('web', options.routine === false ? null : 'schedule:bugs')
         const run = tasks.submit(
             conversation.id,
@@ -161,8 +173,10 @@ describe('hand_off', () => {
     it('refuses what is not a routine run, an unknown project, a provider role or a missing agent', async () => {
         const run = await setup()
         await expect(t.ctx.tasks.handOff(run.id, { ...brief, project: 'nowhere' })).rejects.toThrow(
-            /the projects are: users/
+            /takes no hand-off from this routine; its `hand_off:` lists: users/
         )
+        // A project that exists but the routine's file does not list: an injected brief must not reach it.
+        await expect(t.ctx.tasks.handOff(run.id, { ...brief, project: 'billing' })).rejects.toThrow(/takes no hand-off/)
         await expect(t.ctx.tasks.handOff(run.id, { ...brief, agent: 'writer' })).rejects.toThrow(/delegate/)
         await expect(t.ctx.tasks.handOff(run.id, { ...brief, agent: 'ghost' })).rejects.toThrow(/no agent file/)
         await t.cleanup()
@@ -210,14 +224,19 @@ describe('hand_off', () => {
         expect(text).toContain('"isError":false')
     })
 
-    it("offers hand_off to a routine's run only", async () => {
+    it("offers hand_off to a routine's run whose file lists projects, and to nothing else", async () => {
         const run = await setup()
         await until(() => runs().length > 0)
         expect(t.ctx.tasks.factoryTools(run.id).handoff).toBe(true)
+        expect(t.ctx.tasks.handOffTargets(run.id)).toEqual(['users'])
         const config = runs()[0].argv.find((a) => a.includes('"factory"'))
         expect(config).toBeDefined()
         await t.cleanup()
         const chat = await setup({ routine: false })
         expect(t.ctx.tasks.factoryTools(chat.id).handoff).toBe(false)
+        await t.cleanup()
+        const unlisted = await setup({ handOff: [] })
+        await until(() => runs().length > 0)
+        expect(t.ctx.tasks.factoryTools(unlisted.id).handoff).toBe(false)
     })
 })
