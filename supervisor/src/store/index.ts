@@ -8,7 +8,8 @@ import type { TaskGit } from '../git/changes.js'
 /** `delegate`: the hidden conversation of a task an orchestrator delegated (see `Task.parent_id`). */
 export type Channel = 'telegram' | 'web' | 'delegate'
 /** `routine` is a routine's run; `cron` is what the rows before 1.5.0 say. */
-export type TaskSource = 'telegram' | 'web' | 'routine' | 'cron' | 'webhook' | 'delegate'
+/** `handoff`: the first task of a project's chat a routine run handed work to (see `Task.handed_by`). */
+export type TaskSource = 'telegram' | 'web' | 'routine' | 'cron' | 'webhook' | 'delegate' | 'handoff'
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 export type TaskEventType =
     'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'llm' | 'agent' | 'limits' | 'ask' | 'answer'
@@ -105,6 +106,8 @@ export interface Task {
     attachments: Attachment[] | null
     /** The task whose orchestrator delegated this one (`delegate`); null for every other task. */
     parent_id: string | null
+    /** The routine run that handed this task to a project's chat (`hand_off`) and waits for it; null for every other task. */
+    handed_by: string | null
     /** A queued task does not start before this time: it hit the subscription limit and waits for the window to reset. */
     not_before: string | null
     /** How many times the task went back to the queue to wait for a window reset. */
@@ -560,7 +563,8 @@ export class Store {
         attachments: Attachment[] | null = null,
         provider: string | null = null,
         agent: string | null = null,
-        parentId: string | null = null
+        parentId: string | null = null,
+        handedBy: string | null = null
     ): Task {
         const task: Task = {
             id: randomUUID(),
@@ -588,6 +592,7 @@ export class Store {
             agent,
             attachments: attachments?.length ? attachments : null,
             parent_id: parentId,
+            handed_by: handedBy,
             not_before: null,
             limit_waits: 0,
             git: null,
@@ -597,8 +602,8 @@ export class Store {
         }
         this.db
             .prepare(
-                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, provider, agent, attachments, parent_id, created_at)
-                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`
+                `INSERT INTO tasks (id, conversation_id, source, prompt, status, project, schedule, model, provider, agent, attachments, parent_id, handed_by, created_at)
+                 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
                 task.id,
@@ -612,6 +617,7 @@ export class Store {
                 agent,
                 task.attachments ? JSON.stringify(task.attachments) : null,
                 parentId,
+                handedBy,
                 task.created_at
             )
         return task
@@ -628,6 +634,15 @@ export class Store {
             this.db
                 .prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at ASC, id ASC')
                 .all(parentId) as unknown as TaskRow[]
+        )
+    }
+
+    /** The tasks a routine run handed to project chats (`hand_off`), oldest first. */
+    handedTasks(taskId: string): Task[] {
+        return tasksOf(
+            this.db
+                .prepare('SELECT * FROM tasks WHERE handed_by = ? ORDER BY created_at ASC, id ASC')
+                .all(taskId) as unknown as TaskRow[]
         )
     }
 
@@ -907,6 +922,12 @@ export class Store {
                 .prepare(`UPDATE schedule_runs SET ${fields.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`)
                 .run(...fields.map(([, v]) => v as string | number | null), id)
         const row = this.db.prepare(`SELECT ${ROUTINE_RUN} WHERE r.id = ?`).get(id)
+        return row ? routineRunOf(row as unknown as RoutineRunRow) : undefined
+    }
+
+    /** The run that queued this task, if a routine's run did. */
+    routineRunOfTask(taskId: string): RoutineRun | undefined {
+        const row = this.db.prepare(`SELECT ${ROUTINE_RUN} WHERE r.task_id = ? ORDER BY r.id DESC LIMIT 1`).get(taskId)
         return row ? routineRunOf(row as unknown as RoutineRunRow) : undefined
     }
 

@@ -152,11 +152,22 @@ describe('StepsField', () => {
     it('adds a source before the agent and opens it', async () => {
         const onChange = renderGraph()
         const user = userEvent.setup()
-        await user.click(screen.getByRole('button', { name: /Add step/ }))
+        await user.click(screen.getByRole('button', { name: /^Add step$/ }))
         await user.click(
             within(await screen.findByRole('dialog')).getByRole('button', { name: /GitHub pull requests/ })
         )
         expect(onChange).toHaveBeenCalledWith([STEPS[0], STEPS[1], { 'github-prs': { filter: 'open' } }, STEPS[2]])
+    })
+
+    it('adds a command after the agent, offering no sources there', async () => {
+        const onChange = renderGraph()
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Add step after the agent/ }))
+        const dialog = await screen.findByRole('dialog')
+        expect(within(dialog).queryByRole('button', { name: /GitHub pull requests/ })).toBeNull()
+        expect(within(dialog).queryByRole('button', { name: /Trac tickets/ })).toBeNull()
+        await user.click(within(dialog).getByRole('button', { name: /Command/ }))
+        expect(onChange).toHaveBeenCalledWith([...STEPS, { run: '' }])
     })
 })
 

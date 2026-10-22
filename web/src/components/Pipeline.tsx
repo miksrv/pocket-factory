@@ -187,8 +187,9 @@ function needsOf(view: RoutineView | undefined, i: number, step: RawStep): EnvNe
  * The pipeline as a graph of cards, the way GitHub Actions draws a workflow's
  * jobs: each step a card with how it went last time (ok / failed and its time),
  * what it is for, and whether it misses a variable; arrows between them, the
- * agent last. A click opens the step in a window to edit it; Add step adds one
- * before the agent. Edits go into the form, which Save writes as usual.
+ * the agent, then the scripts after it. A click opens the step in a window to
+ * edit it; Add step adds one before the agent, the one after it a script that
+ * runs once the agent's task has ended. Edits go into the form, which Save writes as usual.
  */
 export function StepsField({
     model,
@@ -220,14 +221,17 @@ export function StepsField({
     const skill = str(steps.find((s) => kindOf(s) === 'agent')?.skill) || null
     // The step open in the window: its place, and whether it was just added (Cancel then takes it out again).
     const [editing, setEditing] = useState<{ index: number; fresh: boolean } | null>(null)
-    const [adding, setAdding] = useState(false)
-    // A new step goes before the agent, which stays last.
-    const insertAt = hasAgent ? steps.length - 1 : steps.length
+    // Where the new step goes: before the agent, or (`after`) at the end, after it.
+    const [adding, setAdding] = useState<'before' | 'after' | null>(null)
+    const agentAt = steps.findIndex((s) => kindOf(s) === 'agent')
+    const insertAt = hasAgent ? agentAt : steps.length
+    const addAt = adding === 'after' ? steps.length : insertAt
     const add = (step: RawStep) => {
-        onChange([...steps.slice(0, insertAt), step, ...steps.slice(insertAt)])
-        setAdding(false)
-        setEditing({ index: insertAt, fresh: true })
+        onChange([...steps.slice(0, addAt), step, ...steps.slice(addAt)])
+        setAdding(null)
+        setEditing({ index: addAt, fresh: true })
     }
+    // A step moves within its side of the agent, never across it.
     const move = (i: number, dir: -1 | 1) => {
         const j = i + dir
         if (j < 0 || j >= steps.length || kindOf(steps[j]) === 'agent' || kindOf(steps[i]) === 'agent') return
@@ -246,16 +250,21 @@ export function StepsField({
             edited={JSON.stringify(saved[i]) !== JSON.stringify(step)}
             last={lastSteps.find((r) => r.index === i && r.name === (view?.steps[i]?.name ?? str(step.name)))}
             agentStatus={kindOf(step) === 'agent' && view?.last_run?.task_id ? view.last_run.task_status : null}
+            after={hasAgent && i > agentAt}
             onOpen={() => setEditing({ index: i, fresh: false })}
         />
     ))
-    const addNode = (
+    const addNode = (where: 'before' | 'after') => (
         <button
-            key='add'
+            key={`add-${where}`}
             type='button'
             className='step-node add'
-            onClick={() => setAdding(true)}
-            title='Add a step before the agent'
+            onClick={() => setAdding(where)}
+            title={
+                where === 'before'
+                    ? 'Add a step before the agent'
+                    : "Add a script that runs after the agent's task has ended"
+            }
         >
             <span className='step-node-plus'>
                 <Icon
@@ -263,10 +272,15 @@ export function StepsField({
                     size={14}
                 />
             </span>
-            <span>Add step</span>
+            <span>{where === 'before' ? 'Add step' : 'Add step after the agent'}</span>
         </button>
     )
-    const flow = [...nodes.slice(0, insertAt), addNode, ...nodes.slice(insertAt)]
+    const flow = [
+        ...nodes.slice(0, insertAt),
+        addNode('before'),
+        ...nodes.slice(insertAt),
+        ...(hasAgent ? [addNode('after')] : [])
+    ]
     const open = editing && steps[editing.index] ? editing : null
     return (
         <div className='field wide triggers'>
@@ -312,7 +326,12 @@ export function StepsField({
                     model={model}
                     routine={routine}
                     skill={skill}
-                    canMoveUp={open.index > 0 && kindOf(steps[open.index]) !== 'agent'}
+                    after={hasAgent && open.index > agentAt}
+                    canMoveUp={
+                        open.index > 0 &&
+                        kindOf(steps[open.index]) !== 'agent' &&
+                        kindOf(steps[open.index - 1]) !== 'agent'
+                    }
                     canMoveDown={
                         open.index < steps.length - 1 &&
                         kindOf(steps[open.index]) !== 'agent' &&
@@ -335,23 +354,32 @@ export function StepsField({
                 />
             )}
             <AddStepWindow
-                open={adding}
+                open={adding !== null}
+                after={adding === 'after'}
                 routine={routine}
                 hasAgent={hasAgent}
-                insertAt={insertAt}
+                insertAt={addAt}
                 onAdd={(step) => {
                     if (step.agent !== undefined) {
                         onChange([...steps, step])
-                        setAdding(false)
+                        setAdding(null)
                         setEditing({ index: steps.length, fresh: true })
                     } else add(step)
                 }}
-                onClose={() => setAdding(false)}
+                onClose={() => setAdding(null)}
                 onChanged={onChanged}
             />
         </div>
     )
 }
+
+/** When a script after the agent runs (`if:`). */
+type StepIf = 'success' | 'failure' | 'always'
+const ifOf = (step: RawStep): StepIf => {
+    const value = str(step.if)
+    return value === 'failure' || value === 'always' ? value : 'success'
+}
+const IF_LABEL: Record<StepIf, string> = { success: 'if it succeeded', failure: 'if it failed', always: 'always' }
 
 const KIND_ICON: Record<StepKind, IconName> = { run: 'script', 'github-prs': 'pr', trac: 'ticket', agent: 'agents' }
 
@@ -363,6 +391,7 @@ function StepNode({
     edited,
     last,
     agentStatus,
+    after,
     onOpen
 }: {
     index: number
@@ -372,6 +401,8 @@ function StepNode({
     last?: RoutineStepResult
     /** The agent step: how the last run's task is doing (it has no step result of its own). */
     agentStatus?: TaskStatus | null
+    /** A script after the agent: it says when it runs. */
+    after: boolean
     onOpen: () => void
 }) {
     const kind = kindOf(step)
@@ -443,6 +474,7 @@ function StepNode({
                     />
                     {kind === 'run' ? 'Script' : KIND_LABEL[kind]}
                 </span>
+                {after && <span className='step-node-time'>{IF_LABEL[ifOf(step)]}</span>}
                 <span className='grow' />
                 {edited ? (
                     <span className='step-node-time'>unsaved</span>
@@ -493,6 +525,7 @@ function StepWindow({
     model,
     routine,
     skill,
+    after,
     canMoveUp,
     canMoveDown,
     onApply,
@@ -512,6 +545,8 @@ function StepWindow({
     model: ReactNode
     routine: string | null
     skill: string | null
+    /** A script after the agent. */
+    after: boolean
     canMoveUp: boolean
     canMoveDown: boolean
     onApply: (next: RawStep) => void
@@ -562,7 +597,7 @@ function StepWindow({
             icon='routines'
             size={kind === 'run' ? 'large' : 'wide'}
             title={`${index + 1}. ${kind === 'agent' ? 'Agent' : name}`}
-            description={`${KIND_LABEL[kind]}${fresh ? ' · new step' : ''}${changed ? ' · changed' : ''}`}
+            description={`${KIND_LABEL[kind]}${after ? ' after the agent' : ''}${fresh ? ' · new step' : ''}${changed ? ' · changed' : ''}`}
             content={
                 <StepCard
                     index={index}
@@ -572,6 +607,7 @@ function StepWindow({
                     model={model}
                     routine={routine}
                     skill={skill}
+                    after={after}
                     facts={facts(draft)}
                     needs={needs(draft)}
                     lastRun={lastRun}
@@ -629,6 +665,7 @@ function StepWindow({
 /** What a new step is: a script in the routine's folder (named first), a command, a source, or the agent. */
 function AddStepWindow({
     open,
+    after,
     routine,
     hasAgent,
     insertAt,
@@ -637,6 +674,8 @@ function AddStepWindow({
     onChanged
 }: {
     open: boolean
+    /** After the agent: a script or a command only, run once the agent's task has ended. */
+    after: boolean
     routine: string | null
     hasAgent: boolean
     insertAt: number
@@ -693,7 +732,11 @@ function AddStepWindow({
             icon='routines'
             busy={busy}
             title='Add a step'
-            description='It goes before the agent; open it afterwards to fill it in.'
+            description={
+                after
+                    ? "It runs once the agent's task has ended (when it succeeded, failed, or always); open it afterwards to fill it in."
+                    : 'It goes before the agent; open it afterwards to fill it in.'
+            }
             footer={<Button onClick={close}>Cancel</Button>}
         >
             <div className='step-choices'>
@@ -731,12 +774,14 @@ function AddStepWindow({
                     </span>
                 </form>
                 {choice('Command', 'One line of bash, no file: a quick check, a curl.', { run: '' })}
-                {choice('GitHub pull requests', 'Open PRs of a repository; nothing new means no agent.', {
-                    'github-prs': { filter: 'open' }
-                })}
-                {choice('Trac tickets', 'The tickets of a Trac query; nothing new means no agent.', {
-                    trac: { url: '' }
-                })}
+                {!after &&
+                    choice('GitHub pull requests', 'Open PRs of a repository; nothing new means no agent.', {
+                        'github-prs': { filter: 'open' }
+                    })}
+                {!after &&
+                    choice('Trac tickets', 'The tickets of a Trac query; nothing new means no agent.', {
+                        trac: { url: '' }
+                    })}
                 {!hasAgent &&
                     choice('Agent', 'The last step: reads the instructions and what the steps found.', {
                         agent: 'orchestrator'
@@ -756,6 +801,7 @@ function StepCard({
     model,
     routine,
     skill,
+    after,
     facts,
     needs: envNeeds,
     lastRun,
@@ -770,6 +816,8 @@ function StepCard({
     model: ReactNode
     routine: string | null
     skill: string | null
+    /** A script after the agent: when it runs instead of whether it prints items. */
+    after: boolean
     /** What the saved file says about this step, when the card has not changed since. */
     facts?: RoutineStepView
     /** What it needs from the environment: the saved file's view, kept while the card is edited. */
@@ -791,7 +839,11 @@ function StepCard({
                 checked={step.continue_on_error === true}
                 onChange={(on) => onChange({ ...step, continue_on_error: on || undefined })}
                 label='Continue if it fails'
-                title='The next steps and the agent still run; the error reaches the agent as this step’s output'
+                title={
+                    after
+                        ? 'The next scripts still run'
+                        : 'The next steps and the agent still run; the error reaches the agent as this step’s output'
+                }
             />
             <Check
                 checked={step.enabled !== false}
@@ -981,13 +1033,36 @@ function StepCard({
                     wide
                 >
                     <div className='row wrap step-checks'>
-                        <Check
-                            checked={step.items === true}
-                            onChange={(on) => onChange({ ...step, items: on ? true : undefined, new_only: undefined })}
-                            label='Prints a list of items'
-                            title='key⇥title per line, or JSON; an empty list means no agent'
-                        />
-                        {step.items === true && (
+                        {after ? (
+                            <label className='row'>
+                                <span>Runs</span>
+                                <select
+                                    value={ifOf(step)}
+                                    onChange={(e) =>
+                                        onChange({
+                                            ...step,
+                                            if: e.target.value === 'success' ? undefined : e.target.value
+                                        })
+                                    }
+                                    aria-label='When it runs'
+                                    title='AGENT_STATUS, AGENT_RESULT, TASK_ID and PR_URL tell the script how the agent did'
+                                >
+                                    <option value='success'>when the agent succeeded</option>
+                                    <option value='failure'>when the agent failed</option>
+                                    <option value='always'>always (stopped runs too)</option>
+                                </select>
+                            </label>
+                        ) : (
+                            <Check
+                                checked={step.items === true}
+                                onChange={(on) =>
+                                    onChange({ ...step, items: on ? true : undefined, new_only: undefined })
+                                }
+                                label='Prints a list of items'
+                                title='key⇥title per line, or JSON; an empty list means no agent'
+                            />
+                        )}
+                        {!after && step.items === true && (
                             <Check
                                 checked={step.new_only !== false}
                                 onChange={(on) => onChange({ ...step, new_only: on ? undefined : false })}

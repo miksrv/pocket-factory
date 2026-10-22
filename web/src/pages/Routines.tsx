@@ -171,8 +171,15 @@ export function RoutinesPage() {
                     const trac = s.trac as RawStep | undefined
                     if (kind === 'trac' && !str(trac?.query).trim() && !/\?./s.test(str(trac?.url)))
                         return `step ${i + 1}: a Trac query is required`
-                    if (kind === 'agent' && i !== steps.length - 1) return 'the agent must be the last step'
                 }
+                // After the agent: scripts only, and none of them a source.
+                const agentAt = steps.findIndex((s) => kindOf(s) === 'agent')
+                if (agentAt >= 0)
+                    for (const [i, s] of steps.entries()) {
+                        if (i <= agentAt) continue
+                        if (kindOf(s) !== 'run') return `step ${i + 1}: after the agent only scripts can follow`
+                        if (s.items === true) return `step ${i + 1}: a step after the agent cannot print items`
+                    }
                 return null
             }}
             template={TEMPLATE}

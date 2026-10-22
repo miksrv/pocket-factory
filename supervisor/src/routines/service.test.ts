@@ -54,6 +54,7 @@ const spec = (over: Partial<RoutineSpec> = {}, steps: Step[] = []): RoutineSpec 
         once: false,
         steps: [...steps, last],
         agentStep: last,
+        after: [],
         ...over
     }
 }
@@ -169,7 +170,8 @@ describe('buildPrompt', () => {
             items: false,
             new_only: false,
             continue_on_error: false,
-            enabled: true
+            enabled: true,
+            if: 'success'
         }
         const prompt = buildPrompt(spec({}, [script]), 'x', [], schedule, paths)
         expect(prompt).not.toContain('## New since the last run')
@@ -184,7 +186,8 @@ describe('buildPrompt', () => {
             items: true,
             new_only: true,
             continue_on_error: false,
-            enabled: true
+            enabled: true,
+            if: 'success'
         }
         const withItems = buildPrompt(spec({}, [source]), 'x', [{ key: 'a', title: 'A' }], 'manual', paths)
         expect(withItems).toContain('## Everything the sources see now (1)\n\nA')

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.0
+
+### Minor Changes
+
+- Routines: a run can hand one piece of work to a new chat of a project and wait for it (`hand_off`); the chat stays in the Chat list to go on with, its questions reach Telegram at once, stopping the run stops it
+- Routines: scripts after the agent step, run when its task has ended (if it succeeded, failed, or always) with its status, report and PR in the environment; their results go into the run and to Telegram
+
 ## 1.7.4
 
 ### Patch Changes

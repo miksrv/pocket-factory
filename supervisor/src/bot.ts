@@ -12,6 +12,7 @@ import { changesLine } from './git/changes.js'
 import { createLogger } from './logger.js'
 import type { Routines } from './routines/service.js'
 import type { RoutineSpec } from './routines/spec.js'
+import type { StepOutput, StepResult } from './routines/steps.js'
 import type { SandboxManager } from './sandbox/manager.js'
 import type { Previews } from './sandbox/previews.js'
 import type { Vault } from './secrets/vault.js'
@@ -115,6 +116,25 @@ export function routineNotice(
         : stuck
           ? `⏸ Routine **${run.schedule}** skipped a firing: ${run.note}. It waits for your answer or for the task to end.`
           : `⚠️ Routine **${run.schedule}** could not run: ${run.note ?? 'unknown error'}`
+}
+
+/**
+ * What the owner hears when a run's scripts after the agent are done: each with ✅ / ❌, its time and
+ * the head of what it printed (a published URL, an error). Null for `notify: none`.
+ */
+export function afterNotice(
+    run: RoutineRun,
+    spec: RoutineSpec,
+    steps: StepResult[],
+    outputs: StepOutput[]
+): string | null {
+    if (spec.notify === 'none' || !steps.length) return null
+    const lines = steps.map((step, i) => {
+        const out = (outputs[i]?.output ?? '').trim()
+        const shown = out.length > 600 ? `${out.slice(0, 600)}…` : out
+        return `${step.ok ? '✅' : '❌'} ${step.name} (${Math.round(step.ms / 1000)} s)${shown ? `\n\`\`\`\n${shown}\n\`\`\`` : ''}`
+    })
+    return `⏱ **${run.schedule}**, after the agent:\n\n${lines.join('\n')}`
 }
 
 /** Time passed since `iso`: `under a minute`, `5 min`, `3 h`, `2 d`. */
@@ -479,6 +499,11 @@ export function createBot(
     const chatFor = (task: Task): number | null => {
         if (task.source === 'routine' || task.source === 'cron')
             return task.schedule && routines?.spec(task.schedule)?.notify === 'none' ? null : (ownerChat ?? null)
+        // A chat a routine's run handed work to talks where that run does (its questions; the run reports).
+        if (task.source === 'handoff') {
+            const run = task.handed_by ? tasks.task(task.handed_by) : undefined
+            return run ? chatFor(run) : null
+        }
         const conversation = tasks.conversationOf(task)
         if (!conversation) return null
         if (conversation.channel === 'telegram') return Number(conversation.external_id) || null
@@ -1612,7 +1637,19 @@ export function createBot(
             for (const [key, sent] of sentAsks) if (sent.taskId === task.id) void settle(key, '— withdrawn')
             return
         }
-        sendAsk(task, chatId)
+        // A handed chat's question names the chat: the owner may have several going.
+        const conversation = task.source === 'handoff' ? tasks.conversationOf(task) : undefined
+        sendAsk(
+            task,
+            chatId,
+            conversation
+                ? [
+                      text(
+                          `💬 <b>${escapeHtml(topicName(conversation))}</b>${task.project ? ` · ${escapeHtml(task.project)}` : ''}`
+                      )
+                  ]
+                : []
+        )
     })
     const sendAsk = (task: Task, chatId: number, head: View = []) => {
         if (!task.ask) return
@@ -1804,6 +1841,14 @@ export function createBot(
                 if (conversation) remember(ownerChat, ids, conversation.id, run.task_id)
             })
             .catch((error) => log.error('routine notice failed', error))
+    })
+
+    // The scripts after a run's agent: what they did, under the agent's report.
+    routines?.on('after', (run, spec, steps, outputs) => {
+        if (!ownerChat) return
+        const text = afterNotice(run, spec, steps, outputs)
+        if (!text) return
+        sendMarkdown(bot, ownerChat, text).catch((error) => log.error('routine notice failed', error))
     })
 
     // The web UI's door: the owner hears about every sign-in, the first wrong

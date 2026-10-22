@@ -256,6 +256,12 @@ const MIGRATIONS: string[] = [
         task_id    TEXT,
         created_at TEXT NOT NULL
     );
+    `,
+    // v21 (1.8.0): a routine run hands a piece of work to a chat of a project (`hand_off`, the factory's MCP
+    // tool) and waits for it; the chat's task names the run that is waiting.
+    `
+    ALTER TABLE tasks ADD COLUMN handed_by TEXT;
+    CREATE INDEX tasks_handed_by ON tasks(handed_by) WHERE handed_by IS NOT NULL;
     `
 ]
 

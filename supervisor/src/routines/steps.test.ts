@@ -21,6 +21,7 @@ const script = (run: string, over: Partial<RunStep> = {}): RunStep => ({
     new_only: false,
     continue_on_error: false,
     enabled: true,
+    if: 'success',
     ...over
 })
 

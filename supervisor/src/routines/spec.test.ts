@@ -80,7 +80,8 @@ describe('parseRoutine', () => {
                     items: false,
                     new_only: false,
                     continue_on_error: false,
-                    enabled: true
+                    enabled: true,
+                    if: 'success'
                 },
                 {
                     kind: 'run',
@@ -91,7 +92,8 @@ describe('parseRoutine', () => {
                     items: false,
                     new_only: false,
                     continue_on_error: false,
-                    enabled: true
+                    enabled: true,
+                    if: 'success'
                 },
                 {
                     kind: 'run',
@@ -102,7 +104,8 @@ describe('parseRoutine', () => {
                     items: true,
                     new_only: true,
                     continue_on_error: true,
-                    enabled: false
+                    enabled: false,
+                    if: 'success'
                 },
                 {
                     kind: 'github-prs',
@@ -178,13 +181,36 @@ describe('parseRoutine', () => {
             [{ steps: [{ trac: { query: 'a=b' } }] }, /steps\[1\].url is required/],
             [{ steps: [{ trac: { query: 'a=b', url: 'ftp://x' } }] }, /steps\[1\].url must start/],
             [{ steps: [{ trac: { url: 'https://trac.example.com/query' } }] }, /steps\[1\].url has no query/],
-            [{ steps: [{ agent: 'a' }, { run: 'x' }] }, /must be the last one/],
+            [{ steps: [{ agent: 'a' }, { trac: { url: 'https://t.example/query?a=b' } }] }, /only scripts/],
+            [{ steps: [{ agent: 'a' }, { run: 'x', items: true }] }, /cannot be a source/],
+            [{ steps: [{ run: 'x', if: 'always' }, { agent: 'a' }] }, /`if:` is for steps after the agent/],
+            [{ steps: [{ agent: 'a' }, { run: 'x', if: 'sometimes' }] }, /\.if must be success, failure or always/],
             [{ steps: [{ agent: 'a' }, { agent: 'b' }] }, /at most one/],
             [{ steps: [] }, /nothing to run/]
         ])('reports an error for %j', (frontmatter, message) => {
             const parsed = parse(frontmatter)
             expect(parsed.spec).toBeNull()
             expect(parsed.errors).toEqual(expect.arrayContaining([expect.stringMatching(message)]))
+        })
+
+        it('reads the scripts after the agent with their condition', () => {
+            const parsed = parse({
+                steps: [
+                    { run: 'before' },
+                    { agent: 'reviewer' },
+                    { run: 'publish', name: 'Publish' },
+                    { run: 'alert', if: 'failure' },
+                    { run: 'cleanup', if: 'always', continue_on_error: true }
+                ]
+            })
+            expect(parsed.errors).toEqual([])
+            expect(parsed.spec?.agentStep).toMatchObject({ agent: 'reviewer' })
+            expect(parsed.spec?.after.map((s) => [s.run, s.if])).toEqual([
+                ['publish', 'success'],
+                ['alert', 'failure'],
+                ['cleanup', 'always']
+            ])
+            expect(parsed.spec?.steps).toHaveLength(5)
         })
 
         it.each([
