@@ -968,20 +968,23 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const provider = options.provider === undefined ? conversation.provider : options.provider
         const model =
             options.model ?? (!options.schedule && provider === conversation.provider ? conversation.model : null)
-        // A chat a routine's run handed work to goes on as the agent it started with: the owner talks to that agent.
-        const agent =
-            options.agent ??
-            (options.schedule
-                ? null
-                : (this.store.listTasks({ conversationId, limit: 1000 }).find((t) => t.source === 'handoff' && t.agent)
-                      ?.agent ?? null))
+        // A chat a routine's run handed work to goes on as the agent it started with, on that agent's model:
+        // the owner talks to that agent.
+        const handed =
+            options.agent === undefined && !options.schedule
+                ? (this.store.listTasks({ conversationId, limit: 1000 }).find((t) => t.source === 'handoff' && t.agent)
+                      ?.agent ?? null)
+                : null
+        const agent = options.agent ?? handed
+        const own = handed && !model ? this.workspace.agentFile(handed)?.model : null
+        const agentModel = own && own !== 'inherit' ? own : null
         const task = this.store.createTask(
             conversationId,
             source,
             prompt,
             conversation.project,
             options.schedule ?? null,
-            model,
+            model ?? agentModel,
             attachments,
             provider,
             agent

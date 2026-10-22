@@ -188,7 +188,8 @@ describe('hand_off', () => {
         const run = await setup()
         const outcome = await t.ctx.tasks.handOff(run.id, brief)
         const next = t.ctx.tasks.submit(outcome.task!.conversation_id, 'web', 'Close the PR instead')
-        expect(next).toMatchObject({ agent: 'fixer', source: 'web', handed_by: null })
+        // The agent and its model, as the chat began (the fixer's file says opus).
+        expect(next).toMatchObject({ agent: 'fixer', model: 'opus', source: 'web', handed_by: null })
         await until(() => t.ctx.store.getTask(next.id)?.status === 'done')
         const call = runs().find((r) => r.prompt.startsWith('Close the PR instead'))!
         expect(call.argv[call.argv.indexOf('--agent') + 1]).toBe('fixer')

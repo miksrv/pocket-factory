@@ -673,6 +673,21 @@ export class Routines extends EventEmitter<RoutinesEvents> {
                     name,
                     items.map((i) => i.key)
                 )
+                // A Trac step's keys gained their change time in 1.8.0 (Trac heads its CSV with labels, Modified
+                // was never read): a ticket seen under its bare id is seen, not "changed since", once.
+                const upgraded = pipeline.sources
+                    .filter((s) => s.step.kind === 'trac')
+                    .flatMap((s) => s.items)
+                    .filter((i) => !seen.has(i.key) && i.key.includes('@'))
+                if (upgraded.length) {
+                    const bare = (i: Item) => i.key.slice(0, i.key.indexOf('@'))
+                    const known = this.store.seenKeys(name, upgraded.map(bare))
+                    const carried = upgraded.filter((i) => known.has(bare(i)))
+                    if (carried.length) {
+                        this.store.markSeen(name, carried, null)
+                        for (const i of carried) seen.add(i.key)
+                    }
+                }
                 // What each source would hand over: everything for a plain source, the unseen for a `new_only` one.
                 const candidates = pipeline.sources.flatMap((s) =>
                     s.step.new_only && !everything ? s.items.filter((i) => !seen.has(i.key)) : s.items
