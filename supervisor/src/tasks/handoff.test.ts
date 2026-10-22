@@ -35,6 +35,7 @@ process.stdin.on('data', (chunk) => {
             out({ type: 'result', subtype: isError ? 'error_during_execution' : 'success', is_error: isError, result, session_id: S, num_turns: 1, duration_ms: 5, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } })
             process.exit(0)
         }
+        if (prompt.includes('touch')) out({ type: 'assistant', session_id: S, parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '/x/users/a.ts' } }] } })
         if (prompt.includes('hold')) {
             const wait = setInterval(() => { if (fs.existsSync(process.env.RELEASE)) { clearInterval(wait); end('Run done') } }, 30)
         } else if (prompt.includes('fail')) end('it broke', true)
@@ -182,6 +183,21 @@ describe('hand_off', () => {
         await t.cleanup()
         const chat = await setup({ routine: false })
         await expect(t.ctx.tasks.handOff(chat.id, brief)).rejects.toThrow(/only a routine's run/)
+    })
+
+    it("never gives a routine's run a project from the paths its agent touches; a chat still gets one", async () => {
+        await setup()
+        const routine = t.ctx.tasks.submit(
+            t.ctx.tasks.newConversation('web', 'schedule:other').id,
+            'routine',
+            'touch the files',
+            { schedule: 'other' }
+        )
+        const chat = t.ctx.tasks.submit(t.ctx.tasks.newConversation('web', null).id, 'web', 'touch the files')
+        await until(() => [routine, chat].every((x) => t.ctx.store.getTask(x.id)?.status === 'done'))
+        expect(t.ctx.store.getTask(routine.id)?.project).toBeNull()
+        expect(t.ctx.store.getConversation(routine.conversation_id)?.project).toBeNull()
+        expect(t.ctx.store.getTask(chat.id)?.project).toBe('users')
     })
 
     it("goes on as the chat's agent when the owner writes there afterwards", async () => {
