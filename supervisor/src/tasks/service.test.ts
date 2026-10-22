@@ -212,6 +212,17 @@ describe('detectProject', () => {
         expect(detectProject({ file_path: '/w/myXsite/x' }, ['my.site'])).toBeNull()
     })
 
+    it("leaves out the factory's own data: a routine's files name no project", () => {
+        const input = { command: 'node /srv/pocket-factory/data/config/routines/bugs/scripts/mark.mjs 1 skipped' }
+        expect(detectProject(input, ['pocket-factory'])).toBe('pocket-factory')
+        expect(detectProject(input, ['pocket-factory'], undefined, ['/srv/pocket-factory/data'])).toBeNull()
+        expect(
+            detectProject({ file_path: '/srv/w/pocket-factory/a.ts' }, ['pocket-factory'], undefined, [
+                '/srv/pocket-factory/data'
+            ])
+        ).toBe('pocket-factory')
+    })
+
     it.each([null, undefined, {}, 'nothing here'])('finds nothing in %j', (input) => {
         expect(detectProject(input, workspaces)).toBeNull()
     })

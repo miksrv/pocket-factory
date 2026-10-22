@@ -44,6 +44,21 @@ describe('SecretsSection', () => {
         expect(screen.getByText('https://trac.example.com')).toBeInTheDocument()
     })
 
+    it('shows a routine once however many of its steps read the name', async () => {
+        const entry = {
+            ...OVERVIEW.entries[0],
+            used_by: [
+                { kind: 'routine' as const, name: 'trac-bugs', step: 'Fetch Trac query' },
+                { kind: 'routine' as const, name: 'trac-bugs', step: 'Next bug' }
+            ]
+        }
+        mockFetch({ 'GET /api/secrets': { ...OVERVIEW, entries: [entry] } })
+        renderWithProviders(<SecretsSection />)
+        const links = await screen.findAllByRole('link', { name: /trac-bugs/ })
+        expect(links).toHaveLength(1)
+        expect(links[0]).toHaveAttribute('title', 'steps Fetch Trac query, Next bug')
+    })
+
     it('adds a secret scoped to the routines picked', async () => {
         const fetch = mockFetch({
             'GET /api/secrets': OVERVIEW,

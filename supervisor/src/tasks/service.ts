@@ -357,14 +357,18 @@ function sourceOf(name: string, cliSource: string | null, scope: string | null):
  * The workspace a tool call touches, by name in its input (a path, a `--repo
  * owner/name`). Longest names first; `owner/name` where both are workspaces
  * means the repository, not the owner's folder (`acme/billing`
- * is billing); a name with a project file wins over a bare folder.
+ * is billing); a name with a project file wins over a bare folder. The paths
+ * in `ignore` (the factory's own data: a routine's files under
+ * /srv/pocket-factory/data) say nothing about a project and are left out.
  */
 export function detectProject(
     input: unknown,
     workspaces: string[],
-    hasProject: (name: string) => boolean = () => false
+    hasProject: (name: string) => boolean = () => false,
+    ignore: string[] = []
 ): string | null {
-    const haystack = JSON.stringify(input ?? '')
+    let haystack = JSON.stringify(input ?? '')
+    for (const prefix of ignore) if (prefix.length > 1) haystack = haystack.split(prefix).join('')
     const found: string[] = []
     for (const name of workspaces) {
         if (name.length < 3) continue
@@ -962,6 +966,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const provider = options.provider === undefined ? conversation.provider : options.provider
         const model =
             options.model ?? (!options.schedule && provider === conversation.provider ? conversation.model : null)
+        // A chat a routine's run handed work to goes on as the agent it started with: the owner talks to that agent.
+        const agent =
+            options.agent ??
+            (options.schedule
+                ? null
+                : (this.store.listTasks({ conversationId, limit: 1000 }).find((t) => t.source === 'handoff' && t.agent)
+                      ?.agent ?? null))
         const task = this.store.createTask(
             conversationId,
             source,
@@ -971,7 +982,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             model,
             attachments,
             provider,
-            options.agent ?? null
+            agent
         )
         if (!conversation.title) {
             const first = titleFrom(task.prompt)
@@ -2326,11 +2337,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 // fence moved the thread, dropped its session and the next reply was about the
                 // other repository). Later tasks of a bound conversation never leave it.
                 if (event.type === 'tool_use') this.rememberMcpTool(event.name)
-                if (event.type === 'tool_use' && !project && !task.parent_id) {
+                // A routine's run has the project its file names (none is a choice), a role its parent's.
+                if (event.type === 'tool_use' && !project && !task.parent_id && !task.schedule) {
                     project = detectProject(
                         event.input,
                         this.workspaces(),
-                        (name) => this.workspace.projectPath(name) !== null
+                        (name) => this.workspace.projectPath(name) !== null,
+                        [this.config.paths.dataRoot]
                     )
                     if (project) {
                         this.store.updateTask(task.id, { project })

@@ -170,6 +170,16 @@ describe('hand_off', () => {
         await expect(t.ctx.tasks.handOff(chat.id, brief)).rejects.toThrow(/only a routine's run/)
     })
 
+    it("goes on as the chat's agent when the owner writes there afterwards", async () => {
+        const run = await setup()
+        const outcome = await t.ctx.tasks.handOff(run.id, brief)
+        const next = t.ctx.tasks.submit(outcome.task!.conversation_id, 'web', 'Close the PR instead')
+        expect(next).toMatchObject({ agent: 'fixer', source: 'web', handed_by: null })
+        await until(() => t.ctx.store.getTask(next.id)?.status === 'done')
+        const call = runs().find((r) => r.prompt.startsWith('Close the PR instead'))!
+        expect(call.argv[call.argv.indexOf('--agent') + 1]).toBe('fixer')
+    })
+
     it("lists hand_off on the run's factory endpoint and answers a call over SSE", async () => {
         const run = await setup()
         await until(() => runs().length > 0)

@@ -187,9 +187,9 @@ function needsOf(view: RoutineView | undefined, i: number, step: RawStep): EnvNe
  * The pipeline as a graph of cards, the way GitHub Actions draws a workflow's
  * jobs: each step a card with how it went last time (ok / failed and its time),
  * what it is for, and whether it misses a variable; arrows between them, the
- * the agent, then the scripts after it. A click opens the step in a window to
- * edit it; Add step adds one before the agent, the one after it a script that
- * runs once the agent's task has ended. Edits go into the form, which Save writes as usual.
+ * agent, then the scripts after it. A click opens the step in a window to edit
+ * it; Add step adds one before the agent, and Later moves a script below it, to
+ * run once the agent's task has ended. Edits go into the form, which Save writes as usual.
  */
 export function StepsField({
     model,
@@ -221,22 +221,28 @@ export function StepsField({
     const skill = str(steps.find((s) => kindOf(s) === 'agent')?.skill) || null
     // The step open in the window: its place, and whether it was just added (Cancel then takes it out again).
     const [editing, setEditing] = useState<{ index: number; fresh: boolean } | null>(null)
-    // Where the new step goes: before the agent, or (`after`) at the end, after it.
-    const [adding, setAdding] = useState<'before' | 'after' | null>(null)
+    const [adding, setAdding] = useState(false)
     const agentAt = steps.findIndex((s) => kindOf(s) === 'agent')
+    // A new step goes before the agent; Later takes a script below it.
     const insertAt = hasAgent ? agentAt : steps.length
-    const addAt = adding === 'after' ? steps.length : insertAt
     const add = (step: RawStep) => {
-        onChange([...steps.slice(0, addAt), step, ...steps.slice(addAt)])
-        setAdding(null)
-        setEditing({ index: addAt, fresh: true })
+        onChange([...steps.slice(0, insertAt), step, ...steps.slice(insertAt)])
+        setAdding(false)
+        setEditing({ index: insertAt, fresh: true })
     }
-    // A step moves within its side of the agent, never across it.
-    const move = (i: number, dir: -1 | 1) => {
+    // A script (not a source) may cross the agent; going back above it, it drops its `if:`.
+    const canMove = (i: number, dir: -1 | 1) => {
         const j = i + dir
-        if (j < 0 || j >= steps.length || kindOf(steps[j]) === 'agent' || kindOf(steps[i]) === 'agent') return
+        if (j < 0 || j >= steps.length || kindOf(steps[i]) === 'agent') return false
+        return kindOf(steps[j]) !== 'agent' || dir === -1 || canFollowAgent(steps[i])
+    }
+    const move = (i: number, dir: -1 | 1) => {
+        if (!canMove(i, dir)) return
+        const j = i + dir
+        const crossing = kindOf(steps[j]) === 'agent'
         const next = [...steps]
-        ;[next[i], next[j]] = [next[j], next[i]]
+        next[i] = steps[j]
+        next[j] = crossing && dir === -1 ? withoutIf(steps[i]) : steps[i]
         onChange(next)
         setEditing((e) => (e ? { ...e, index: j } : e))
     }
@@ -254,17 +260,13 @@ export function StepsField({
             onOpen={() => setEditing({ index: i, fresh: false })}
         />
     ))
-    const addNode = (where: 'before' | 'after') => (
+    const addNode = (
         <button
-            key={`add-${where}`}
+            key='add'
             type='button'
             className='step-node add'
-            onClick={() => setAdding(where)}
-            title={
-                where === 'before'
-                    ? 'Add a step before the agent'
-                    : "Add a script that runs after the agent's task has ended"
-            }
+            onClick={() => setAdding(true)}
+            title='Add a step before the agent (Later in its window moves a script below the agent)'
         >
             <span className='step-node-plus'>
                 <Icon
@@ -272,15 +274,10 @@ export function StepsField({
                     size={14}
                 />
             </span>
-            <span>{where === 'before' ? 'Add step' : 'Add step after the agent'}</span>
+            <span>Add step</span>
         </button>
     )
-    const flow = [
-        ...nodes.slice(0, insertAt),
-        addNode('before'),
-        ...nodes.slice(insertAt),
-        ...(hasAgent ? [addNode('after')] : [])
-    ]
+    const flow = [...nodes.slice(0, insertAt), addNode, ...nodes.slice(insertAt)]
     const open = editing && steps[editing.index] ? editing : null
     return (
         <div className='field wide triggers'>
@@ -327,16 +324,10 @@ export function StepsField({
                     routine={routine}
                     skill={skill}
                     after={hasAgent && open.index > agentAt}
-                    canMoveUp={
-                        open.index > 0 &&
-                        kindOf(steps[open.index]) !== 'agent' &&
-                        kindOf(steps[open.index - 1]) !== 'agent'
-                    }
-                    canMoveDown={
-                        open.index < steps.length - 1 &&
-                        kindOf(steps[open.index]) !== 'agent' &&
-                        kindOf(steps[open.index + 1]) !== 'agent'
-                    }
+                    canMoveUp={canMove(open.index, -1)}
+                    canMoveDown={canMove(open.index, 1)}
+                    nextIsAgent={kindOf(steps[open.index + 1] ?? {}) === 'agent'}
+                    previousIsAgent={kindOf(steps[open.index - 1] ?? {}) === 'agent'}
                     onApply={(next) => {
                         onChange(steps.map((x, j) => (j === open.index ? next : x)))
                         setEditing(null)
@@ -354,23 +345,31 @@ export function StepsField({
                 />
             )}
             <AddStepWindow
-                open={adding !== null}
-                after={adding === 'after'}
+                open={adding}
                 routine={routine}
                 hasAgent={hasAgent}
-                insertAt={addAt}
+                insertAt={insertAt}
                 onAdd={(step) => {
                     if (step.agent !== undefined) {
                         onChange([...steps, step])
-                        setAdding(null)
+                        setAdding(false)
                         setEditing({ index: steps.length, fresh: true })
                     } else add(step)
                 }}
-                onClose={() => setAdding(null)}
+                onClose={() => setAdding(false)}
                 onChanged={onChanged}
             />
         </div>
     )
+}
+
+/** A step that may run after the agent: a script that is not a source. */
+const canFollowAgent = (step: RawStep) => kindOf(step) === 'run' && step.items !== true
+
+/** The step without `if:`, which means nothing before the agent. */
+function withoutIf(step: RawStep): RawStep {
+    const { if: _if, ...rest } = step
+    return rest
 }
 
 /** When a script after the agent runs (`if:`). */
@@ -528,6 +527,8 @@ function StepWindow({
     after,
     canMoveUp,
     canMoveDown,
+    nextIsAgent,
+    previousIsAgent,
     onApply,
     onCancel,
     onRemove,
@@ -549,6 +550,9 @@ function StepWindow({
     after: boolean
     canMoveUp: boolean
     canMoveDown: boolean
+    /** Later / Earlier would take the step across the agent. */
+    nextIsAgent: boolean
+    previousIsAgent: boolean
     onApply: (next: RawStep) => void
     onCancel: () => void
     onRemove: () => void
@@ -626,7 +630,13 @@ function StepWindow({
                                     variant='ghost'
                                     onClick={() => onMove(-1)}
                                     disabled={!canMoveUp || changed}
-                                    title={changed ? 'Apply or drop the changes first' : 'Run it one step earlier'}
+                                    title={
+                                        changed
+                                            ? 'Apply or drop the changes first'
+                                            : previousIsAgent
+                                              ? 'Run it before the agent again'
+                                              : 'Run it one step earlier'
+                                    }
                                 >
                                     ← Earlier
                                 </Button>
@@ -635,7 +645,15 @@ function StepWindow({
                                     variant='ghost'
                                     onClick={() => onMove(1)}
                                     disabled={!canMoveDown || changed}
-                                    title={changed ? 'Apply or drop the changes first' : 'Run it one step later'}
+                                    title={
+                                        changed
+                                            ? 'Apply or drop the changes first'
+                                            : nextIsAgent
+                                              ? canMoveDown
+                                                  ? "Run it after the agent: once the agent's task has ended"
+                                                  : 'A source stays before the agent'
+                                              : 'Run it one step later'
+                                    }
                                 >
                                     Later →
                                 </Button>
@@ -665,7 +683,6 @@ function StepWindow({
 /** What a new step is: a script in the routine's folder (named first), a command, a source, or the agent. */
 function AddStepWindow({
     open,
-    after,
     routine,
     hasAgent,
     insertAt,
@@ -674,8 +691,6 @@ function AddStepWindow({
     onChanged
 }: {
     open: boolean
-    /** After the agent: a script or a command only, run once the agent's task has ended. */
-    after: boolean
     routine: string | null
     hasAgent: boolean
     insertAt: number
@@ -732,11 +747,7 @@ function AddStepWindow({
             icon='routines'
             busy={busy}
             title='Add a step'
-            description={
-                after
-                    ? "It runs once the agent's task has ended (when it succeeded, failed, or always); open it afterwards to fill it in."
-                    : 'It goes before the agent; open it afterwards to fill it in.'
-            }
+            description='It goes before the agent (a script can move below it with Later); open it afterwards to fill it in.'
             footer={<Button onClick={close}>Cancel</Button>}
         >
             <div className='step-choices'>
@@ -774,14 +785,12 @@ function AddStepWindow({
                     </span>
                 </form>
                 {choice('Command', 'One line of bash, no file: a quick check, a curl.', { run: '' })}
-                {!after &&
-                    choice('GitHub pull requests', 'Open PRs of a repository; nothing new means no agent.', {
-                        'github-prs': { filter: 'open' }
-                    })}
-                {!after &&
-                    choice('Trac tickets', 'The tickets of a Trac query; nothing new means no agent.', {
-                        trac: { url: '' }
-                    })}
+                {choice('GitHub pull requests', 'Open PRs of a repository; nothing new means no agent.', {
+                    'github-prs': { filter: 'open' }
+                })}
+                {choice('Trac tickets', 'The tickets of a Trac query; nothing new means no agent.', {
+                    trac: { url: '' }
+                })}
                 {!hasAgent &&
                     choice('Agent', 'The last step: reads the instructions and what the steps found.', {
                         agent: 'orchestrator'

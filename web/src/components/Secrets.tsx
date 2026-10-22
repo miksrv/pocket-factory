@@ -21,6 +21,18 @@ const TABS = [
 ] as const
 type EntryKind = (typeof TABS)[number]['value']
 
+/** Who reads a name, one badge per routine however many of its steps do (the steps go into the title). */
+function usesOf(used: VaultEntry['used_by']): Array<VaultEntry['used_by'][number] & { steps: string[] }> {
+    const out: Array<VaultEntry['used_by'][number] & { steps: string[] }> = []
+    for (const u of used) {
+        const same = out.find((o) => o.kind === u.kind && o.name === u.name)
+        if (same) {
+            if (u.step && !same.steps.includes(u.step)) same.steps.push(u.step)
+        } else out.push({ ...u, steps: u.step ? [u.step] : [] })
+    }
+    return out
+}
+
 export function scopeText(scope: SecretScope): string {
     if (scope.all) return 'every routine and chat'
     const parts = [...scope.routines.map((r) => `routine ${r}`), ...scope.projects.map((p) => `project ${p}`)]
@@ -41,7 +53,9 @@ export function SecretsSection() {
             message: e.provider
                 ? `${e.used_by.map((u) => `Provider ${u.name}`).join(', ') || 'No provider'} loses its key; its requests fail until it has one again.`
                 : e.used_by.length
-                  ? `${e.used_by.map((u) => (u.kind === 'routine' ? `${u.name} (${u.step})` : u.name)).join(', ')} read it; their next runs go without it (or with the .env value of the same name).`
+                  ? `${usesOf(e.used_by)
+                        .map((u) => (u.kind === 'routine' ? `${u.name} (${u.steps.join(', ')})` : u.name))
+                        .join(', ')} read it; their next runs go without it (or with the .env value of the same name).`
                   : 'Nothing uses it now. There is no undo: a secret value cannot be read back.',
             action: 'Delete',
             pending: 'Deleting…',
@@ -124,7 +138,7 @@ export function SecretsSection() {
                                         {e.provider ? 'no provider names it' : 'not used by a step'}
                                     </span>
                                 )}
-                                {e.used_by.map((u, i) =>
+                                {usesOf(e.used_by).map((u, i) =>
                                     u.kind === 'provider' ? (
                                         <Link
                                             key={i}
@@ -139,7 +153,7 @@ export function SecretsSection() {
                                             key={i}
                                             to={`/routines/${encodeURIComponent(u.name)}`}
                                             className='badge plain'
-                                            title={`step ${u.step}`}
+                                            title={`${u.steps.length === 1 ? 'step' : 'steps'} ${u.steps.join(', ')}`}
                                         >
                                             ⏱ {u.name}
                                         </Link>

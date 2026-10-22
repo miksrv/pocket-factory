@@ -480,7 +480,8 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   agent, prompt, title})`: a new visible `web` chat bound to the project, its task (`source:
   handoff`, `tasks.handed_by` = the run) runs as the agent in that checkout and sandbox, and the
   call waits for it (SSE progress, the factory server's 12 h call limit). Owner's rules: one chat
-  per piece of work, the chat outlives the run (the owner goes on there), the run's stop stops the
+  per piece of work, the chat outlives the run (the owner goes on there, as the same agent: a
+  message there runs as the handed task's agent), the run's stop stops the
   chat's task, its questions go to Telegram at once (auto-answered after `ROUTINES_ASK_TIMEOUT_MIN`)
   and its reply does not (the run reports). It borrows the run's slot like a delegated role; the
   same brief again (a resumed run) joins the chat, a failed one is asked again in the same chat.
