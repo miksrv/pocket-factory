@@ -70,6 +70,8 @@ export interface Workspace {
     delegates: () => DelegateAgent[]
     /** The providers a project's file allows its tasks to delegate to (`providers:`); null = none named. */
     projectProviders: (slug: string) => string[] | null
+    /** The projects a routine's runs may hand work to (`hand_off:` in its file); empty = none. */
+    handOffProjects: (routine: string) => string[]
 }
 
 /** A role that runs on another provider, as its agent file describes it. */
@@ -82,6 +84,9 @@ export interface DelegateAgent {
     /** What runs the role when its provider cannot: `inherit` (the orchestrator's model), a CLI alias, or `none` (report the failure). */
     fallback: string
 }
+
+/** The task waiting for this one (the orchestrator of a role, the routine run of a handed chat); null for the rest. */
+const waitedBy = (task: Task | undefined): string | null => task?.parent_id ?? task?.handed_by ?? null
 
 /** Claude Code names a session's directory after its cwd with every non-alphanumeric character as "-". */
 export const claudeSlug = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-')
@@ -138,8 +143,11 @@ const LIGHT_SYSTEM_PROMPT = `You are an autonomous agent working alone on a task
 /** The factory's own MCP server in a session (`mcp__factory__delegate`). */
 export const FACTORY_MCP = 'factory'
 
-/** The CLI's limit on one `delegate` call (per-server `timeout`, which lifts its idle limit too). */
-const DELEGATE_CALL_TIMEOUT_MS = 3 * 60 * 60_000
+/**
+ * The CLI's limit on one call of the factory's server (per-server `timeout`, which lifts its idle limit too):
+ * a `hand_off` waits for a whole bug fix (investigation, PR, review, a deploy), a `delegate` for a slow GPU.
+ */
+const DELEGATE_CALL_TIMEOUT_MS = 12 * 60 * 60_000
 
 /** How often a waiting `delegate` call tells the CLI how the role goes (MCP progress), which also keeps the stream busy. */
 const DELEGATE_PROGRESS_MS = 30_000
@@ -155,6 +163,25 @@ export interface DelegateOutcome {
     text: string
     /** The task that ran the role; absent when nothing ran. */
     task?: Task
+}
+
+/** What a `hand_off` call asks for: the project's chat to open, the agent to run there and its brief. */
+export interface HandOffRequest {
+    project: string
+    /** The agent file the chat's task runs as (`--agent`); null = the orchestrator. */
+    agent: string | null
+    prompt: string
+    /** The chat's title; null = the first line of the brief. */
+    title: string | null
+}
+
+/** What a routine's thread recorded when its run handed work to a project's chat (the `handoff` payload of a `status` event). */
+export interface HandOff {
+    task_id: string
+    conversation_id: string
+    project: string
+    agent: string | null
+    title: string
 }
 
 /** What a task's thread recorded when its orchestrator handed a role its work (the `delegate` payload of a `status` event). */
@@ -332,14 +359,18 @@ function sourceOf(name: string, cliSource: string | null, scope: string | null):
  * The workspace a tool call touches, by name in its input (a path, a `--repo
  * owner/name`). Longest names first; `owner/name` where both are workspaces
  * means the repository, not the owner's folder (`acme/billing`
- * is billing); a name with a project file wins over a bare folder.
+ * is billing); a name with a project file wins over a bare folder. The paths
+ * in `ignore` (the factory's own data: a routine's files under
+ * /srv/pocket-factory/data) say nothing about a project and are left out.
  */
 export function detectProject(
     input: unknown,
     workspaces: string[],
-    hasProject: (name: string) => boolean = () => false
+    hasProject: (name: string) => boolean = () => false,
+    ignore: string[] = []
 ): string | null {
-    const haystack = JSON.stringify(input ?? '')
+    let haystack = JSON.stringify(input ?? '')
+    for (const prefix of ignore) if (prefix.length > 1) haystack = haystack.split(prefix).join('')
     const found: string[] = []
     for (const name of workspaces) {
         if (name.length < 3) continue
@@ -383,7 +414,10 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly reach = new Map<string, { at: number; error: string | null }>()
     private readonly reaching = new Map<string, Promise<string | null>>()
     /** What the factory's MCP server offers each running task (`delegate`, `preview`) and the project a preview is of. */
-    private readonly factoryOffers = new Map<string, { delegate: boolean; preview: boolean; project: string | null }>()
+    private readonly factoryOffers = new Map<
+        string,
+        { delegate: boolean; preview: boolean; handoff: boolean; project: string | null }
+    >()
     /** How often each task's sandbox failed to start, for `retryLaunch`. */
     private readonly launchRetries = new Map<string, number>()
     /** Tasks the owner asked to stop: whatever way the CLI exits, they end as `cancelled`. */
@@ -459,10 +493,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             store.addEvent(task.id, 'error', { status: 'failed', error: task.error ?? undefined })
         }
         this.orphaned = failed
-        // A delegated role lives only for its parent: one whose parent failed (or ended) above is not run.
+        // A delegated role lives only for its parent, a handed chat's task for the run waiting for it:
+        // one whose parent failed (or ended) above is not run.
         for (const child of store.listTasks({ status: 'queued', limit: 10_000 })) {
-            if (!child.parent_id) continue
-            const parent = store.getTask(child.parent_id)
+            const waiting = child.parent_id ?? child.handed_by
+            if (!waiting) continue
+            const parent = store.getTask(waiting)
             if (parent?.status === 'queued' || parent?.status === 'running') continue
             this.finish(child.id, { status: 'cancelled', error: 'its parent task ended while the supervisor was down' })
         }
@@ -575,21 +611,21 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.gatewayBase = `http://127.0.0.1:${port}/gateway`
     }
 
-    /** Session slots in use: every running task, but a parent and the one role it waits for share a slot. */
+    /** Session slots in use: every running task, but a parent and the one task it waits for (a role, a handed chat) share a slot. */
     private slotsTaken(): number {
         let n = 0
         const parents = new Set<string>()
         for (const id of this.running.keys()) {
-            const parent = this.store.getTask(id)?.parent_id
+            const parent = waitedBy(this.store.getTask(id))
             if (parent && this.running.has(parent) && !parents.has(parent)) parents.add(parent)
             else n++
         }
         return n
     }
 
-    /** Whether a running role of this parent already holds its lent slot. */
+    /** Whether a running task this parent waits for already holds its lent slot. */
     private borrowing(parentId: string): boolean {
-        for (const id of this.running.keys()) if (this.store.getTask(id)?.parent_id === parentId) return true
+        for (const id of this.running.keys()) if (waitedBy(this.store.getTask(id)) === parentId) return true
         return false
     }
 
@@ -932,16 +968,26 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const provider = options.provider === undefined ? conversation.provider : options.provider
         const model =
             options.model ?? (!options.schedule && provider === conversation.provider ? conversation.model : null)
+        // A chat a routine's run handed work to goes on as the agent it started with, on that agent's model:
+        // the owner talks to that agent.
+        const handed =
+            options.agent === undefined && !options.schedule
+                ? (this.store.listTasks({ conversationId, limit: 1000 }).find((t) => t.source === 'handoff' && t.agent)
+                      ?.agent ?? null)
+                : null
+        const agent = options.agent ?? handed
+        const own = handed && !model ? this.workspace.agentFile(handed)?.model : null
+        const agentModel = own && own !== 'inherit' ? own : null
         const task = this.store.createTask(
             conversationId,
             source,
             prompt,
             conversation.project,
             options.schedule ?? null,
-            model,
+            model ?? agentModel,
             attachments,
             provider,
-            options.agent ?? null
+            agent
         )
         if (!conversation.title) {
             const first = titleFrom(task.prompt)
@@ -1055,7 +1101,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /** A request nobody will answer in person is answered for the owner (a role at once, a routine's after a while). */
     private settleLater(task: Task, ask: Ask): void {
         if (task.parent_id) this.answerLater(task.id, ask, true)
-        else if (task.schedule) this.answerLater(task.id, ask)
+        else if (task.schedule || task.handed_by) this.answerLater(task.id, ask)
     }
 
     /**
@@ -1076,7 +1122,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             const reason = role
                 ? 'a delegated role has nobody to ask'
                 : `no answer from the owner within ${minutes} min`
-            const guide = role ? "the orchestrator's brief" : "the routine's instructions"
+            const guide = role
+                ? "the orchestrator's brief"
+                : task.handed_by
+                  ? 'the brief this chat started with'
+                  : "the routine's instructions"
             try {
                 if (ask.kind === 'permission')
                     this.answer(taskId, {
@@ -1352,11 +1402,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     // ---- the factory's MCP tools ------------------------------------------
 
     /** The tools `/factory/<task>/mcp` lists for a running task. */
-    factoryTools(taskId: string): { delegate: boolean; preview: boolean } {
+    factoryTools(taskId: string): { delegate: boolean; preview: boolean; handoff: boolean } {
         const offers = this.factoryOffers.get(taskId)
         // A task that is not running (yet): `delegate` as the roles stand, refused with the reason when called.
-        if (!offers) return { delegate: this.delegates().length > 0, preview: false }
-        return { delegate: offers.delegate, preview: offers.preview }
+        if (!offers) return { delegate: this.delegates().length > 0, preview: false, handoff: false }
+        return { delegate: offers.delegate, preview: offers.preview, handoff: offers.handoff }
     }
 
     /** The agent shows the app it runs on `port` (`preview`): published and proxied at `/preview/<project>/`. */
@@ -1558,6 +1608,111 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             child = await this.settled(this.queueDelegated(parent, agent, prompt, fellBack).id, progress)
         }
         return this.outcome(child, agent, fellBack)
+    }
+
+    /**
+     * A routine's run hands `prompt` to a new chat of `project` (the `hand_off` tool): a chat the owner
+     * sees in the Chat list, its task running as `agent` in that project's checkout and sandbox, and
+     * waits until it ends. The chat outlives the run: the owner goes on talking to the agent there.
+     * Its questions reach Telegram at once; its reply does not (the run reports). It borrows the run's
+     * slot and stops with the run. A call repeated with the same project, agent and brief (the run
+     * resumed after a restart) joins the chat made; one whose task failed is asked again in the same chat.
+     */
+    async handOff(
+        parentId: string,
+        request: HandOffRequest,
+        progress?: (note: string) => void
+    ): Promise<{ ok: boolean; text: string; task?: Task }> {
+        const parent = this.store.getTask(parentId)
+        if (!parent || parent.status !== 'running') throw new Error('the handing task is not running')
+        if (!parent.schedule || parent.provider || parent.parent_id || parent.handed_by)
+            throw new Error("only a routine's run on the subscription hands work to a project's chat")
+        const project = request.project.trim()
+        const allowed = this.handOffTargets(parentId)
+        if (!allowed.includes(project) || !this.workspace.projectPath(project))
+            throw new Error(
+                `project "${project}" takes no hand-off from this routine; its \`hand_off:\` lists: ${allowed.join(', ') || 'none'}`
+            )
+        const agent = request.agent?.trim() || null
+        if (agent) {
+            if (this.delegates().some((a) => a.name === agent))
+                throw new Error(`${agent} runs on another provider: hand it work with \`delegate\` instead`)
+            if (!this.workspace.agentFile(agent)) throw new Error(`no agent file "${agent}"`)
+        }
+        const prompt = request.prompt.trim()
+        if (!prompt) throw new Error('the brief is empty')
+
+        const same = (t: Task) => t.project === project && t.agent === agent && t.prompt === prompt
+        const earlier = this.store
+            .handedTasks(parentId)
+            .reverse()
+            .find((t) => same(t) && t.status !== 'cancelled')
+        let task: Task
+        if (earlier && earlier.status !== 'failed') task = earlier
+        else {
+            const conversation = earlier
+                ? this.store.getConversation(earlier.conversation_id)!
+                : this.store.createConversation('web', null, request.title?.trim() || titleFrom(prompt), project)
+            const own = agent ? this.workspace.agentFile(agent) : null
+            task = this.store.createTask(
+                conversation.id,
+                'handoff',
+                prompt,
+                project,
+                null,
+                own?.model && own.model !== 'inherit' ? own.model : null,
+                null,
+                null,
+                agent,
+                null,
+                parentId
+            )
+            const handoff: HandOff = {
+                task_id: task.id,
+                conversation_id: conversation.id,
+                project,
+                agent,
+                title: conversation.title ?? titleFrom(prompt)
+            }
+            this.emit(
+                'event',
+                this.store.addEvent(parentId, 'status', {
+                    status: 'running',
+                    note: `handed to a chat of ${project}${agent ? ` as ${agent}` : ''}${earlier ? ' (again)' : ''}`,
+                    handoff
+                })
+            )
+            log.info(`${parentId} handed ${task.id} to ${project}${agent ? ` as ${agent}` : ''}`)
+            this.emit('task', task)
+            queueMicrotask(() => this.tick())
+        }
+        const done = await this.settled(task.id, progress)
+        return this.handOffOutcome(done)
+    }
+
+    /** The projects a running routine's task may hand work to: its file's `hand_off:` that still have a file and a checkout. */
+    handOffTargets(taskId: string): string[] {
+        const schedule = this.store.getTask(taskId)?.schedule
+        if (!schedule) return []
+        const known = this.workspace.projects()
+        return this.workspace
+            .handOffProjects(schedule)
+            .filter((p) => known.includes(p) && this.workspace.projectPath(p) !== null)
+    }
+
+    /** What the `hand_off` tool answers: how the chat's task ended, its pull request, and its report. */
+    private handOffOutcome(task: Task): { ok: boolean; text: string; task: Task } {
+        const conversation = this.store.getConversation(task.conversation_id)
+        const base = this.config.web.publicUrl ?? ''
+        const lines = [
+            `The chat "${conversation?.title ?? ''}" (${task.project}) ${task.status === 'done' ? 'finished' : task.status} in ${Math.round(task.duration_ms / 60_000)} min, ${task.num_turns} turns.`,
+            `Chat: ${base}/chat/${task.conversation_id}`,
+            ...(task.git?.pr ? [`Pull request: ${task.git.pr.url}`] : []),
+            ...(task.git?.branch ? [`Branch: ${task.git.branch}`] : []),
+            '',
+            task.status === 'done' ? (task.result ?? '').trim() || '(no report)' : `Error: ${task.error ?? 'no result'}`
+        ]
+        return { ok: task.status === 'done', text: lines.join('\n'), task }
     }
 
     /** Queue the role's task: on its provider, or (with the reason it cannot) on the subscription. */
@@ -1842,8 +1997,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         this.ticking = true
         try {
             for (const task of this.store.nextQueuedTasks()) {
-                // A task waiting for the role it delegated lends that role its slot.
-                const lent = task.parent_id && this.running.has(task.parent_id) && !this.borrowing(task.parent_id)
+                // A task waiting for the role it delegated (or the chat it handed work to) lends it its slot.
+                const parent = waitedBy(task)
+                const lent = parent && this.running.has(parent) && !this.borrowing(parent)
                 // Not `break`: a role queued behind a full house must still reach its parent's slot,
                 // or parents that hold every slot wait for roles that never start.
                 if (!lent && this.slotsTaken() >= this.config.maxConcurrentSessions) continue
@@ -2014,7 +2170,17 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             this.previews !== null &&
             (!asAgentFile?.tools ||
                 asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
-        const offersFactory = offersDelegate || offersPreview
+        // A routine's run on the subscription may hand work to a chat of a project (`hand_off`) and wait for it,
+        // only to the projects its file lists: an injected ticket must not open a chat elsewhere.
+        const offersHandoff =
+            !provider &&
+            !task.parent_id &&
+            !task.handed_by &&
+            Boolean(task.schedule) &&
+            this.workspace.handOffProjects(task.schedule!).length > 0 &&
+            (!asAgentFile?.tools ||
+                asAgentFile.tools.some((t) => t === `mcp__${FACTORY_MCP}` || t.startsWith(`mcp__${FACTORY_MCP}__`)))
+        const offersFactory = offersDelegate || offersPreview || offersHandoff
         const settings = this.sessionSettings(conversation.project)
         if (offersFactory || (delegates.length && !light)) {
             const permissions = (settings.permissions ?? {}) as { allow?: string[]; deny?: string[] }
@@ -2026,7 +2192,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                     : {})
             }
         }
-        this.factoryOffers.set(task.id, { delegate: offersDelegate, preview: offersPreview, project: sandboxProject })
+        this.factoryOffers.set(task.id, {
+            delegate: offersDelegate,
+            preview: offersPreview,
+            handoff: offersHandoff,
+            project: sandboxProject
+        })
         const appendSystemPrompt = offersDelegate
             ? this.delegationPrompt(delegates)
             : task.parent_id && !light
@@ -2184,11 +2355,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 // fence moved the thread, dropped its session and the next reply was about the
                 // other repository). Later tasks of a bound conversation never leave it.
                 if (event.type === 'tool_use') this.rememberMcpTool(event.name)
-                if (event.type === 'tool_use' && !project && !task.parent_id) {
+                // A routine's run has the project its file names (none is a choice), a role its parent's.
+                if (event.type === 'tool_use' && !project && !task.parent_id && !task.schedule) {
                     project = detectProject(
                         event.input,
                         this.workspaces(),
-                        (name) => this.workspace.projectPath(name) !== null
+                        (name) => this.workspace.projectPath(name) !== null,
+                        [this.config.paths.dataRoot]
                     )
                     if (project) {
                         this.store.updateTask(task.id, { project })
@@ -2394,9 +2567,12 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         }
     }
 
-    /** The roles a task delegated end with it: nobody would read what they bring. */
+    /**
+     * The roles a task delegated end with it: nobody would read what they bring. So does the work a
+     * routine run handed to a project's chat (the owner stopped the run); the chat itself stays.
+     */
     private stopChildren(taskId: string): void {
-        for (const child of this.store.childTasks(taskId))
+        for (const child of [...this.store.childTasks(taskId), ...this.store.handedTasks(taskId)])
             if (child.status === 'queued' || child.status === 'running') this.stop(child.id)
     }
 

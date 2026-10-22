@@ -174,4 +174,51 @@ describe('a task run', () => {
             await service.shutdown()
         }
     })
+
+    it("cancels a handed chat's task whose run ended at the restart, and keeps one whose run resumes", async () => {
+        t = createTestApp({ claude: CLAUDE, config: (c) => (c.maxConcurrentSessions = 0) })
+        const { store, config, providers } = t.ctx
+        const handed = (runId: string) => {
+            const chat = store.createConversation('web', null, '#1 bug', null)
+            const task = store.createTask(
+                chat.id,
+                'handoff',
+                'fix it',
+                null,
+                null,
+                null,
+                null,
+                null,
+                'fixer',
+                null,
+                runId
+            )
+            store.updateTask(task.id, { status: 'running' })
+            return task
+        }
+        const thread = store.createConversation('web', 'schedule:bugs')
+        // Over the restart limit: the recovery fails this run, and its chat goes with it.
+        const lost = store.createTask(thread.id, 'routine', 'run', null, 'bugs')
+        store.updateTask(lost.id, { status: 'running', restarts: 5 })
+        const lostChat = handed(lost.id)
+        // This run is re-queued and resumes: it joins its chat again, which waits for it.
+        const kept = store.createTask(
+            store.createConversation('web', 'schedule:other').id,
+            'routine',
+            'run',
+            null,
+            'other'
+        )
+        store.updateTask(kept.id, { status: 'running' })
+        const keptChat = handed(kept.id)
+        const service = new TaskService(store, config, {} as Workspace, providers)
+        try {
+            expect(store.getTask(lost.id)!.status).toBe('failed')
+            expect(store.getTask(lostChat.id)!.status).toBe('cancelled')
+            expect(store.getTask(kept.id)!.status).toBe('queued')
+            expect(store.getTask(keptChat.id)!.status).toBe('queued')
+        } finally {
+            await service.shutdown()
+        }
+    })
 })

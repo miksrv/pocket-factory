@@ -230,6 +230,9 @@ const TRAC_COLUMNS = [
     'changetime'
 ]
 
+/** Column labels of Trac's CSV that are not their field's name. */
+const TRAC_LABELS: Record<string, string> = { modified: 'changetime', created: 'time' }
+
 /**
  * A Trac query as CSV (`/query?…&format=csv`), the site and the query from
  * the step. Credentials from the run's environment (Settings → Secrets), shared by every Trac step: TRAC_USER + TRAC_PASSWORD as basic auth (point `url` at the
@@ -249,7 +252,8 @@ async function runTrac(spec: TracStep, env: NodeJS.ProcessEnv): Promise<Item[]> 
         params.set('order', 'changetime')
         params.set('desc', '1')
     }
-    const headers: Record<string, string> = { accept: 'text/csv' }
+    // No Accept-Language: Trac then writes dates in its stable en_US form, not a locale's short one.
+    const headers: Record<string, string> = { accept: 'text/csv', 'accept-language': '' }
     if (env.TRAC_USER && env.TRAC_PASSWORD)
         headers.authorization = `Basic ${Buffer.from(`${env.TRAC_USER}:${env.TRAC_PASSWORD}`).toString('base64')}`
     if (env.TRAC_COOKIE)
@@ -277,7 +281,11 @@ async function runTrac(spec: TracStep, env: NodeJS.ProcessEnv): Promise<Item[]> 
         )
     const rows = parseCsv(text)
     if (rows.length === 0) return []
-    const header = rows[0].map((h) => h.trim().toLowerCase())
+    // Trac heads its CSV with the columns' labels: lower-cased they are the field names, but two.
+    const header = rows[0].map((h) => {
+        const name = h.trim().toLowerCase()
+        return TRAC_LABELS[name] ?? name
+    })
     const idCol = header.indexOf('id')
     if (idCol < 0) throw new SourceError(`Trac CSV has no id column (header: ${rows[0].join(', ')})`)
     const col = (row: string[], name: string) => {

@@ -32,6 +32,12 @@ const PREVIEW_DESCRIPTION = [
     'The page runs in a sandbox of its own origin: localStorage, cookies set by JavaScript and service workers do not work in it.'
 ].join(' ')
 
+/** What the `hand_off` tool tells a routine's agent. */
+const HANDOFF_DESCRIPTION = [
+    "Hand one piece of work (one bug, one ticket) to a new chat of a project and wait until it is done. The chat's agent works in that project's checkout and sandbox with its hosts, MCP servers and CLAUDE.md, and sees nothing of this run: the brief must be self-contained (the ticket id, its link, what is expected, what to report).",
+    'The answer is its report, its pull request and the link to the chat; put them in your own report. The chat stays in the Chat list: the owner goes on there with that agent. One call per piece of work; a long fix takes hours, the call waits.'
+].join(' ')
+
 /**
  * The factory's own MCP server, one endpoint per running task (`/factory/<task>/mcp`, a bearer
  * derived from the task id), streamable HTTP. `delegate` hands a brief to a role on another
@@ -39,6 +45,8 @@ const PREVIEW_DESCRIPTION = [
  * carries progress notifications until the result); offered to orchestrators on the subscription
  * while some agent file names a `provider:`. `preview` / `preview_stop` publish the app a
  * project's agent runs at `/preview/<project>/`; offered to a project's tasks on the subscription.
+ * `hand_off` opens a chat of a project with a brief and answers when its task ends (the same SSE
+ * stream); offered to a routine's run on the subscription.
  * Mounted outside `/api`: no cookie, no CSRF, only the bearer.
  */
 export function factoryRoutes(): Hono<Env> {
@@ -111,6 +119,40 @@ export function factoryRoutes(): Hono<Env> {
                 rpcResult(id, {
                     tools: [
                         ...(offers.preview ? previewTools : []),
+                        ...(offers.handoff
+                            ? [
+                                  {
+                                      name: 'hand_off',
+                                      description: HANDOFF_DESCRIPTION,
+                                      inputSchema: {
+                                          type: 'object',
+                                          properties: {
+                                              project: {
+                                                  type: 'string',
+                                                  enum: tasks.handOffTargets(taskId),
+                                                  description: 'The project whose chat takes the work'
+                                              },
+                                              agent: {
+                                                  type: 'string',
+                                                  description:
+                                                      "The agent the chat runs as (an agent file's name); omit for the orchestrator"
+                                              },
+                                              prompt: {
+                                                  type: 'string',
+                                                  description:
+                                                      'A self-contained brief: what to do, the links it needs, what to report at the end'
+                                              },
+                                              title: {
+                                                  type: 'string',
+                                                  description:
+                                                      'The chat\'s title in the Chat list, e.g. "#46580 Users: export fails"'
+                                              }
+                                          },
+                                          required: ['project', 'prompt']
+                                      }
+                                  }
+                              ]
+                            : []),
                         ...(!offers.delegate
                             ? []
                             : [
@@ -174,10 +216,50 @@ export function factoryRoutes(): Hono<Env> {
                 return text(`preview failed: ${error instanceof Error ? error.message : String(error)}`, true)
             }
         }
+        const progressToken = (params._meta as { progressToken?: string | number } | undefined)?.progressToken
+        if (tool === 'hand_off' && offers.handoff) {
+            const args = (params.arguments ?? {}) as {
+                project?: unknown
+                agent?: unknown
+                prompt?: unknown
+                title?: unknown
+            }
+            return streamCall(`${taskId}: hand_off`, id, progressToken, async (progress) => {
+                if (typeof args.project !== 'string' || typeof args.prompt !== 'string')
+                    return { ok: false, text: 'hand_off needs `project` and `prompt` strings' }
+                return tasks.handOff(
+                    taskId,
+                    {
+                        project: args.project,
+                        agent: typeof args.agent === 'string' ? args.agent : null,
+                        prompt: args.prompt,
+                        title: typeof args.title === 'string' ? args.title : null
+                    },
+                    progress
+                )
+            })
+        }
         if (tool !== 'delegate' || !offers.delegate) return c.json(rpcError(id, -32602, `unknown tool ${tool}`))
 
         const args = (params.arguments ?? {}) as { agent?: unknown; prompt?: unknown; files?: unknown }
-        const progressToken = (params._meta as { progressToken?: string | number } | undefined)?.progressToken
+        return streamCall(`${taskId}: delegate`, id, progressToken, async (progress) => {
+            if (typeof args.agent !== 'string' || typeof args.prompt !== 'string')
+                return { ok: false, text: 'delegate needs `agent` and `prompt` strings' }
+            const files = Array.isArray(args.files) ? args.files.filter((f): f is string => typeof f === 'string') : []
+            return tasks.delegate(taskId, { agent: args.agent, prompt: args.prompt, files }, progress)
+        })
+    })
+
+    /**
+     * A tool call that waits for a task (many minutes): an SSE stream that carries progress
+     * notifications (or comments, when the client gave no token) until the answer.
+     */
+    function streamCall(
+        label: string,
+        id: JsonRpcRequest['id'],
+        progressToken: string | number | undefined,
+        work: (progress: (note: string) => void) => Promise<{ ok: boolean; text: string }>
+    ): Response {
         const encoder = new TextEncoder()
         let closed = false
         const stream = new ReadableStream<Uint8Array>({
@@ -210,22 +292,16 @@ export function factoryRoutes(): Hono<Env> {
                         controller.close()
                     }
                 }
-                if (typeof args.agent !== 'string' || typeof args.prompt !== 'string')
-                    return answer('delegate needs `agent` and `prompt` strings', true)
-                const files = Array.isArray(args.files)
-                    ? args.files.filter((f): f is string => typeof f === 'string')
-                    : []
-                tasks
-                    .delegate(taskId, { agent: args.agent, prompt: args.prompt, files }, progress)
+                work(progress)
                     .then((outcome) => answer(outcome.text, !outcome.ok))
                     .catch((error: unknown) => {
                         const text = error instanceof Error ? error.message : String(error)
-                        log.warn(`${taskId}: delegate failed: ${text}`)
-                        answer(`delegate failed: ${text}`, true)
+                        log.warn(`${label} failed: ${text}`)
+                        answer(`${label.split(': ').pop()} failed: ${text}`, true)
                     })
             },
             cancel() {
-                // The CLI went away (its task stopped): the role is stopped with its parent, not here.
+                // The CLI went away (its task stopped): the work is stopped with its task, not here.
                 closed = true
             }
         })
@@ -233,7 +309,7 @@ export function factoryRoutes(): Hono<Env> {
             status: 200,
             headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }
         })
-    })
+    }
 
     return app
 }

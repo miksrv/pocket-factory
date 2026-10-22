@@ -25,6 +25,7 @@ import {
 } from './spec.js'
 import {
     type PipelineResult,
+    runAfter,
     runOneStep,
     runPipeline,
     type SingleStepRun,
@@ -118,6 +119,8 @@ export interface RoutineView {
     last_task: RoutineRun | null
     /** The queued or running task of the routine, if a run is in progress. */
     active_task: Pick<Task, 'id' | 'status' | 'created_at'> | null
+    /** The scripts after the agent are running: the run is not over, another one is refused. */
+    finishing: boolean
     conversation_id: string | null
     /** Source items handed over (or seeded) so far. */
     seen: number
@@ -142,6 +145,8 @@ export interface RoutinesEvents {
     run: [run: RoutineRun, spec: RoutineSpec | null]
     /** A run's steps are going: its row with the steps so far (no Telegram notice, the end is a `run`). */
     progress: [run: RoutineRun]
+    /** The scripts after the agent ran: the run's row with their results appended, and what each printed. */
+    after: [run: RoutineRun, spec: RoutineSpec, steps: StepResult[], outputs: StepOutput[]]
 }
 
 export interface RoutineRefs extends Refs {
@@ -170,6 +175,10 @@ export class Routines extends EventEmitter<RoutinesEvents> {
     /** The wall-clock minute (in its trigger's zone) each routine last fired at: the repeated hour of a fall-back night is not a second 02:30. */
     private readonly firedLocal = new Map<string, string>()
     private readonly firing = new Set<string>()
+    /** Routines whose scripts after the agent are running: the run is not over yet. */
+    private readonly finishing = new Set<string>()
+    /** Tasks whose end the scripts after the agent were started for: a task's later updates do not start them again. */
+    private readonly finished = new Set<string>()
     /** When the ticker last looked at the clock: the minutes since then are the ones to consider. */
     private lastTick: Date | null = null
 
@@ -181,6 +190,64 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         private readonly refs: RoutineRefs
     ) {
         super()
+        // A run's task ended: the scripts after its agent step go now.
+        tasks.on('task', (task) => {
+            if (!task.schedule || (task.status !== 'done' && task.status !== 'failed' && task.status !== 'cancelled'))
+                return
+            if (this.finished.has(task.id)) return
+            this.finished.add(task.id)
+            if (this.finished.size > 1000) this.finished.delete(this.finished.values().next().value!)
+            void this.afterAgent(task).catch((error: unknown) =>
+                log.error(`${task.schedule}: the steps after the agent failed`, error)
+            )
+        })
+    }
+
+    /**
+     * The scripts after the agent step, once the run's task has ended (`done` → `success`, `failed` →
+     * `failure`, `cancelled` runs only the `always` ones). Each gets the routine's environment plus
+     * AGENT_STATUS, AGENT_RESULT (the report, or the error), TASK_ID, and PR_URL / TASK_URL when there
+     * are. Their results go into the same run's row; the routine refuses another run meanwhile.
+     */
+    private async afterAgent(task: Task): Promise<void> {
+        const name = task.schedule!
+        const run = this.store.routineRunOfTask(task.id)
+        const parsed = this.parse(name)
+        const spec = parsed?.spec
+        if (!run || !spec || !spec.after.length) return
+        const status = task.status === 'done' ? 'success' : task.status === 'failed' ? 'failure' : 'cancelled'
+        const due = spec.after.filter((step) => step.enabled && (step.if === 'always' || step.if === status))
+        if (!due.length) return
+        this.finishing.add(name)
+        try {
+            const ctx = this.stepContext(spec, parsed.entry.path)
+            const base = this.config.web.publicUrl
+            const report = task.status === 'done' ? (task.result ?? '') : (task.error ?? '')
+            ctx.env = {
+                ...ctx.env,
+                AGENT_STATUS: status,
+                AGENT_RESULT: report.length > 32_000 ? `${report.slice(0, 32_000)}…` : report,
+                TASK_ID: task.id,
+                ...(base ? { TASK_URL: `${base}/tasks/${task.id}` } : {}),
+                ...(task.git?.pr ? { PR_URL: task.git.pr.url } : {})
+            }
+            const done = await runAfter(
+                due.map((step) => ({ index: spec.steps.indexOf(step), step })),
+                ctx
+            )
+            const failed = done.steps.filter((r) => !r.ok)
+            const note = failed.length
+                ? `after the agent: ${failed.map((r) => r.name).join(', ')} failed`
+                : `after the agent: ${done.steps.length} step(s) ok`
+            const updated = this.store.updateRoutineRun(run.id, {
+                steps: [...(run.steps ?? []), ...done.steps],
+                note: [run.note, note].filter(Boolean).join(' · ')
+            })
+            log.info(`${name}: ${note}`)
+            if (updated) this.emit('after', updated, spec, done.steps, done.outputs)
+        } finally {
+            this.finishing.delete(name)
+        }
     }
 
     start(): void {
@@ -308,6 +375,7 @@ export class Routines extends EventEmitter<RoutinesEvents> {
             last_run: last,
             last_task: lastTask,
             active_task: active ? { id: active.id, status: active.status, created_at: active.created_at } : null,
+            finishing: this.finishing.has(p.name),
             conversation_id: this.store.findConversation('web', conversationKey(p.name))?.id ?? null,
             seen: this.store.seenCount(p.name),
             dir: this.catalog.folderOf('routines', p.name)
@@ -539,6 +607,8 @@ export class Routines extends EventEmitter<RoutinesEvents> {
         if (!parsed.spec) return record('error', parsed.errors.join('; '))
         const spec = parsed.spec
         if (this.firing.has(name)) return record('skipped', 'still checking the previous firing')
+        if (this.finishing.has(name))
+            return record('skipped', 'the previous run is still running its steps after the agent')
         this.firing.add(name)
         try {
             const active = this.store.activeRoutineTask(name)
@@ -603,6 +673,21 @@ export class Routines extends EventEmitter<RoutinesEvents> {
                     name,
                     items.map((i) => i.key)
                 )
+                // A Trac step's keys gained their change time in 1.8.0 (Trac heads its CSV with labels, Modified
+                // was never read): a ticket seen under its bare id is seen, not "changed since", once.
+                const upgraded = pipeline.sources
+                    .filter((s) => s.step.kind === 'trac')
+                    .flatMap((s) => s.items)
+                    .filter((i) => !seen.has(i.key) && i.key.includes('@'))
+                if (upgraded.length) {
+                    const bare = (i: Item) => i.key.slice(0, i.key.indexOf('@'))
+                    const known = this.store.seenKeys(name, upgraded.map(bare))
+                    const carried = upgraded.filter((i) => known.has(bare(i)))
+                    if (carried.length) {
+                        this.store.markSeen(name, carried, null)
+                        for (const i of carried) seen.add(i.key)
+                    }
+                }
                 // What each source would hand over: everything for a plain source, the unseen for a `new_only` one.
                 const candidates = pipeline.sources.flatMap((s) =>
                     s.step.new_only && !everything ? s.items.filter((i) => !seen.has(i.key)) : s.items

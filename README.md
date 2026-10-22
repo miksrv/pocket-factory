@@ -21,9 +21,10 @@ leave alone and still trust:
 - **Pipelines** — skills such as `feature-to-pr` and `pr-review` chain sub-agents (developer,
   reviewer, …) into repeatable task flows; **routines** are pipelines on a schedule (a cron, down
   to a minute): scripts (fetch statistics, make a backup), sources (open pull requests, Trac
-  tickets, a command that lists items) and the agent as the last step, which reads what they found
-  and the routine's instructions; nothing found means no agent and no tokens, and the routine
-  file's body is the agent's memory between runs.
+  tickets, a command that lists items), then the agent, which reads what they found and the
+  routine's instructions, and scripts after it once its task has ended; nothing found means no
+  agent and no tokens, the routine file's body is the agent's memory between runs, and a run can
+  hand a piece of work (one bug) to a chat of its project and wait for it.
 
 Single-owner by design. You log in to Claude Code with **your own subscription**, create **your own**
 Telegram bot, use **your own** GitHub token, point it at **your own** repositories. Nothing is shared,

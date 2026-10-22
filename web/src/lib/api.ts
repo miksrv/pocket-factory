@@ -31,7 +31,7 @@ export interface Ask {
 export interface Task {
     id: string
     conversation_id: string
-    source: 'telegram' | 'web' | 'routine' | 'cron' | 'webhook' | 'delegate'
+    source: 'telegram' | 'web' | 'routine' | 'cron' | 'webhook' | 'delegate' | 'handoff'
     prompt: string
     status: TaskStatus
     session_id: string | null
@@ -65,6 +65,8 @@ export interface Task {
     attachments: Attachment[] | null
     /** The task whose orchestrator delegated this one to a role on another model; null otherwise. */
     parent_id: string | null
+    /** The routine run that handed this chat its work (`hand_off`) and waits for it. */
+    handed_by: string | null
     /** A queued task waits for the subscription window to reset and starts after this time. */
     not_before: string | null
     /** How many times the task went back to the queue to wait for a window reset. */

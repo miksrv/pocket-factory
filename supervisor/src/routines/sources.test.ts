@@ -1,6 +1,10 @@
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
+
 import { describe, expect, it } from 'vitest'
 
-import { parseCsv, parseItems, repoSlug, SourceError } from './sources.js'
+import { parseCsv, parseItems, repoSlug, runSource, SourceError } from './sources.js'
+import type { TracStep } from './spec.js'
 
 describe('parseItems', () => {
     it('keeps the first of a repeated key in a JSON array, as in the line form', () => {
@@ -108,4 +112,45 @@ describe('repoSlug', () => {
             expect(repoSlug(url)).toBeNull()
         }
     )
+})
+
+describe('runSource: trac', () => {
+    it('reads the CSV Trac heads with labels: Modified is the change time the key carries', async () => {
+        let seen: http.IncomingHttpHeaders = {}
+        const server = http.createServer((req, res) => {
+            seen = req.headers
+            res.writeHead(200, { 'content-type': 'text/csv' })
+            res.end(
+                '\uFEFFid,Summary,Status,Component,Severity,Modified\r\n' +
+                    '48366,Clone keeps the source role,new,User Management,major,"Jul 2, 2026, 6:00:08 PM"\r\n'
+            )
+        })
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+        try {
+            const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+            const step: TracStep = {
+                kind: 'trac',
+                name: 'Trac tickets',
+                url,
+                query: 'status=new',
+                on_change: true,
+                max: 10,
+                new_only: true,
+                continue_on_error: false,
+                enabled: true
+            }
+            const items = await runSource(step, { cwd: process.cwd(), env: {}, project: null })
+            expect(items).toEqual([
+                {
+                    key: '48366@Jul 2, 2026, 6:00:08 PM',
+                    title: '#48366 Clone keeps the source role',
+                    url: `${url}/ticket/48366`,
+                    text: 'status new · component User Management · severity major · changed Jul 2, 2026, 6:00:08 PM'
+                }
+            ])
+            expect(seen['accept-language']).toBe('')
+        } finally {
+            server.close()
+        }
+    })
 })

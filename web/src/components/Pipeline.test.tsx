@@ -158,6 +158,36 @@ describe('StepsField', () => {
         )
         expect(onChange).toHaveBeenCalledWith([STEPS[0], STEPS[1], { 'github-prs': { filter: 'open' } }, STEPS[2]])
     })
+
+    it('moves a script below the agent and back, but keeps a source above it', async () => {
+        mockFetch({})
+        const steps: RawStep[] = [{ name: 'Stats', run: 'echo 42' }, { agent: 'orchestrator' }]
+        const onChange = renderGraph(vi.fn(), steps)
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Stats/ }))
+        await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /Later/ }))
+        expect(onChange).toHaveBeenLastCalledWith([steps[1], steps[0]])
+    })
+
+    it('drops the condition of a script moved back above the agent', async () => {
+        mockFetch({})
+        const steps: RawStep[] = [{ agent: 'orchestrator' }, { name: 'Publish', run: 'echo hi', if: 'always' }]
+        const onChange = renderGraph(vi.fn(), steps)
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Publish/ }))
+        const dialog = await screen.findByRole('dialog')
+        expect(within(dialog).getByRole('combobox', { name: 'When it runs' })).toHaveValue('always')
+        await user.click(within(dialog).getByRole('button', { name: /Earlier/ }))
+        expect(onChange).toHaveBeenLastCalledWith([{ name: 'Publish', run: 'echo hi' }, steps[0]])
+    })
+
+    it('keeps a source above the agent', async () => {
+        mockFetch({})
+        renderGraph()
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('button', { name: /Trac/ }))
+        expect(within(await screen.findByRole('dialog')).getByRole('button', { name: /Later/ })).toBeDisabled()
+    })
 })
 
 describe('script helpers', () => {

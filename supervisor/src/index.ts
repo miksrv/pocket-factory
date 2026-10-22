@@ -12,6 +12,7 @@ import { Providers } from './files/providers.js'
 import { createLogger, setLogLevel } from './logger.js'
 import { Presets } from './presets/index.js'
 import { Routines } from './routines/service.js'
+import { handOffProjects } from './routines/spec.js'
 import { type Executor, LocalExecutor, SbxExecutor } from './sandbox/executor.js'
 import { SandboxManager } from './sandbox/manager.js'
 import { addProjectNetwork, sandboxNetwork } from './sandbox/network.js'
@@ -135,7 +136,10 @@ async function main(): Promise<void> {
         projectProviders: (slug) => {
             const entry = projectEntry(slug)
             return entry ? projectProviders(catalog, entry.name) : null
-        }
+        },
+        // A routine's `hand_off:`: the projects its runs may open a chat in.
+        handOffProjects: (routine) =>
+            catalog.exists('routines', routine) ? handOffProjects(catalog.get('routines', routine).frontmatter) : []
     }
     // Secrets and variables set in the UI (Settings → Secrets and variables): scoped into runs, masked in the store.
     const vault = new Vault(config.paths.vaultFile, () => providers.tokenVars())

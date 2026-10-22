@@ -31,7 +31,7 @@ A thin **supervisor** turns messages from Telegram (text, voice, files), the web
 
 - Autonomous multi-step software tasks (feature → PR → review → fixes → report) without supervision, across many repositories, each with its own workflow and conventions.
 - Telegram as the primary human channel (text, voice, files in; questions and reports out, only the essentials); a web UI for chat, observability and administration.
-- Tasks from Telegram, the web and routines (a pipeline of scripts and sources with the agent as the last step, on schedules).
+- Tasks from Telegram, the web and routines (a pipeline of scripts and sources, the agent, and scripts after it, on schedules).
 - Human-in-the-loop inside the same run; corrections persisted by the agent into its own files.
 - A one-shot run per task. In Telegram every message starts a new chat and a reply resumes the chat it answers (`/mode thread`: the next message resumes, `/new` starts fresh); in the web the next message in a thread resumes it; `/stop` cancels.
 
@@ -101,7 +101,7 @@ Rules:
 
 ### 4.3 Routines
 
-A routine is work that runs by itself: a **pipeline** of steps (`steps:`) and the schedules that start it (`triggers:`). The steps are scripts (fetch statistics, make a backup), **sources** (open pull requests, Trac tickets, a command whose output is a list of items) and, as the last step, the **agent**, which reads the instructions in the body and what the steps found. When every source comes back empty the agent is not started, so an idle routine costs no tokens; a routine without an agent step just runs its scripts and reports their output. It is a folder of files, not a table row — `data/config/routines/<name>/` with `ROUTINE.md` (frontmatter and body), the steps' scripts in `scripts/` and the routine's own data in `data/`, all visible and editable on the routine's page: its body is the instruction for every run *and* the agent's memory between runs (deferred tickets, PRs skipped on purpose), which the agent edits itself. The store keeps only what a file cannot: `schedule_runs` (every firing and why it did or did not start a task) and `seen_items` (both named before the rename).
+A routine is work that runs by itself: a **pipeline** of steps (`steps:`) and the schedules that start it (`triggers:`). The steps are scripts (fetch statistics, make a backup), **sources** (open pull requests, Trac tickets, a command whose output is a list of items) the **agent**, which reads the instructions in the body and what the steps found, and, after it, scripts that run once its task has ended (when it succeeded, failed, or always: publish, notify). The agent of a run can hand one piece of work to a new chat of a project (`hand_off`, one chat per bug) and wait for it; the chat stays for the owner to go on with. When every source comes back empty the agent is not started, so an idle routine costs no tokens; a routine without an agent step just runs its scripts and reports their output. It is a folder of files, not a table row — `data/config/routines/<name>/` with `ROUTINE.md` (frontmatter and body), the steps' scripts in `scripts/` and the routine's own data in `data/`, all visible and editable on the routine's page: its body is the instruction for every run *and* the agent's memory between runs (deferred tickets, PRs skipped on purpose), which the agent edits itself. The store keeps only what a file cannot: `schedule_runs` (every firing and why it did or did not start a task) and `seen_items` (both named before the rename).
 
 ```yaml
 ---

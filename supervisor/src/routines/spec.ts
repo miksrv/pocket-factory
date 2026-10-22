@@ -28,6 +28,11 @@ export interface RunStep {
     continue_on_error: boolean
     /** Off: a run skips it (Run on its card still tries it). */
     enabled: boolean
+    /**
+     * A step after the agent runs once the agent's task has ended: when it succeeded (`success`, the
+     * default), when it failed (`failure`), or whatever happened, stopped by the owner too (`always`).
+     */
+    if: 'success' | 'failure' | 'always'
 }
 
 /** Open pull requests of a repository, through `gh`. Always a source. */
@@ -114,10 +119,12 @@ export interface RoutineSpec {
     name: string
     /** Empty = the routine runs only by hand (Run now, /run). */
     triggers: Trigger[]
-    /** The pipeline, in order; the agent step (if any) is the last. */
+    /** The pipeline, in order: the steps before the agent, the agent step (if any), the scripts after it. */
     steps: Step[]
     /** The agent step, or null for a routine that is scripts only. */
     agentStep: AgentStep | null
+    /** The scripts after the agent step: they run when its task has ended (`if:`). */
+    after: RunStep[]
     /** Shortcuts of the agent step: who the run is (null = the orchestrator) and its skill. */
     agent: string | null
     skill: string | null
@@ -138,6 +145,14 @@ export interface RoutineSpec {
     max_items: number
     /** One-shot: the routine switches itself off once it has queued a task. */
     once: boolean
+    /** The projects a run may hand work to (`hand_off:`); none = the run has no `hand_off` tool. */
+    hand_off: string[]
+}
+
+/** `hand_off:` of a routine file: the projects its runs may open a chat in (a name or a list). */
+export function handOffProjects(fm: Record<string, unknown>): string[] {
+    const raw = Array.isArray(fm.hand_off) ? fm.hand_off : [fm.hand_off]
+    return [...new Set(raw.map(str).filter((p): p is string => p !== undefined))]
 }
 
 export interface Refs {
@@ -229,6 +244,9 @@ function parseStep(raw: unknown, errors: string[], at: string, index: number): S
             const run = typeof o.run === 'string' ? o.run.trim() : ''
             if (!run) errors.push(`${at}.run is required (a bash command)`)
             const items = bool(o.items, false)
+            const when = str(o.if) ?? 'success'
+            if (!['success', 'failure', 'always'].includes(when))
+                errors.push(`${at}.if must be success, failure or always (got "${when}")`)
             return {
                 kind,
                 name: name ?? `step ${index + 1}`,
@@ -238,7 +256,8 @@ function parseStep(raw: unknown, errors: string[], at: string, index: number): S
                 items,
                 new_only: items && bool(o.new_only, true),
                 continue_on_error: bool(o.continue_on_error, false),
-                enabled: bool(o.enabled, true)
+                enabled: bool(o.enabled, true),
+                if: when as RunStep['if']
             }
         }
         case 'github-prs': {
@@ -323,7 +342,7 @@ function parseSteps(
     legacySources: unknown[],
     errors: string[],
     warnings: string[]
-): { steps: Step[]; agentStep: AgentStep | null } {
+): { steps: Step[]; agentStep: AgentStep | null; after: RunStep[] } {
     const steps: Step[] = []
     legacySources.forEach((raw, i) => {
         const step = parseStep(raw, errors, 'prefilter', i)
@@ -341,8 +360,21 @@ function parseSteps(
     }
     const agents = steps.filter((s): s is AgentStep => s.kind === 'agent')
     if (agents.length > 1) errors.push('steps: at most one `agent:` step')
-    if (agents.length === 1 && steps[steps.length - 1] !== agents[0])
-        errors.push('steps: the `agent:` step must be the last one (steps after the agent are not supported yet)')
+    // After the agent: scripts only, run once its task has ended; `if:` means nothing before it.
+    const at = agents.length ? steps.indexOf(agents[0]) : steps.length
+    const after: RunStep[] = []
+    steps.forEach((step, i) => {
+        const where = `steps[${i + 1}]`
+        if (i < at) {
+            if (step.kind === 'run' && step.if !== 'success')
+                errors.push(`${where}: \`if:\` is for steps after the agent`)
+            return
+        }
+        if (i === at) return
+        if (step.kind !== 'run') errors.push(`${where}: after the agent only scripts (\`run:\`) can follow`)
+        else if (step.items) errors.push(`${where}: a step after the agent cannot be a source (\`items:\`)`)
+        else after.push(step)
+    })
     let agentStep = agents[0] ?? null
     const topAgent = str(fm.agent)
     const topSkill = str(fm.skill)
@@ -357,7 +389,7 @@ function parseSteps(
         steps.push(agentStep)
     } else if (agentStep && (topAgent || topSkill))
         warnings.push('agent: and skill: on top are ignored: the `agent:` step has its own')
-    return { steps, agentStep }
+    return { steps, agentStep, after }
 }
 
 /** One trigger's cron, zone and window; `at` names it in errors. Null when the cron does not parse. */
@@ -478,11 +510,14 @@ export function parseRoutine(entry: CatalogEntry, defaults: { tz: string }, refs
         errors,
         warnings
     )
-    const { steps, agentStep } = parseSteps(fm, legacySources, errors, warnings)
+    const { steps, agentStep, after } = parseSteps(fm, legacySources, errors, warnings)
 
     const project = str(fm.project) ?? null
     if (project && !refs.projectExists(project))
         errors.push(`project "${project}" has no file or its checkout is missing`)
+    const handOff = handOffProjects(fm)
+    for (const p of handOff)
+        if (!refs.projectExists(p)) errors.push(`hand_off: project "${p}" has no file or its checkout is missing`)
     const hosts = hostList(fm.hosts)
     for (const h of hosts) if (!refs.hostExists(h.host)) warnings.push(`host "${h.host}" is not in hosts.yaml`)
     const skill = agentStep?.skill ?? null
@@ -525,6 +560,7 @@ export function parseRoutine(entry: CatalogEntry, defaults: { tz: string }, refs
             triggers,
             steps,
             agentStep,
+            after,
             agent,
             skill,
             enabled: bool(fm.enabled, true),
@@ -536,7 +572,8 @@ export function parseRoutine(entry: CatalogEntry, defaults: { tz: string }, refs
             session: session as RoutineSpec['session'],
             first_run: firstRun as RoutineSpec['first_run'],
             max_items: int(fm.max_items, 10, 1, 100),
-            once: bool(fm.once, false)
+            once: bool(fm.once, false),
+            hand_off: handOff
         }
     }
 }

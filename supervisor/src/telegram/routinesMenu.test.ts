@@ -63,6 +63,7 @@ const view = (patch: Partial<RoutineView> = {}): RoutineView => ({
     last_run: run(),
     last_task: run(),
     active_task: null,
+    finishing: false,
     conversation_id: null,
     seen: 0,
     dir: '/data/config/routines/daily',

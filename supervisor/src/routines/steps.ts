@@ -279,6 +279,30 @@ export async function runPipeline(
     return result
 }
 
+/**
+ * The scripts after the agent, once its task has ended: in order, each as a pipeline's script (the
+ * routine's environment plus what the run's own `env` adds: the agent's status and report). A
+ * failing one stops the rest unless it says `continue_on_error`. `index` is its place in `steps:`.
+ */
+export async function runAfter(
+    steps: Array<{ index: number; step: RunStep }>,
+    ctx: StepContext
+): Promise<{ steps: StepResult[]; outputs: StepOutput[] }> {
+    const results: StepResult[] = []
+    const outputs: StepOutput[] = []
+    for (const { index, step } of steps) {
+        const run = await runScript(step, ctx)
+        const failure = scriptFailure(step, run)
+        const log = failure ? [run.stdout.trim(), run.stderr.trim()].filter(Boolean).join('\n') || failure : run.stdout
+        results.push({ index, name: step.name, kind: 'run', ok: !failure, ms: run.ms, log: head(log) })
+        const { text, truncated } = cap(failure ? `failed: ${failure}` : run.stdout)
+        outputs.push({ name: step.name, output: text, ms: run.ms, truncated })
+        if (failure && !step.continue_on_error) break
+        if (failure) results[results.length - 1].continued = true
+    }
+    return { steps: results, outputs }
+}
+
 /** What "Run this step" shows: one step alone, its whole output, its exit code; nothing is recorded. */
 export interface SingleStepRun {
     kind: Exclude<Step['kind'], 'agent'>

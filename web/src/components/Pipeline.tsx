@@ -187,8 +187,9 @@ function needsOf(view: RoutineView | undefined, i: number, step: RawStep): EnvNe
  * The pipeline as a graph of cards, the way GitHub Actions draws a workflow's
  * jobs: each step a card with how it went last time (ok / failed and its time),
  * what it is for, and whether it misses a variable; arrows between them, the
- * agent last. A click opens the step in a window to edit it; Add step adds one
- * before the agent. Edits go into the form, which Save writes as usual.
+ * agent, then the scripts after it. A click opens the step in a window to edit
+ * it; Add step adds one before the agent, and Later moves a script below it, to
+ * run once the agent's task has ended. Edits go into the form, which Save writes as usual.
  */
 export function StepsField({
     model,
@@ -221,18 +222,27 @@ export function StepsField({
     // The step open in the window: its place, and whether it was just added (Cancel then takes it out again).
     const [editing, setEditing] = useState<{ index: number; fresh: boolean } | null>(null)
     const [adding, setAdding] = useState(false)
-    // A new step goes before the agent, which stays last.
-    const insertAt = hasAgent ? steps.length - 1 : steps.length
+    const agentAt = steps.findIndex((s) => kindOf(s) === 'agent')
+    // A new step goes before the agent; Later takes a script below it.
+    const insertAt = hasAgent ? agentAt : steps.length
     const add = (step: RawStep) => {
         onChange([...steps.slice(0, insertAt), step, ...steps.slice(insertAt)])
         setAdding(false)
         setEditing({ index: insertAt, fresh: true })
     }
-    const move = (i: number, dir: -1 | 1) => {
+    // A script (not a source) may cross the agent; going back above it, it drops its `if:`.
+    const canMove = (i: number, dir: -1 | 1) => {
         const j = i + dir
-        if (j < 0 || j >= steps.length || kindOf(steps[j]) === 'agent' || kindOf(steps[i]) === 'agent') return
+        if (j < 0 || j >= steps.length || kindOf(steps[i]) === 'agent') return false
+        return kindOf(steps[j]) !== 'agent' || dir === -1 || canFollowAgent(steps[i])
+    }
+    const move = (i: number, dir: -1 | 1) => {
+        if (!canMove(i, dir)) return
+        const j = i + dir
+        const crossing = kindOf(steps[j]) === 'agent'
         const next = [...steps]
-        ;[next[i], next[j]] = [next[j], next[i]]
+        next[i] = steps[j]
+        next[j] = crossing && dir === -1 ? withoutIf(steps[i]) : steps[i]
         onChange(next)
         setEditing((e) => (e ? { ...e, index: j } : e))
     }
@@ -246,6 +256,7 @@ export function StepsField({
             edited={JSON.stringify(saved[i]) !== JSON.stringify(step)}
             last={lastSteps.find((r) => r.index === i && r.name === (view?.steps[i]?.name ?? str(step.name)))}
             agentStatus={kindOf(step) === 'agent' && view?.last_run?.task_id ? view.last_run.task_status : null}
+            after={hasAgent && i > agentAt}
             onOpen={() => setEditing({ index: i, fresh: false })}
         />
     ))
@@ -255,7 +266,7 @@ export function StepsField({
             type='button'
             className='step-node add'
             onClick={() => setAdding(true)}
-            title='Add a step before the agent'
+            title='Add a step before the agent (Later in its window moves a script below the agent)'
         >
             <span className='step-node-plus'>
                 <Icon
@@ -312,12 +323,11 @@ export function StepsField({
                     model={model}
                     routine={routine}
                     skill={skill}
-                    canMoveUp={open.index > 0 && kindOf(steps[open.index]) !== 'agent'}
-                    canMoveDown={
-                        open.index < steps.length - 1 &&
-                        kindOf(steps[open.index]) !== 'agent' &&
-                        kindOf(steps[open.index + 1]) !== 'agent'
-                    }
+                    after={hasAgent && open.index > agentAt}
+                    canMoveUp={canMove(open.index, -1)}
+                    canMoveDown={canMove(open.index, 1)}
+                    nextIsAgent={kindOf(steps[open.index + 1] ?? {}) === 'agent'}
+                    previousIsAgent={kindOf(steps[open.index - 1] ?? {}) === 'agent'}
                     onApply={(next) => {
                         onChange(steps.map((x, j) => (j === open.index ? next : x)))
                         setEditing(null)
@@ -353,6 +363,23 @@ export function StepsField({
     )
 }
 
+/** A step that may run after the agent: a script that is not a source. */
+const canFollowAgent = (step: RawStep) => kindOf(step) === 'run' && step.items !== true
+
+/** The step without `if:`, which means nothing before the agent. */
+function withoutIf(step: RawStep): RawStep {
+    const { if: _if, ...rest } = step
+    return rest
+}
+
+/** When a script after the agent runs (`if:`). */
+type StepIf = 'success' | 'failure' | 'always'
+const ifOf = (step: RawStep): StepIf => {
+    const value = str(step.if)
+    return value === 'failure' || value === 'always' ? value : 'success'
+}
+const IF_LABEL: Record<StepIf, string> = { success: 'if it succeeded', failure: 'if it failed', always: 'always' }
+
 const KIND_ICON: Record<StepKind, IconName> = { run: 'script', 'github-prs': 'pr', trac: 'ticket', agent: 'agents' }
 
 /** A step's card in the graph: its state, kind, name, what it is for and what it misses. */
@@ -363,6 +390,7 @@ function StepNode({
     edited,
     last,
     agentStatus,
+    after,
     onOpen
 }: {
     index: number
@@ -372,6 +400,8 @@ function StepNode({
     last?: RoutineStepResult
     /** The agent step: how the last run's task is doing (it has no step result of its own). */
     agentStatus?: TaskStatus | null
+    /** A script after the agent: it says when it runs. */
+    after: boolean
     onOpen: () => void
 }) {
     const kind = kindOf(step)
@@ -443,6 +473,7 @@ function StepNode({
                     />
                     {kind === 'run' ? 'Script' : KIND_LABEL[kind]}
                 </span>
+                {after && <span className='step-node-time'>{IF_LABEL[ifOf(step)]}</span>}
                 <span className='grow' />
                 {edited ? (
                     <span className='step-node-time'>unsaved</span>
@@ -493,8 +524,11 @@ function StepWindow({
     model,
     routine,
     skill,
+    after,
     canMoveUp,
     canMoveDown,
+    nextIsAgent,
+    previousIsAgent,
     onApply,
     onCancel,
     onRemove,
@@ -512,8 +546,13 @@ function StepWindow({
     model: ReactNode
     routine: string | null
     skill: string | null
+    /** A script after the agent. */
+    after: boolean
     canMoveUp: boolean
     canMoveDown: boolean
+    /** Later / Earlier would take the step across the agent. */
+    nextIsAgent: boolean
+    previousIsAgent: boolean
     onApply: (next: RawStep) => void
     onCancel: () => void
     onRemove: () => void
@@ -562,7 +601,7 @@ function StepWindow({
             icon='routines'
             size={kind === 'run' ? 'large' : 'wide'}
             title={`${index + 1}. ${kind === 'agent' ? 'Agent' : name}`}
-            description={`${KIND_LABEL[kind]}${fresh ? ' · new step' : ''}${changed ? ' · changed' : ''}`}
+            description={`${KIND_LABEL[kind]}${after ? ' after the agent' : ''}${fresh ? ' · new step' : ''}${changed ? ' · changed' : ''}`}
             content={
                 <StepCard
                     index={index}
@@ -572,6 +611,7 @@ function StepWindow({
                     model={model}
                     routine={routine}
                     skill={skill}
+                    after={after}
                     facts={facts(draft)}
                     needs={needs(draft)}
                     lastRun={lastRun}
@@ -590,7 +630,13 @@ function StepWindow({
                                     variant='ghost'
                                     onClick={() => onMove(-1)}
                                     disabled={!canMoveUp || changed}
-                                    title={changed ? 'Apply or drop the changes first' : 'Run it one step earlier'}
+                                    title={
+                                        changed
+                                            ? 'Apply or drop the changes first'
+                                            : previousIsAgent
+                                              ? 'Run it before the agent again'
+                                              : 'Run it one step earlier'
+                                    }
                                 >
                                     ← Earlier
                                 </Button>
@@ -599,7 +645,15 @@ function StepWindow({
                                     variant='ghost'
                                     onClick={() => onMove(1)}
                                     disabled={!canMoveDown || changed}
-                                    title={changed ? 'Apply or drop the changes first' : 'Run it one step later'}
+                                    title={
+                                        changed
+                                            ? 'Apply or drop the changes first'
+                                            : nextIsAgent
+                                              ? canMoveDown
+                                                  ? "Run it after the agent: once the agent's task has ended"
+                                                  : 'A source stays before the agent'
+                                              : 'Run it one step later'
+                                    }
                                 >
                                     Later →
                                 </Button>
@@ -693,7 +747,7 @@ function AddStepWindow({
             icon='routines'
             busy={busy}
             title='Add a step'
-            description='It goes before the agent; open it afterwards to fill it in.'
+            description='It goes before the agent (a script can move below it with Later); open it afterwards to fill it in.'
             footer={<Button onClick={close}>Cancel</Button>}
         >
             <div className='step-choices'>
@@ -756,6 +810,7 @@ function StepCard({
     model,
     routine,
     skill,
+    after,
     facts,
     needs: envNeeds,
     lastRun,
@@ -770,6 +825,8 @@ function StepCard({
     model: ReactNode
     routine: string | null
     skill: string | null
+    /** A script after the agent: when it runs instead of whether it prints items. */
+    after: boolean
     /** What the saved file says about this step, when the card has not changed since. */
     facts?: RoutineStepView
     /** What it needs from the environment: the saved file's view, kept while the card is edited. */
@@ -791,7 +848,11 @@ function StepCard({
                 checked={step.continue_on_error === true}
                 onChange={(on) => onChange({ ...step, continue_on_error: on || undefined })}
                 label='Continue if it fails'
-                title='The next steps and the agent still run; the error reaches the agent as this step’s output'
+                title={
+                    after
+                        ? 'The next scripts still run'
+                        : 'The next steps and the agent still run; the error reaches the agent as this step’s output'
+                }
             />
             <Check
                 checked={step.enabled !== false}
@@ -981,13 +1042,36 @@ function StepCard({
                     wide
                 >
                     <div className='row wrap step-checks'>
-                        <Check
-                            checked={step.items === true}
-                            onChange={(on) => onChange({ ...step, items: on ? true : undefined, new_only: undefined })}
-                            label='Prints a list of items'
-                            title='key⇥title per line, or JSON; an empty list means no agent'
-                        />
-                        {step.items === true && (
+                        {after ? (
+                            <label className='row'>
+                                <span>Runs</span>
+                                <select
+                                    value={ifOf(step)}
+                                    onChange={(e) =>
+                                        onChange({
+                                            ...step,
+                                            if: e.target.value === 'success' ? undefined : e.target.value
+                                        })
+                                    }
+                                    aria-label='When it runs'
+                                    title='AGENT_STATUS, AGENT_RESULT, TASK_ID and PR_URL tell the script how the agent did'
+                                >
+                                    <option value='success'>when the agent succeeded</option>
+                                    <option value='failure'>when the agent failed</option>
+                                    <option value='always'>always (stopped runs too)</option>
+                                </select>
+                            </label>
+                        ) : (
+                            <Check
+                                checked={step.items === true}
+                                onChange={(on) =>
+                                    onChange({ ...step, items: on ? true : undefined, new_only: undefined })
+                                }
+                                label='Prints a list of items'
+                                title='key⇥title per line, or JSON; an empty list means no agent'
+                            />
+                        )}
+                        {!after && step.items === true && (
                             <Check
                                 checked={step.new_only !== false}
                                 onChange={(on) => onChange({ ...step, new_only: on ? undefined : false })}

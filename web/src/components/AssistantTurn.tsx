@@ -16,10 +16,20 @@ interface Delegation {
     fallback: string | null
 }
 
+/** What the supervisor recorded when a routine's run handed work to a project's chat (`hand_off`). */
+interface HandOff {
+    task_id: string
+    conversation_id: string
+    project: string
+    agent: string | null
+    title: string
+}
+
 type Segment =
     | { kind: 'text'; text: string; agent: string | null }
     | { kind: 'steps'; events: TaskEvent[] }
     | { kind: 'delegate'; delegation: Delegation }
+    | { kind: 'handoff'; handoff: HandOff }
 
 /**
  * Prose stays prose; everything the agent did in between (tool calls,
@@ -31,6 +41,10 @@ function segments(events: TaskEvent[]): Segment[] {
     for (const e of events) {
         if (e.type === 'status' && e.payload.delegate) {
             out.push({ kind: 'delegate', delegation: e.payload.delegate as Delegation })
+            continue
+        }
+        if (e.type === 'status' && e.payload.handoff) {
+            out.push({ kind: 'handoff', handoff: e.payload.handoff as HandOff })
             continue
         }
         if (e.type === 'status' || e.type === 'error' || e.type === 'llm' || e.type === 'limits') continue
@@ -129,6 +143,35 @@ function DelegateCard({ delegation: d }: { delegation: Delegation }) {
     )
 }
 
+/** Work handed to a project's chat: which chat, and the way into it (it outlives the run). */
+function HandOffCard({ handoff: h }: { handoff: HandOff }) {
+    return (
+        <div className='delegate-card'>
+            <Tile
+                name={h.agent ?? h.project}
+                kind={h.agent ? 'agents' : 'projects'}
+                small
+            />
+            <div className='grow'>
+                <div>
+                    Handed to a chat: <strong>{h.title}</strong>
+                </div>
+                <div className='dim'>
+                    {h.project}
+                    {h.agent ? ` · as ${h.agent}` : ''}
+                </div>
+            </div>
+            <Button
+                size='sm'
+                variant='ghost'
+                to={`/chat/${h.conversation_id}`}
+            >
+                Chat
+            </Button>
+        </div>
+    )
+}
+
 /** `onTask`: the task row after the owner answered what it asked (its `ask` gone or advanced). */
 export function AssistantTurn({
     task,
@@ -195,6 +238,11 @@ export function AssistantTurn({
                         <DelegateCard
                             key={i}
                             delegation={p.delegation}
+                        />
+                    ) : p.kind === 'handoff' ? (
+                        <HandOffCard
+                            key={i}
+                            handoff={p.handoff}
                         />
                     ) : (
                         <Steps

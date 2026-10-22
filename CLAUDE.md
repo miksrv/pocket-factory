@@ -106,7 +106,8 @@ against the container on `WEB_PORT` from `.env` (:8000 on the owner's laptop; :8
     sandbox may reach), `previews.ts` (one preview per project, its key, publishing, TTL)
   - `gateway/` — the provider gateway (`/gateway/<name>`, outside `/api`), `translate.ts`
     Anthropic Messages ↔ OpenAI chat completions, streaming included; MCP pass-through;
-    `factory.ts` the factory's own MCP server per task (`/factory/<task>/mcp`, tool `delegate`)
+    `factory.ts` the factory's own MCP server per task (`/factory/<task>/mcp`, tools `delegate`,
+    `preview`, `hand_off`)
   - `sharing/` — `zip.ts` (a dependency-free ZIP writer / reader: no links, no paths that climb out,
     size limits), `bundle.ts` (the preset layout as a bundle: read a ZIP / a folder / one Markdown
     file, install the picked items, export with masked secrets); `/api/share/export` and
@@ -411,8 +412,13 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 - **Prefilters are gone (1.6.0, owner's call)**: everything a run does before the agent is a step of
   the pipeline. `steps:` is a list of `- run: <bash>` (optional `name:`, `cwd:` relative to the
   checkout, `timeout_s:` 300, `items: true` makes it a source, `new_only:`), `- github-prs: {repo,
-  filter, mine, drafts, new_only}`, `- trac: {url, query, on_change, max, new_only}` and, last and
-  at most once, `- agent: <name | orchestrator>` with `skill:`. `routines/steps.ts` runs the
+  filter, mine, drafts, new_only}`, `- trac: {url, query, on_change, max, new_only}`, at most once
+  `- agent: <name | orchestrator>` with `skill:`, and after it only scripts (1.8.0, `- run:` without
+  `items`, `if: success | failure | always`): they run when the run's task has ended (`cancelled`
+  runs only `always`), with AGENT_STATUS, AGENT_RESULT (32 KB), TASK_ID, TASK_URL, PR_URL on top of
+  the steps' env; a failing one stops the rest unless `continue_on_error`; their results are added
+  to the same run's row and told in Telegram (`after` event); another firing meanwhile is skipped.
+  Lost if the supervisor restarts in between (in memory). `routines/steps.ts` runs the
   pipeline (`bash -c` in its own process group, in the sandbox marked as one run; SIGTERM then SIGKILL on timeout; env = the agent's
   plus `ROUTINE`, `ROUTINE_FILE`, `ROUTINE_DIR`, `PROJECT`, `PROJECT_DIR`, `SKILL_DIR`, and the vault's
   values in its scope); `routines/sources.ts` has
@@ -470,6 +476,21 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   `tz:` / `window:` are honoured but not offered. The file routes refuse a save older than the file
   (409 "changed on disk") since the agent edits routines every run. `/api/routines/*` and
   `/routines` only: no aliases or redirects for the old paths (single owner, no outside scripts).
+- **Hand-off** (1.8.0): a routine's run on the subscription whose file lists `hand_off: [projects]`
+  (kept in the file, not in the form; none = no tool) has the factory MCP's `hand_off({project,
+  agent, prompt, title})`, to those projects only (an injected ticket must not open a chat in
+  another project's sandbox with its secrets): a new visible `web` chat bound to the project, its task (`source:
+  handoff`, `tasks.handed_by` = the run) runs as the agent in that checkout and sandbox, and the
+  call waits for it (SSE progress, the factory server's 12 h call limit). Owner's rules: one chat
+  per piece of work, the chat outlives the run (the owner goes on there, as the same agent: a
+  message there runs as the handed task's agent), the run's stop stops the
+  chat's task, its questions go to Telegram at once (auto-answered after `ROUTINES_ASK_TIMEOUT_MIN`)
+  and its reply does not (the run reports). It borrows the run's slot like a delegated role; the
+  same brief again (a resumed run) joins the chat, a failed one is asked again in the same chat.
+  Not `parent_id`: a delegated role is hidden, answered for and dies with its parent. A second
+  firing while a run goes is skipped, never queued (owner, 1.8.0). The use case is the owner's
+  `trac-bugs` routine (shared by export, not a preset): one bug per run, `data/bugs.csv` synced by a
+  script, the dispatcher asks, the fixer works in the project's chat.
 - **A routine's chat thread is a log** (owner's rule): project, provider and model are the routine
   file's, so the thread's head shows them as text with a link to the routine, the API refuses to
   change them or to take a message there (409) unless a run's question is open, and a run never
@@ -559,7 +580,7 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
 
 1. Routines: trigger `api` (a per-routine token, `POST /api/routines/<name>/fire`, an optional
    payload handed over as an untrusted item; covers `POST /api/tasks/fire` too); an IMAP source;
-   steps after the agent (publish what it wrote); renaming a routine's folder; a step's output as
+   renaming a routine's folder; a step's output as
    a live log while it runs; whether the Trac source needs `/login` is unverified.
 2. From `docs/LANDSCAPE.md`: worktree per project for parallel tasks, "Always allow" rules,
    "continue in chat" for a laptop session, Merge from the UI, files back

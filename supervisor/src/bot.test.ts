@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+    afterNotice,
     askMessage,
     askTag,
     askTap,
@@ -195,6 +196,43 @@ describe('routineNotice', () => {
         expect(routineNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toBeNull()
         expect(routineNotice(run('queued', null), spec(), seen, 'UTC')).toBeNull()
         expect(routineNotice(run('error', 'prefilter trac: 401'), spec(), seen, 'UTC')).toContain('could not run')
+    })
+})
+
+describe('afterNotice', () => {
+    const run = {
+        id: 1,
+        schedule: 'geo',
+        fired_at: '',
+        trigger: 'manual',
+        status: 'queued',
+        note: null,
+        items: 0,
+        task_id: 't1',
+        duration_ms: 0,
+        steps: null,
+        task_status: 'done'
+    } as RoutineRun
+    const steps = [
+        { index: 2, name: 'Publish', kind: 'run' as const, ok: true, ms: 1200, log: '' },
+        { index: 3, name: 'Ping', kind: 'run' as const, ok: false, ms: 300, log: '' }
+    ]
+    const outputs = [
+        { name: 'Publish', output: 'https://example.com/places/1', ms: 1200, truncated: false },
+        { name: 'Ping', output: 'failed: exit 1', ms: 300, truncated: false }
+    ]
+
+    it('says how each script after the agent went, with the head of what it printed', () => {
+        const text = afterNotice(run, { notify: 'telegram' } as RoutineSpec, steps, outputs)!
+        expect(text).toContain('⏱ **geo**, after the agent:')
+        expect(text).toContain('✅ Publish (1 s)')
+        expect(text).toContain('https://example.com/places/1')
+        expect(text).toContain('❌ Ping (0 s)')
+    })
+
+    it('stays quiet for a routine that says notify: none, or when nothing ran', () => {
+        expect(afterNotice(run, { notify: 'none' } as RoutineSpec, steps, outputs)).toBeNull()
+        expect(afterNotice(run, { notify: 'telegram' } as RoutineSpec, [], [])).toBeNull()
     })
 })
 

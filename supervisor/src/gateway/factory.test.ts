@@ -182,7 +182,7 @@ describe('factory MCP server: preview', () => {
         const task = t.ctx.tasks.submit(conversation.id, 'web', 'hello')
         await vi.waitFor(() => expect(t.ctx.tasks.task(task.id)?.status).toBe('running'), { timeout: 10_000 })
         await vi.waitFor(() => expect(fs.existsSync(path.join(dump, 'args'))).toBe(true), { timeout: 10_000 })
-        expect(t.ctx.tasks.factoryTools(task.id)).toEqual({ delegate: false, preview: false })
+        expect(t.ctx.tasks.factoryTools(task.id)).toEqual({ delegate: false, preview: false, handoff: false })
         const call = (await (
             await rpc(task.id, {
                 jsonrpc: '2.0',
