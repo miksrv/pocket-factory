@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 
 import { Hono } from 'hono'
 
-import { fetchError, missingKey } from '../files/providers.js'
+import { fetchError, fetchRetrying, missingKey } from '../files/providers.js'
 import { createLogger } from '../logger.js'
 import type { Env } from '../web/context.js'
 import {
@@ -97,7 +97,7 @@ export function gatewayRoutes(): Hono<Env> {
         try {
             const upstream =
                 provider.kind === 'openai'
-                    ? await fetch(`${provider.url}/chat/completions`, {
+                    ? await fetchRetrying(`${provider.url}/chat/completions`, {
                           method: 'POST',
                           headers: {
                               'content-type': 'application/json',
@@ -107,7 +107,7 @@ export function gatewayRoutes(): Hono<Env> {
                           body: JSON.stringify(toOpenAiRequest(body)),
                           signal
                       })
-                    : await fetch(`${provider.url}/v1/messages`, {
+                    : await fetchRetrying(`${provider.url}/v1/messages`, {
                           method: 'POST',
                           headers: {
                               ...Object.fromEntries(
@@ -126,9 +126,14 @@ export function gatewayRoutes(): Hono<Env> {
                 const text = (await upstream.text().catch(() => '')).slice(0, 2000)
                 tasks.noteProvider(name, false, `${upstream.status}: ${text || upstream.statusText}`)
                 log.warn(`${name}: ${upstream.status} ${text.slice(0, 200)}`)
-                // The CLI reads the Messages error shape whatever the provider said.
+                // The CLI reads the Messages error shape whatever the provider said. It retries only 429
+                // and 5xx, so a box's proxy timing out (408) or seeing the connection drop (499) is a 502.
                 return anthropicError(
-                    upstream.status === 429 ? 429 : upstream.status >= 500 ? 502 : upstream.status,
+                    upstream.status === 429
+                        ? 429
+                        : upstream.status >= 500 || upstream.status === 408 || upstream.status === 499
+                          ? 502
+                          : upstream.status,
                     `${name}: ${text || upstream.statusText}`,
                     upstream.status === 429 ? 'rate_limit_error' : 'api_error'
                 )
@@ -177,10 +182,13 @@ export function gatewayRoutes(): Hono<Env> {
         const key = providers.mcpKey(server)
         if (server.token && !key) return c.json({ error: `${name}/${server.name}: ${missingKey(server.token)}` }, 401)
         const method = c.req.method
+        // Read once: a retried request sends the same bytes again.
+        const body =
+            method === 'GET' || method === 'HEAD' || method === 'DELETE' ? undefined : await c.req.arrayBuffer()
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), MCP_CONNECT_TIMEOUT_MS)
         try {
-            const upstream = await fetch(server.url, {
+            const upstream = await fetchRetrying(server.url, {
                 method,
                 headers: {
                     ...Object.fromEntries(
@@ -191,10 +199,7 @@ export function gatewayRoutes(): Hono<Env> {
                     ),
                     ...(key ? { authorization: `Bearer ${key}` } : {})
                 },
-                body:
-                    method === 'GET' || method === 'HEAD' || method === 'DELETE'
-                        ? undefined
-                        : await c.req.arrayBuffer(),
+                body,
                 // Headers within the timeout; then the stream lives as long as the CLI keeps it open.
                 signal: AbortSignal.any([controller.signal, c.req.raw.signal])
             })

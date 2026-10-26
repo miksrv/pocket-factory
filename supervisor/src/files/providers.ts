@@ -157,6 +157,36 @@ export function modelRef(provider: string | null, model: string | null): string 
     return model ? `${provider}:${model}` : provider
 }
 
+/** Failures before the box answered anything: a lost SYN or a dropped connection on a lossy route. */
+const RETRY_CODES = new Set([
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_SOCKET',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'EHOSTUNREACH',
+    'ENETUNREACH'
+])
+const RETRY_PAUSE_MS = 2_000
+
+/**
+ * `fetch` to a provider, tried again on a connection failure (`attempts` in all, the last error
+ * thrown). fetch's own connect timeout is a fixed ten seconds, so three attempts give a box across a
+ * lossy international route half a minute to answer. The body must be reusable (a string or a buffer).
+ */
+export async function fetchRetrying(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await fetch(url, init)
+        } catch (error) {
+            const code = (error as { cause?: { code?: string } })?.cause?.code ?? ''
+            if (attempt >= attempts || init.signal?.aborted || !RETRY_CODES.has(code)) throw error
+            await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS))
+            if (init.signal?.aborted) throw error
+        }
+    }
+}
+
 /** A failed fetch in words, with what to do when it is the certificate of a self-signed box. */
 export function fetchError(error: unknown): string {
     const cause = (error as { cause?: { code?: string; message?: string } })?.cause
