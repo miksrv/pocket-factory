@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.1
+
+### Patch Changes
+
+- Providers: a box behind a lossy route gets up to half a minute to connect (model calls, its MCP servers, the check before delegating), and a dropped connection (499) is retried by the CLI instead of failing the role
+
 ## 1.8.0
 
 ### Minor Changes

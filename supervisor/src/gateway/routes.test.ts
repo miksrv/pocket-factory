@@ -95,6 +95,29 @@ describe('gateway /v1/messages', () => {
         await vi.advanceTimersByTimeAsync(10 * 60_000)
         expect((await answer).status).toBe(502)
     })
+
+    it('tries again when the connection to the box fails', async () => {
+        const connectTimeout = Object.assign(new TypeError('fetch failed'), {
+            cause: { code: 'UND_ERR_CONNECT_TIMEOUT', message: 'Connect Timeout Error' }
+        })
+        const fetchMock = vi
+            .fn()
+            .mockRejectedValueOnce(connectTimeout)
+            .mockResolvedValueOnce(
+                Response.json({ id: 'x', choices: [{ message: { role: 'assistant', content: 'Hi' } }] })
+            )
+        vi.stubGlobal('fetch', fetchMock)
+        const { app } = gateway()
+        const answer = await messages(app, false)
+        expect(answer.status).toBe(200)
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('turns a dropped connection (499) into a 502 the CLI retries', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 499 })))
+        const { app } = gateway()
+        expect((await messages(app, false)).status).toBe(502)
+    })
 })
 
 describe('translateStream', () => {

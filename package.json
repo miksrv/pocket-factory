@@ -1,6 +1,6 @@
 {
     "name": "pocket-factory",
-    "version": "1.8.0",
+    "version": "1.8.1",
     "private": true,
     "description": "Personal software factory: Claude Code on a VPS, driven from Telegram by text or voice",
     "license": "MIT",
@@ -34,7 +34,7 @@
         "@playwright/test": "^1.64.1",
         "@types/node": "^22.20.5",
         "@vitest/coverage-v8": "^5.0.5",
-        "@vitest/eslint-plugin": "^1.6.27",
+        "@vitest/eslint-plugin": "1.6.27",
         "eslint": "^10.13.0",
         "eslint-config-prettier": "^10.1.8",
         "eslint-plugin-playwright": "^2.12.1",
@@ -43,8 +43,8 @@
         "globals": "^17.13.0",
         "prettier": "^3.9.10",
         "typescript": "^5.9.0",
-        "typescript-eslint": "^8.71.2",
-        "vite": "^8.3.2",
+        "typescript-eslint": "^8.72.1",
+        "vite": "^8.3.5",
         "vitest": "^5.0.5"
     }
 }

@@ -17,7 +17,7 @@ import {
 import type { Config } from '../config.js'
 import type { AgentFile } from '../files/agentFiles.js'
 import { type Attachment, attachmentNote, Inbox } from '../files/inbox.js'
-import { fetchError, MAX_OUTPUT_DEFAULT, type Provider, type Providers } from '../files/providers.js'
+import { fetchError, fetchRetrying, MAX_OUTPUT_DEFAULT, type Provider, type Providers } from '../files/providers.js'
 import {
     type ChangedFile,
     createPullRequest,
@@ -154,7 +154,7 @@ const DELEGATE_PROGRESS_MS = 30_000
 
 /** How long a provider's reachability answer holds, and how long the check may take. */
 const REACH_CACHE_MS = 60_000
-const REACH_TIMEOUT_MS = 10_000
+const REACH_TIMEOUT_MS = 30_000
 
 /** What a `delegate` call ends with. */
 export interface DelegateOutcome {
@@ -1481,14 +1481,14 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     /**
-     * Whether a provider answers at all: any HTTP status below 500 on its models route within ten
-     * seconds. Cheap on purpose: it must not load a model into a GPU (a cold start takes minutes).
-     * A failure is remembered for a minute so a burst of delegations does not wait ten seconds each.
+     * Whether a provider answers at all: any HTTP status below 500 on its models route within half
+     * a minute (a failed connection is tried again). Cheap on purpose: it must not load a model into a GPU (a cold start takes minutes).
+     * A failure is remembered for a minute so a burst of delegations does not wait half a minute each.
      */
     async reachable(provider: Provider): Promise<string | null> {
         const known = this.reach.get(provider.name)
         if (known && Date.now() - known.at < REACH_CACHE_MS) return known.error
-        // One check at a time per provider: the Overview polls every few seconds while a dead box takes ten.
+        // One check at a time per provider: the Overview polls every few seconds while a dead box takes thirty.
         const pending = this.reaching.get(provider.name)
         if (pending) return pending
         const check = this.checkReach(provider).finally(() => this.reaching.delete(provider.name))
@@ -1500,10 +1500,13 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         const key = this.providers.key(provider)
         let error: string | null = null
         try {
-            const response = await fetch(`${provider.url}${provider.kind === 'openai' ? '/models' : '/v1/models'}`, {
-                headers: key ? { authorization: `Bearer ${key}`, 'x-api-key': key } : {},
-                signal: AbortSignal.timeout(REACH_TIMEOUT_MS)
-            })
+            const response = await fetchRetrying(
+                `${provider.url}${provider.kind === 'openai' ? '/models' : '/v1/models'}`,
+                {
+                    headers: key ? { authorization: `Bearer ${key}`, 'x-api-key': key } : {},
+                    signal: AbortSignal.timeout(REACH_TIMEOUT_MS)
+                }
+            )
             await response.body?.cancel()
             if (response.status >= 500) error = `${provider.name} answered ${response.status}`
         } catch (e) {

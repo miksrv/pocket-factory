@@ -14,8 +14,9 @@ What you get on the box:
 | **Caddy** | the only thing reachable from outside: TLS on one port, a bearer token in front of Ollama, everything else answers 401 |
 | **SearXNG + mcp-searxng** (optional) | web search, suggestions and page reading as an MCP server, so the model can research |
 
-Tested with an RTX 2080 Ti (11 GB), Ubuntu 26.04, Ollama 0.40, `gemma4:12b` and `qwen3.5:9b`.
-Any Linux box with Docker and an NVIDIA card works the same; a CPU-only box works too, slowly.
+Tested with an RTX 5060 Ti (16 GB) and before it an RTX 2080 Ti (11 GB), Ubuntu 26.04,
+Ollama 0.40, `gemma4:12b`, `qwen3.5:9b` and `qwen3:14b`. Any Linux box with Docker and an NVIDIA
+card works the same; a CPU-only box works too, slowly.
 
 ## 1. Prerequisites on the box
 
@@ -23,6 +24,17 @@ Any Linux box with Docker and an NVIDIA card works the same; a CPU-only box work
 - For a GPU: the NVIDIA driver and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
   (`nvidia-ctk runtime configure --runtime=docker`, then restart Docker). Check with
   `docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi`.
+- An RTX 50 card (Blackwell) runs only with NVIDIA's **open** kernel modules. With the
+  proprietary ones `nvidia-smi` says "No devices were found" and `dmesg` says "requires use of
+  the NVIDIA open kernel modules". On Ubuntu install `linux-modules-nvidia-580-open-generic`
+  (it follows kernel updates) and `linux-modules-nvidia-580-open-$(uname -r)`, remove the
+  `linux-modules-nvidia-580-*` packages without `open`, then reboot or reload the modules
+  (`sudo modprobe -r nvidia_drm nvidia_uvm nvidia_modeset nvidia && sudo modprobe nvidia
+  nvidia_uvm`). The driver itself (`nvidia-utils-580`) stays as it is. Swapping in such a card
+  later is the same fix.
+- The `nvidia` and `nvidia_uvm` modules loaded at boot (`/etc/modules-load.d/nvidia.conf`, one
+  name per line): a server without a desktop may not load `nvidia_uvm` until something asks for
+  it, and Ollama then starts without the GPU.
 - A CDI spec for the GPU: `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml` (again after
   every driver upgrade). The compose file below asks for the GPU through CDI because the older
   `driver: nvidia` request loses the device on a cgroup v2 host after any `systemctl
@@ -176,9 +188,10 @@ docker compose exec ollama ollama pull qwen3.5:9b
 docker compose logs caddy | grep "certificate obtained"
 ```
 
-Which models: a 12B model in q4 with a 64k context fits 11 GB; a 14B does not (Ollama offloads
-to the CPU and the box crawls). Check `nvidia-smi` while a model answers: the whole model should
-be in VRAM. Pick models that **call tools**: the factory's agents work only through tool calls.
+Which models: on 11 GB a 12B model in q4 with a 64k context fits, a 14B does not (Ollama offloads
+a fifth of it to the CPU and a task takes ten minutes). On 16 GB `qwen3:14b` fits whole at 64k
+(12.7 GB), and `qwen3.5:9b` takes about 9 GB even at a 128k context. Check `nvidia-smi` while a
+model answers: the whole model should be in VRAM. Pick models that **call tools**: the factory's agents work only through tool calls.
 In our runs `gemma4:12b` wrote clean text and called tools reliably, `qwen3.5:9b` researched
 more thoroughly but wrote worse; an agent that researches with one and edits with the other
 gave the best articles.
@@ -283,7 +296,18 @@ On the factory host (the directory with `docker-compose.yml` and `data/`):
 - A task on the box touches no subscription window; the footer and the task page name the
   provider and the model instead of the window share. Tokens are counted from the model's own
   usage report; with Ollama's Messages API output tokens may show as 0 (known gap).
-- Speed on a 2080 Ti: ~25 tokens/s generation, 1–2k tokens/s prompt evaluation. The cost of a
+- Speed (Ollama 0.40, 64k context, KV q8_0, model already loaded; prompt = an 8–13k token text):
+
+  | Model | RTX 2080 Ti 11 GB | RTX 5060 Ti 16 GB |
+  |---|---|---|
+  | `gemma4:12b` | ~25 tokens/s | 75 tokens/s, prompt ~1.4k tokens/s |
+  | `qwen3.5:9b` | ~25 tokens/s | 58 tokens/s, prompt ~3.1k tokens/s |
+  | `qwen3:14b` | does not fit, a fifth on the CPU | 41 tokens/s, prompt ~1.5–2k tokens/s |
+
+  The first answer after a model loads is slower (40 tokens/s for `gemma4:12b`), and a cold
+  load takes 20–140 s. Under ten minutes of steady generation the 5060 Ti held 74 tokens/s at
+  76 °C on average (79 °C at most), 173 W against its 180 W cap, fan at 54 %, no throttling; the
+  2080 Ti ran at 84 °C on average, 88 °C at the peak, 275 W. The cost of a
   task is re-reading the growing context every turn, not the writing: keep tasks short and
   make the agent save results to files early.
 - Anthropic's own tools do not exist here: no `WebSearch`, no claude.ai connectors (Gmail,
