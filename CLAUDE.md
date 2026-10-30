@@ -326,10 +326,13 @@ the branch or release (`Delegation in CLAUDE.md, the README and the providers pl
   in every subscription session so the role never runs on Claude. The role is a child task
   (`parent_id`, source and hidden conversation `delegate`) in `data/inbox/<parent chat>/delegate/
   <child>/`; it borrows the waiting parent's slot, dies with the parent, and a repeated call with
-  the same agent + prompt (a resumed parent) joins it. A provider that does not answer, fails
-  mid-run, or is not in the project file's `providers:` list → the role runs on the subscription
-  with the orchestrator's model (`fallback:` alias, or `none` to report instead). Owner's rule:
-  a dead box must never break the task.
+  the same agent + prompt (a resumed parent) joins it. A provider that is not in the project
+  file's `providers:` list → the role runs on the subscription with the orchestrator's model
+  (`fallback:` alias, or `none` to report instead). One that does not answer or fails mid-run →
+  the parent asks the owner (1.8.2, owner's call: the switch must be explicit): Stop / Retry / Run
+  on Claude, a supervisor-made question on the parent (`askProvider`, web + Telegram buttons); a
+  routine's unanswered one (`ROUTINES_ASK_TIMEOUT_MIN`) stops the run, `fallback: none` reports
+  without asking. A dead box still never breaks the task by itself.
 - No money for providers yet (owner's open call). A project delegates only to providers its file
   lists, so code that must not leave for a given box never does; `docs/SELF_HOSTED_LLM.md` is the
   forker's guide to such a box.

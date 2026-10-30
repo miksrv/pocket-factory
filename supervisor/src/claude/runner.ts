@@ -175,6 +175,9 @@ export interface RunHandle {
     kill: () => void
     /** Answer a pending `ask`; false when no such request is waiting or the answer cannot reach the CLI (answered, cancelled, stdin closed, or the run ended). */
     answer: (requestId: string, response: AskResponse) => boolean
+    /** The supervisor asks the owner something for this run (`id`): the wall-clock limit pauses until `release(id)`, like for the CLI's own requests. */
+    hold: (id: string) => void
+    release: (id: string) => void
 }
 
 /** How long a stopped CLI gets to exit on its own before SIGKILL. */
@@ -392,6 +395,9 @@ export function runClaude(options: RunOptions): RunHandle {
     // thinking time: it is paused while a request waits and goes on with
     // what was left once the last one is answered.
     const pending = new Set<string>()
+    /** The supervisor's own questions for this run: they pause the limit too, but the CLI knows nothing of them. */
+    const held = new Set<string>()
+    const waiting = () => pending.size + held.size > 0
     let timeout: NodeJS.Timeout | undefined
     let remainingMs = options.timeoutMs ?? 0
     let deadline = 0
@@ -419,7 +425,7 @@ export function runClaude(options: RunOptions): RunHandle {
             type: 'control_response',
             response: { subtype: 'success', request_id: requestId, response }
         })
-        if (pending.size === 0) armTimeout()
+        if (!waiting()) armTimeout()
         return sent
     }
 
@@ -438,7 +444,7 @@ export function runClaude(options: RunOptions): RunHandle {
 
     const attach = (child: ChildProcess, resolve: (r: RunResult) => void, reject: (e: Error) => void) => {
         // Armed once the CLI runs: making or starting its sandbox is not the agent's time.
-        armTimeout()
+        if (!waiting()) armTimeout()
         // A prompt larger than the pipe buffer raises EPIPE when the CLI exits
         // before reading it (bad --resume id, auth error). Unhandled, that would
         // crash the supervisor; `close` reports the real failure anyway.
@@ -519,7 +525,7 @@ export function runClaude(options: RunOptions): RunHandle {
             }
             if (event.type === 'control_cancel_request' && event.request_id) {
                 if (pending.delete(event.request_id)) {
-                    if (pending.size === 0) armTimeout()
+                    if (!waiting()) armTimeout()
                     emit({ type: 'ask_cancelled', agent: null, parentToolUseId: null, requestId: event.request_id })
                 }
                 return
@@ -754,5 +760,13 @@ export function runClaude(options: RunOptions): RunHandle {
         )
     })
 
-    return { sessionId, result, kill, answer }
+    const hold = (id: string) => {
+        held.add(id)
+        pauseTimeout()
+    }
+    const release = (id: string) => {
+        if (held.delete(id) && !waiting()) armTimeout()
+    }
+
+    return { sessionId, result, kill, answer, hold, release }
 }
