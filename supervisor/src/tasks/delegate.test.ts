@@ -6,6 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createTestApp, type TestApp } from '../test/app.js'
+import { providerChoice } from './service.js'
 
 /**
  * A `claude` for delegation: it appends its arguments, cwd and endpoint to `$CALLS` (one JSON line
@@ -88,11 +89,24 @@ describe('delegate', () => {
 
     /** An app with the role `writer` on provider `gpu`, and a running orchestrator task. */
     async function setup(
-        options: { url?: string; fallback?: string; project?: string; maxSessions?: number; maxTurns?: number } = {}
+        options: {
+            url?: string
+            fallback?: string
+            project?: string
+            maxSessions?: number
+            maxTurns?: number
+            /** The parent is a routine's run, whose questions are answered for the owner after this many ms. */
+            routineAskMs?: number
+            taskTimeoutMs?: number
+        } = {}
     ) {
         t = createTestApp({
             claude: DELEGATE_CLAUDE,
-            config: (c) => (c.maxConcurrentSessions = options.maxSessions ?? 2)
+            config: (c) => {
+                c.maxConcurrentSessions = options.maxSessions ?? 2
+                if (options.routineAskMs) c.routines.askTimeoutMs = options.routineAskMs
+                if (options.taskTimeoutMs) c.claude.taskTimeoutMs = options.taskTimeoutMs
+            }
         })
         calls = path.join(t.dataRoot, 'calls.jsonl')
         release = path.join(t.dataRoot, 'release')
@@ -120,7 +134,12 @@ describe('delegate', () => {
             project = 'work'
         }
         const conversation = tasks.newConversation('web', null, null, project)
-        const parent = tasks.submit(conversation.id, 'web', 'hold until released')
+        const parent = tasks.submit(
+            conversation.id,
+            'web',
+            'hold until released',
+            options.routineAskMs ? { schedule: 'nightly' } : {}
+        )
         await until(() => store.getTask(parent.id)?.status === 'running')
         return parent
     }
@@ -174,10 +193,23 @@ describe('delegate', () => {
         expect(listed).toHaveLength(1)
     })
 
-    it("falls back to the orchestrator's model when the provider does not answer", async () => {
+    /** Wait for the parent's question about the provider, then answer it with `label`; returns the question asked. */
+    const choose = async (parentId: string, label: string): Promise<string> => {
+        await until(() => t.ctx.store.getTask(parentId)?.ask?.tool_name === 'mcp__factory__delegate')
+        const ask = t.ctx.store.getTask(parentId)!.ask!
+        const question = (ask.input.questions as Array<{ question: string }>)[0].question
+        t.ctx.tasks.answer(parentId, { answers: { [question]: label } })
+        return question
+    }
+
+    it("asks the owner when the provider does not answer, and runs on the orchestrator's model when told", async () => {
         const parent = await setup({ url: 'http://127.0.0.1:1' })
-        const outcome = await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        const question = await choose(parent.id, 'Run on Claude')
+        expect(question).toContain('writer cannot run on gpu: gpu unreachable')
+        const outcome = await pending
         expect(outcome.ok).toBe(true)
+        expect(t.ctx.store.getTask(parent.id)?.ask).toBeNull()
         expect(outcome.task).toMatchObject({ provider: null, model: 'sonnet', agent: 'writer' })
         expect(outcome.text).toContain('Not on gpu: gpu unreachable')
         const run = runs().find((r) => r.prompt.startsWith('Write a note'))!
@@ -188,9 +220,122 @@ describe('delegate', () => {
         expect(append).toContain('WebSearch')
     })
 
-    it('runs the role once more on the subscription when the provider fails mid-run', async () => {
+    it('tries the provider again when the owner says Retry', async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await until(() => t.ctx.store.getTask(parent.id)?.ask?.tool_name === 'mcp__factory__delegate')
+        // The box is back by the time the owner taps Retry.
+        t.ctx.providers.save('gpu', { url: liveUrl, models: ['small'], default: 'small', light: true })
+        await choose(parent.id, 'Retry')
+        const outcome = await pending
+        expect(outcome.task).toMatchObject({ provider: 'gpu', status: 'done' })
+        expect(outcome.text).not.toContain('Not on gpu')
+    })
+
+    it('asks again when the provider still does not answer after Retry', async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await choose(parent.id, 'Retry')
+        // The first question is settled before the second is asked.
+        await until(() => t.ctx.store.listEvents(parent.id).filter((e) => e.type === 'ask').length === 2)
+        await choose(parent.id, 'Run on Claude')
+        const outcome = await pending
+        expect(outcome.task?.provider).toBeNull()
+        const asked = t.ctx.store.listEvents(parent.id).filter((e) => e.type === 'ask')
+        expect(asked).toHaveLength(2)
+    })
+
+    it('stops the run when the owner says Stop, and runs nothing on the subscription', async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await choose(parent.id, 'Stop')
+        const outcome = await pending
+        expect(outcome.ok).toBe(false)
+        expect(outcome.text).toContain('the owner stopped the run')
+        expect(t.ctx.store.childTasks(parent.id)).toHaveLength(0)
+        await until(() => t.ctx.store.getTask(parent.id)?.status === 'cancelled')
+    })
+
+    it('ends the waiting call when the parent is stopped while the question is open', async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await until(() => t.ctx.store.getTask(parent.id)?.ask?.tool_name === 'mcp__factory__delegate')
+        t.ctx.tasks.stop(parent.id)
+        await expect(pending).rejects.toThrow(/not running/)
+        expect(t.ctx.store.childTasks(parent.id)).toHaveLength(0)
+    })
+
+    it('keeps the question open when a typed reply is none of the choices', async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await until(() => t.ctx.store.getTask(parent.id)?.ask?.tool_name === 'mcp__factory__delegate')
+        const question = (t.ctx.store.getTask(parent.id)!.ask!.input.questions as Array<{ question: string }>)[0]
+            .question
+        expect(() => t.ctx.tasks.answer(parent.id, { answers: { [question]: 'check my mail' } })).toThrow(
+            /"Stop", "Retry", "Run on Claude"/
+        )
+        expect(t.ctx.store.getTask(parent.id)?.ask?.tool_name).toBe('mcp__factory__delegate')
+        expect(t.ctx.store.getTask(parent.id)?.status).toBe('running')
+        await choose(parent.id, 'локально')
+        expect((await pending).task?.provider).toBeNull()
+    })
+
+    it("stops a routine's run whose question nobody answers in time", async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1', routineAskMs: 200 })
+        const outcome = await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        expect(outcome.ok).toBe(false)
+        expect(t.ctx.store.childTasks(parent.id)).toHaveLength(0)
+        await until(() => t.ctx.store.getTask(parent.id)?.status === 'cancelled')
+    })
+
+    it("does not count the owner's thinking time against the task's limit", async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1', taskTimeoutMs: 400 })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await until(() => t.ctx.store.getTask(parent.id)?.ask?.tool_name === 'mcp__factory__delegate')
+        await new Promise((r) => setTimeout(r, 800))
+        expect(t.ctx.store.getTask(parent.id)?.status).toBe('running')
+        await choose(parent.id, 'Run on Claude')
+        expect((await pending).ok).toBe(true)
+    })
+
+    it('withdraws the question when the delegate call goes away', async () => {
+        const parent = await setup({ url: 'http://127.0.0.1:1' })
+        const call = new AbortController()
+        const pending = t.ctx.tasks.delegate(
+            parent.id,
+            { agent: 'writer', prompt: 'Write a note' },
+            undefined,
+            call.signal
+        )
+        await until(() => t.ctx.store.getTask(parent.id)?.ask?.tool_name === 'mcp__factory__delegate')
+        call.abort()
+        await expect(pending).rejects.toThrow(/not running/)
+        expect(t.ctx.store.getTask(parent.id)?.ask).toBeNull()
+        expect(t.ctx.store.getTask(parent.id)?.status).toBe('running')
+        expect(t.ctx.store.childTasks(parent.id)).toHaveLength(0)
+    })
+
+    it('tries the provider again after a mid-run failure when the owner says Retry', async () => {
         const parent = await setup()
-        const outcome = await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'boom: write a note' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'boom: write a note' })
+        await choose(parent.id, 'Retry')
+        await until(() => t.ctx.store.childTasks(parent.id).length === 2)
+        await choose(parent.id, 'Run on Claude')
+        const outcome = await pending
+        expect(t.ctx.store.childTasks(parent.id).map((c) => [c.provider, c.status])).toEqual([
+            ['gpu', 'failed'],
+            ['gpu', 'failed'],
+            [null, 'done']
+        ])
+        expect(outcome.ok).toBe(true)
+    })
+
+    it('asks the owner when the provider fails mid-run, and runs once more on the subscription when told', async () => {
+        const parent = await setup()
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'boom: write a note' })
+        const question = await choose(parent.id, 'Run on Claude')
+        expect(question).toContain('gpu failed mid-run')
+        const outcome = await pending
         expect(outcome.ok).toBe(true)
         const children = t.ctx.store.childTasks(parent.id)
         expect(children.map((c) => [c.provider, c.status])).toEqual([
@@ -210,7 +355,14 @@ describe('delegate', () => {
 
     it('uses the alias a file names as its fallback', async () => {
         const parent = await setup({ url: 'http://127.0.0.1:1', fallback: 'haiku' })
-        const outcome = await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        const pending = t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
+        await until(() => t.ctx.store.getTask(parent.id)?.ask?.tool_name === 'mcp__factory__delegate')
+        const options = (
+            t.ctx.store.getTask(parent.id)!.ask!.input.questions as Array<{ options: Array<{ description: string }> }>
+        )[0].options
+        expect(options[2].description).toContain('subscription · haiku')
+        await choose(parent.id, 'Run on Claude')
+        const outcome = await pending
         expect(outcome.task).toMatchObject({ provider: null, model: 'haiku' })
     })
 
@@ -218,6 +370,8 @@ describe('delegate', () => {
         const parent = await setup({ project: 'silent' })
         const outcome = await t.ctx.tasks.delegate(parent.id, { agent: 'writer', prompt: 'Write a note' })
         expect(outcome.task?.provider).toBeNull()
+        // Settled by the files: nobody is asked.
+        expect(t.ctx.store.listEvents(parent.id).some((e) => e.type === 'ask')).toBe(false)
         expect(outcome.text).toContain('project work does not allow provider gpu')
         // What the Telegram footer and the chat show: the role, where it ran and why not on its provider.
         expect(t.ctx.tasks.delegationsOf(parent.id)).toEqual([
@@ -315,5 +469,24 @@ describe('delegate', () => {
         expect(settings.permissions.allow).toContain('mcp__factory')
         expect(settings.permissions.deny).toContain('Agent(writer)')
         expect(run.argv[run.argv.indexOf('--append-system-prompt') + 1]).toContain('mcp__factory__delegate')
+    })
+})
+
+describe('providerChoice', () => {
+    const said = (text: string) => providerChoice({ behavior: 'allow', updatedInput: { answers: { q: text } } })
+
+    it('reads a tapped option and a typed reply', () => {
+        expect(said('Stop')).toBe('stop')
+        expect(said('Retry')).toBe('retry')
+        expect(said('Run on Claude')).toBe('local')
+        expect(said('повтори')).toBe('retry')
+        expect(said('Локально')).toBe('local')
+        expect(said('стоп')).toBe('stop')
+    })
+
+    it('stops on a declined question and reads nothing else into a reply', () => {
+        expect(providerChoice({ behavior: 'deny', message: 'no' })).toBe('stop')
+        expect(said('hmm')).toBeNull()
+        expect(said('check my mail')).toBeNull()
     })
 })

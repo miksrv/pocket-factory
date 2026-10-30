@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.2
+
+### Patch Changes
+
+- Providers: when a role's box does not answer or fails mid-run, the task asks on the web and in Telegram (Stop, Retry, Run on Claude) instead of switching to the subscription by itself; a routine's unanswered question stops the run
+
 ## 1.8.1
 
 ### Patch Changes

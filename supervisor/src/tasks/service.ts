@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -155,6 +155,31 @@ const DELEGATE_PROGRESS_MS = 30_000
 /** How long a provider's reachability answer holds, and how long the check may take. */
 const REACH_CACHE_MS = 60_000
 const REACH_TIMEOUT_MS = 30_000
+
+/** What the owner may do when a role's provider cannot take it: the options of the question the orchestrator's task asks. */
+export const PROVIDER_CHOICES = { stop: 'Stop', retry: 'Retry', local: 'Run on Claude' } as const
+export type ProviderChoice = keyof typeof PROVIDER_CHOICES
+
+/** The request id of a question the supervisor itself asks (not the CLI). */
+const OWN_ASK = 'provider-'
+
+/**
+ * The owner's answer to the provider question as a choice: a tap is one of the labels, a typed reply is read
+ * by its first words, a declined question (also the one answered for the owner after a routine's timeout)
+ * stops the run. Null = not one of them: the question stays open, so a message meant as something else
+ * never decides the run.
+ */
+export function providerChoice(response: AskResponse): ProviderChoice | null {
+    if (response.behavior === 'deny') return 'stop'
+    const answers = (response.updatedInput as { answers?: Record<string, string> }).answers ?? {}
+    const said = (Object.values(answers)[0] ?? '').trim().toLowerCase()
+    for (const [choice, label] of Object.entries(PROVIDER_CHOICES))
+        if (said === label.toLowerCase()) return choice as ProviderChoice
+    if (/^(stop|стоп|останов)/.test(said)) return 'stop'
+    if (/^(retry|again|повтор|ещ[её])/.test(said)) return 'retry'
+    if (/^(run on claude|claude|local|локальн|подписк)/.test(said)) return 'local'
+    return null
+}
 
 /** What a `delegate` call ends with. */
 export interface DelegateOutcome {
@@ -426,6 +451,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     private readonly finishing = new Set<string>()
     /** Requests the CLI made while another one was shown (`tasks.ask` holds one): shown in turn, oldest first. */
     private readonly asksWaiting = new Map<string, Ask[]>()
+    /** Questions the supervisor itself asks for a running task (a role's provider is down), by task and request: what hears the answer. */
+    private readonly ownAsks = new Map<string, Map<string, (choice: ProviderChoice | 'gone') => void>>()
     /** Tasks found `running` at startup and failed by the store (restart limit reached); announced once a listener can deliver. */
     private readonly orphaned: Task[]
     private ticking = false
@@ -1029,7 +1056,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     answer(taskId: string, answer: Answer): Task {
         const task = this.store.getTask(taskId)
         const handle = this.running.get(taskId)
-        if (!task || !handle) throw new Error('the task is not running')
+        // A stopped task's CLI may take seconds to exit: what it asked is no longer open.
+        if (!task || !handle || this.stopRequested.has(taskId)) throw new Error('the task is not running')
         const ask = task.ask
         if (!ask) throw new Error('the task is not waiting for an answer')
 
@@ -1055,12 +1083,23 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             response = { behavior: 'deny', message: answer.message?.trim() || 'The owner declined.' }
         }
 
+        const own = this.ownAsks.get(taskId)?.get(ask.request_id)
+        const choice = own && response ? providerChoice(response) : null
+        if (own && !choice)
+            throw new Error(
+                `answer ${Object.values(PROVIDER_CHOICES)
+                    .map((l) => `"${l}"`)
+                    .join(', ')}`
+            )
         if (!response) {
             const updated = this.store.updateTask(taskId, { ask: { ...ask, answers } })
             this.emit('task', updated)
             return updated
         }
-        if (!handle.answer(ask.request_id, response)) {
+        if (own && choice) {
+            this.ownAsks.get(taskId)!.delete(ask.request_id)
+            own(choice)
+        } else if (!handle.answer(ask.request_id, response)) {
             // The CLI no longer waits (cancelled, or the run ended meanwhile): drop the stale ask.
             this.emit('task', this.nextAsk(task))
             throw new Error('the request is no longer open')
@@ -1085,6 +1124,28 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
         log.info(`${taskId} answered: ${ask.kind} ${ask.tool_name} → ${response.behavior}`)
         this.emit('task', updated)
         return updated
+    }
+
+    /** Show a request on the task, or queue it behind the one shown (the row holds one: a second sub-agent waits for its turn). */
+    private raise(taskId: string, ask: Ask): void {
+        if (this.store.getTask(taskId)?.ask) {
+            const waiting = this.asksWaiting.get(taskId) ?? []
+            waiting.push(ask)
+            this.asksWaiting.set(taskId, waiting)
+            log.info(`${taskId} asks: ${ask.kind} ${ask.tool_name} (waits behind another)`)
+            return
+        }
+        const updated = this.store.updateTask(taskId, { ask })
+        this.emit('task', updated)
+        log.info(`${taskId} asks: ${ask.kind} ${ask.tool_name}`)
+        this.settleLater(updated, ask)
+    }
+
+    /** The task's run is over: whatever waited for the owner's answer to the supervisor's own questions hears that nobody will answer. */
+    private dropOwnAsks(taskId: string): void {
+        const own = this.ownAsks.get(taskId)
+        this.ownAsks.delete(taskId)
+        for (const resolve of own?.values() ?? []) resolve('gone')
     }
 
     /** The shown request is settled: the next one waiting takes its place, or none. */
@@ -1128,7 +1189,8 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                   ? 'the brief this chat started with'
                   : "the routine's instructions"
             try {
-                if (ask.kind === 'permission')
+                // The supervisor's own question (a role's provider is down) is declined: the run stops.
+                if (ask.kind === 'permission' || ask.request_id.startsWith(OWN_ASK))
                     this.answer(taskId, {
                         behavior: 'deny',
                         message: `${reason}; the ${role ? 'role' : 'routine run'} goes on without it, or reports what it needed and stops`
@@ -1485,9 +1547,9 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
      * a minute (a failed connection is tried again). Cheap on purpose: it must not load a model into a GPU (a cold start takes minutes).
      * A failure is remembered for a minute so a burst of delegations does not wait half a minute each.
      */
-    async reachable(provider: Provider): Promise<string | null> {
+    async reachable(provider: Provider, fresh = false): Promise<string | null> {
         const known = this.reach.get(provider.name)
-        if (known && Date.now() - known.at < REACH_CACHE_MS) return known.error
+        if (!fresh && known && Date.now() - known.at < REACH_CACHE_MS) return known.error
         // One check at a time per provider: the Overview polls every few seconds while a dead box takes thirty.
         const pending = this.reaching.get(provider.name)
         if (pending) return pending
@@ -1518,10 +1580,11 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     }
 
     /**
-     * Why a delegated task cannot run on its role's provider, or null when it can: the provider is
-     * gone from providers.yaml, the parent's project does not allow it, or it does not answer.
+     * Why a delegated task may not run on its role's provider by the files, or null when it may: the
+     * provider is gone from providers.yaml, or the parent's project does not allow it. Settled: asking
+     * again would not change it, so the role runs on the subscription unasked.
      */
-    private async unavailable(agent: DelegateAgent, project: string | null): Promise<string | null> {
+    private refused(agent: DelegateAgent, project: string | null): string | null {
         const provider = this.providers.get(agent.provider)
         if (!provider) return `provider "${agent.provider}" is not in providers.yaml`
         if (project) {
@@ -1529,7 +1592,102 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             if (!allowed.includes(provider.name))
                 return `project ${project} does not allow provider ${provider.name} (\`providers:\` in its project file)`
         }
-        return this.reachable(provider)
+        return null
+    }
+
+    /** Why the role's provider does not answer now, or null when it does (`fresh`: not from the last minute's check). */
+    private async unreachable(agent: DelegateAgent, fresh = false): Promise<string | null> {
+        const provider = this.providers.get(agent.provider)
+        return provider ? this.reachable(provider, fresh) : `provider "${agent.provider}" is not in providers.yaml`
+    }
+
+    /**
+     * The role's provider cannot take it for now (it does not answer, or failed under the role): the
+     * orchestrator's task asks the owner, on the web and in Telegram, whether to stop the run, try the
+     * provider again, or run the role on the subscription. Waiting holds the parent's slot, like any
+     * question; a routine's is answered for the owner after its timeout, and that answer stops the run.
+     * `gone` = the parent's run ended meanwhile.
+     */
+    private askProvider(
+        parentId: string,
+        agent: DelegateAgent,
+        reason: string,
+        progress?: (note: string) => void,
+        signal?: AbortSignal
+    ): Promise<ProviderChoice | 'gone'> {
+        const parent = this.store.getTask(parentId)
+        const handle = this.running.get(parentId)
+        if (parent?.status !== 'running' || !handle || this.stopRequested.has(parentId) || signal?.aborted)
+            return Promise.resolve('gone')
+        const model = isModelAlias(agent.fallback) ? agent.fallback : (parent.model ?? this.model())
+        const ask: Ask = {
+            kind: 'question',
+            request_id: `${OWN_ASK}${randomUUID()}`,
+            tool_use_id: '',
+            tool_name: 'mcp__factory__delegate',
+            input: {
+                questions: [
+                    {
+                        question: `${agent.name} cannot run on ${agent.provider}: ${reason}. What now?`,
+                        header: 'Provider',
+                        options: [
+                            { label: PROVIDER_CHOICES.stop, description: 'stop this run' },
+                            { label: PROVIDER_CHOICES.retry, description: `try ${agent.provider} again` },
+                            {
+                                label: PROVIDER_CHOICES.local,
+                                description: `${agent.name} runs on the subscription · ${model}, here`
+                            }
+                        ]
+                    }
+                ]
+            },
+            answers: {},
+            agent: null,
+            asked_at: new Date().toISOString()
+        }
+        this.emit(
+            'event',
+            this.store.addEvent(
+                parentId,
+                'ask',
+                { kind: ask.kind, request_id: ask.request_id, tool_name: ask.tool_name, input: ask.input },
+                { agent: null, parent_tool_use_id: null }
+            )
+        )
+        log.warn(`${parentId}: ${agent.name} cannot run on ${agent.provider} (${reason}); asking the owner`)
+        return new Promise((resolve) => {
+            // The `delegate` call stays open meanwhile: its stream hears that the role waits for the owner.
+            const timer = setInterval(
+                () => progress?.(`${agent.name}: ${agent.provider} unavailable, waiting for the owner's choice`),
+                DELEGATE_PROGRESS_MS
+            )
+            // The `delegate` call went away (timed out, the stream dropped): nobody would read the answer, so the question goes too.
+            const withdraw = () => {
+                if (!this.ownAsks.get(parentId)?.delete(ask.request_id)) return
+                const current = this.store.getTask(parentId)
+                if (current?.ask?.request_id === ask.request_id) this.emit('task', this.nextAsk(current))
+                else {
+                    const waiting = this.asksWaiting.get(parentId)
+                    const at = waiting?.findIndex((a) => a.request_id === ask.request_id) ?? -1
+                    if (at >= 0) waiting!.splice(at, 1)
+                }
+                settle('gone')
+            }
+            const settle = (choice: ProviderChoice | 'gone') => {
+                clearInterval(timer)
+                signal?.removeEventListener('abort', withdraw)
+                handle.release(ask.request_id)
+                log.info(`${parentId}: provider question for ${agent.name} → ${choice}`)
+                resolve(choice)
+            }
+            const own = this.ownAsks.get(parentId) ?? new Map<string, (choice: ProviderChoice | 'gone') => void>()
+            own.set(ask.request_id, settle)
+            this.ownAsks.set(parentId, own)
+            // Like the CLI's own questions, the owner's thinking time is not the run's.
+            handle.hold(ask.request_id)
+            signal?.addEventListener('abort', withdraw, { once: true })
+            this.raise(parentId, ask)
+        })
     }
 
     /**
@@ -1548,16 +1706,18 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
     /**
      * The orchestrator of a running task hands `prompt` to the role `agent` (the `delegate` tool).
      * The role runs as a task of its own on its provider, in a hidden conversation, from a work
-     * directory under the parent's chat; it borrows the parent's session slot. When the provider
-     * cannot take it (gone, not allowed for the project, not answering, or failing mid-run), the role
-     * runs on the subscription with the orchestrator's model instead, unless its file says
-     * `fallback: none`. A call repeated with the same role and prompt (the parent resumed after a
+     * directory under the parent's chat; it borrows the parent's session slot. When the files keep it
+     * off the provider (gone from providers.yaml, not allowed for the project), the role runs on the
+     * subscription with the orchestrator's model instead; when the provider does not answer or fails
+     * mid-run, the owner chooses (`askProvider`): stop, try again, or the subscription. With
+     * `fallback: none` the call reports instead of either. A call repeated with the same role and prompt (the parent resumed after a
      * restart) joins the task already made. Resolves when the role is done; `progress` hears how it goes.
      */
     async delegate(
         parentId: string,
         request: { agent: string; prompt: string; files?: string[] },
-        progress?: (note: string) => void
+        progress?: (note: string) => void,
+        signal?: AbortSignal
     ): Promise<DelegateOutcome> {
         const parent = this.store.getTask(parentId)
         if (!parent || parent.status !== 'running') throw new Error('the delegating task is not running')
@@ -1590,13 +1750,27 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                         c.status !== 'cancelled' &&
                         (c.status !== 'failed' || this.providerFailed(c))
                 ) ?? null
+        const stopped = (reason: string): DelegateOutcome => {
+            this.stop(parentId)
+            return { ok: false, text: `${agent.name} did not run: ${reason}; the owner stopped the run.` }
+        }
         let fellBack: string | null = null
         if (!child || (child.status === 'failed' && this.providerFailed(child))) {
-            const reason = child
-                ? `${child.provider} failed: ${child.error ?? 'no result'}`
-                : await this.unavailable(agent, parent.project)
+            const refused = this.refused(agent, parent.project)
+            let reason =
+                refused ??
+                (child ? `${child.provider} failed: ${child.error ?? 'no result'}` : await this.unreachable(agent))
+            // The provider is down for now: the owner chooses, as often as they say Retry.
+            while (reason && !refused && agent.fallback !== 'none') {
+                const choice = await this.askProvider(parentId, agent, reason, progress, signal)
+                if (choice === 'gone') throw new Error('the delegating task is not running')
+                if (choice === 'stop') return stopped(reason)
+                if (choice === 'local') break
+                progress?.(`${agent.name}: trying ${agent.provider} again`)
+                reason = await this.unreachable(agent, true)
+            }
             // The reachability check may take seconds: the parent may have been stopped meanwhile.
-            if (this.store.getTask(parentId)?.status !== 'running')
+            if (this.store.getTask(parentId)?.status !== 'running' || this.stopRequested.has(parentId))
                 throw new Error('the delegating task is not running')
             if (reason && agent.fallback === 'none')
                 return { ok: false, text: `${agent.name} did not run: ${reason} (its file says \`fallback: none\`).` }
@@ -1604,10 +1778,22 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             child = this.queueDelegated(parent, agent, prompt, reason)
         }
         child = await this.settled(child.id, progress)
-        // The provider failed under the role: once more on the subscription.
-        if (!fellBack && agent.fallback !== 'none' && this.providerFailed(child) && !this.stopRequested.has(parentId)) {
-            fellBack = `${child.provider} failed mid-run: ${child.error ?? 'no result'}`
-            progress?.(`${agent.name}: ${fellBack}; running on the orchestrator's model instead`)
+        // The provider failed under the role: the owner chooses again (another try there, or the subscription).
+        while (
+            !fellBack &&
+            agent.fallback !== 'none' &&
+            this.providerFailed(child) &&
+            !this.stopRequested.has(parentId)
+        ) {
+            const reason = `${child.provider} failed mid-run: ${child.error ?? 'no result'}`
+            const choice = await this.askProvider(parentId, agent, reason, progress, signal)
+            if (choice === 'gone') throw new Error('the delegating task is not running')
+            if (choice === 'stop') return stopped(reason)
+            if (this.stopRequested.has(parentId)) throw new Error('the delegating task is not running')
+            if (choice === 'local') {
+                fellBack = reason
+                progress?.(`${agent.name}: ${fellBack}; running on the subscription instead`)
+            } else progress?.(`${agent.name}: trying ${agent.provider} again`)
             child = await this.settled(this.queueDelegated(parent, agent, prompt, fellBack).id, progress)
         }
         return this.outcome(child, agent, fellBack)
@@ -2063,6 +2249,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
             this.stopRequested.delete(task.id)
             this.finishing.delete(task.id)
             this.asksWaiting.delete(task.id)
+            this.dropOwnAsks(task.id)
             queueMicrotask(() => this.tick())
         }
     }
@@ -2306,18 +2493,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                             origin
                         )
                     )
-                    // The row holds one request: another one (a second sub-agent) waits for its turn.
-                    if (this.store.getTask(task.id)?.ask) {
-                        const waiting = this.asksWaiting.get(task.id) ?? []
-                        waiting.push(ask)
-                        this.asksWaiting.set(task.id, waiting)
-                        log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name} (waits behind another)`)
-                        return
-                    }
-                    const updated = this.store.updateTask(task.id, { ask })
-                    this.emit('task', updated)
-                    log.info(`${task.id} asks: ${ask.kind} ${ask.tool_name}`)
-                    this.settleLater(updated, ask)
+                    this.raise(task.id, ask)
                     return
                 }
                 if (event.type === 'ask_cancelled') {
@@ -2469,6 +2645,7 @@ export class TaskService extends EventEmitter<TaskServiceEvents> {
                 this.running.delete(task.id)
                 this.finishing.delete(task.id)
                 this.asksWaiting.delete(task.id)
+                this.dropOwnAsks(task.id)
                 await this.attempt(task, false)
                 return
             }

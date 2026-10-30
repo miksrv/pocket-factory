@@ -242,11 +242,11 @@ export function factoryRoutes(): Hono<Env> {
         if (tool !== 'delegate' || !offers.delegate) return c.json(rpcError(id, -32602, `unknown tool ${tool}`))
 
         const args = (params.arguments ?? {}) as { agent?: unknown; prompt?: unknown; files?: unknown }
-        return streamCall(`${taskId}: delegate`, id, progressToken, async (progress) => {
+        return streamCall(`${taskId}: delegate`, id, progressToken, async (progress, signal) => {
             if (typeof args.agent !== 'string' || typeof args.prompt !== 'string')
                 return { ok: false, text: 'delegate needs `agent` and `prompt` strings' }
             const files = Array.isArray(args.files) ? args.files.filter((f): f is string => typeof f === 'string') : []
-            return tasks.delegate(taskId, { agent: args.agent, prompt: args.prompt, files }, progress)
+            return tasks.delegate(taskId, { agent: args.agent, prompt: args.prompt, files }, progress, signal)
         })
     })
 
@@ -258,10 +258,11 @@ export function factoryRoutes(): Hono<Env> {
         label: string,
         id: JsonRpcRequest['id'],
         progressToken: string | number | undefined,
-        work: (progress: (note: string) => void) => Promise<{ ok: boolean; text: string }>
+        work: (progress: (note: string) => void, signal: AbortSignal) => Promise<{ ok: boolean; text: string }>
     ): Response {
         const encoder = new TextEncoder()
         let closed = false
+        const aborted = new AbortController()
         const stream = new ReadableStream<Uint8Array>({
             start(controller) {
                 const send = (payload: unknown) => {
@@ -292,7 +293,7 @@ export function factoryRoutes(): Hono<Env> {
                         controller.close()
                     }
                 }
-                work(progress)
+                work(progress, aborted.signal)
                     .then((outcome) => answer(outcome.text, !outcome.ok))
                     .catch((error: unknown) => {
                         const text = error instanceof Error ? error.message : String(error)
@@ -301,8 +302,10 @@ export function factoryRoutes(): Hono<Env> {
                     })
             },
             cancel() {
-                // The CLI went away (its task stopped): the work is stopped with its task, not here.
+                // The CLI went away (its task stopped, or the call timed out): the work is stopped with its
+                // task, not here; the signal only withdraws what waits for the owner on this call's behalf.
                 closed = true
+                aborted.abort()
             }
         })
         return new Response(stream, {
